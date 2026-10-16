@@ -83,6 +83,22 @@ export interface CredentialCacheOptions {
    */
   loadApp: () => LoadedCredential | undefined | Promise<LoadedCredential | undefined>
   loadEnv: () => LoadedCredential | undefined
+  /**
+   * Reads the credential this plugin obtained itself (device login) out of its
+   * own vault, rotating an expired token if its refresh token is still good.
+   *
+   * Third in the order, and deliberately not first: the desktop app refreshes
+   * its own login continuously, so while it is present its credential is the
+   * freshest thing on the machine and a stale vault must not shadow it. Making
+   * the app win also means adding this source changes nothing at all for the
+   * machines that already work — which is what makes it safe to ship. The
+   * sibling plugin that reads both sources (`dsh-connect-workbuddy`) chose the
+   * same order for the same reason.
+   *
+   * Absent means device login is not wired up: the source is then invisible
+   * rather than broken.
+   */
+  loadDevice?: () => LoadedCredential | undefined | Promise<LoadedCredential | undefined>
   exchangePat?: (credential: LoadedCredential) => Promise<ExchangedPat> | ExchangedPat
   /**
    * Optional persistence for the exchange throttle. Absent means the gate lives
@@ -154,6 +170,8 @@ export class CredentialCache {
   loadApp: () => LoadedCredential | undefined | Promise<LoadedCredential | undefined>
   /** The PAT fallback reader. */
   loadEnv: () => LoadedCredential | undefined
+  /** The plugin's own vault reader (device login); absent when unwired. */
+  loadDevice?: () => LoadedCredential | undefined | Promise<LoadedCredential | undefined>
   /**
    * Exchanges a PAT for a job token; absent when PATs are unsupported.
    *
@@ -195,14 +213,17 @@ export class CredentialCache {
   /**
    * @param options.loadApp - `() => credential | undefined`, reading the app's store.
    * @param options.loadEnv - `() => credential | undefined`, the PAT fallback.
+   * @param options.loadDevice - `() => credential | undefined`, this plugin's
+   *   own vault (see {@link CredentialCacheOptions.loadDevice}).
    * @param options.exchangePat - `(credential) => { token, refreshToken, expiresAt }`,
    *   called only for a PAT source; absent when PATs are not supported.
    * @param options.throttleStore - optional persistence for the exchange throttle.
    * @param options.now - the wall clock; injectable for tests.
    */
-  constructor({ loadApp, loadEnv, exchangePat, throttleStore, now = () => Date.now() }: CredentialCacheOptions) {
+  constructor({ loadApp, loadEnv, loadDevice, exchangePat, throttleStore, now = () => Date.now() }: CredentialCacheOptions) {
     this.loadApp = loadApp
     this.loadEnv = loadEnv
+    this.loadDevice = loadDevice
     this.exchangePat = exchangePat
     this.throttleStore = throttleStore
     this.now = now
@@ -287,7 +308,13 @@ export class CredentialCache {
 
     this.reads += 1
     const fromApp = await this.loadApp()
-    const credential = fromApp ?? this.loadEnv()
+    // The vault is a disk read and, when its token has lapsed, a network call —
+    // so it is consulted only when the app has nothing to say. On a machine
+    // with the desktop app signed in, which is every machine that works today,
+    // this line is inert; that is what makes the third source additive.
+    const fromDevice =
+      fromApp === undefined && this.loadDevice !== undefined ? await this.loadDevice() : undefined
+    const credential = fromApp ?? fromDevice ?? this.loadEnv()
     if (credential === undefined) {
       this.cached = undefined
       return undefined

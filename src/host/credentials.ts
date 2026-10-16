@@ -144,7 +144,19 @@ export interface LoadedCredential {
   userType: string
   userTag: string
   machineID: string
-  source: 'app' | 'env-pat'
+  /**
+   * Which of the three sources this credential came from.
+   *
+   * `app` is the desktop application's own login, read and decrypted out of its
+   * store; `env-pat` is a personal access token the user put in the
+   * environment; `device` is a token this plugin obtained itself by device
+   * login (a scan code) and keeps in its own vault. All three are structurally
+   * the same once loaded, which is why the difference is a tag rather than a
+   * separate type — but the three expire on different clocks, so every reader
+   * that asks "is this still good?" has to distinguish them (see
+   * `isCredentialUsable`).
+   */
+  source: 'app' | 'env-pat' | 'device'
   /** The plan summary row, decoded but unvalidated — display only. */
   plan: unknown
   /** The credit/quota snapshot row, decoded but unvalidated — display only. */
@@ -1484,6 +1496,12 @@ export function loadEnvCredential(
  * - An **env PAT** is exchanged for a job token with its own `expiresAt`; the
  *   raw PAT never expires, so the exchange result does, and it is a wall-clock
  *   comparison rather than a stored flag.
+ * - A **device** credential is this plugin's own, and it is the one source it
+ *   can renew: it carries the same wall-clock `expiresAt` the service stated,
+ *   and an expired one is not the end of the story — the refresh token is what
+ *   the loader reaches for. Reporting it as unusable here is precisely what
+ *   lets `CredentialCache.resolve` re-enter the loader and rotate it, so this
+ *   comparison is a trigger for a refresh, not a verdict of death.
  *
  * @param cached - the cached record, or `undefined` when nothing is cached.
  * @param now - current epoch milliseconds.
@@ -1494,7 +1512,9 @@ export function isCredentialUsable(
   now = Date.now(),
 ): boolean {
   if (cached === undefined || cached === null) return false
-  if (cached.source === 'env-pat') return Number(cached.expiresAt) > now
+  // Both of these carry a real expiry the issuer stated, as opposed to the
+  // app's pre-computed flag.
+  if (cached.source === 'env-pat' || cached.source === 'device') return Number(cached.expiresAt) > now
   return cached.expired !== true
 }
 

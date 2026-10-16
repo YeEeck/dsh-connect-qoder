@@ -32,6 +32,8 @@ import {
 } from './credentials.ts'
 import { buildAccountPayload } from './account-payload.ts'
 import { CredentialCache } from './credential-cache.ts'
+import { CredentialVault } from './credential-vault.ts'
+import { DeviceCredentialSource } from './device-credential.ts'
 import { FileThrottleStore } from './throttle-store.ts'
 import { settingsNamespaceOf } from './settings-save.ts'
 import type { SettingsService } from './settings-save.ts'
@@ -308,6 +310,16 @@ class RegionRuntime {
   catalog: CatalogStore
   /** The per-region credential cache. */
   credentials: CredentialCache
+  /**
+   * The region's own credential — the one device login obtained — kept in a
+   * file this plugin owns under DSH home.
+   *
+   * Held as a field rather than closed over inside the cache so the account
+   * routes and the status surface can ask what happened to it: "the file is
+   * damaged" and "nobody has signed in here" are different sentences to a user
+   * even though both resolve to no credential. See `device-credential.ts`.
+   */
+  device: DeviceCredentialSource
   /** The refresh interval handle, or `undefined` when stopped. */
   refreshTimer: NodeJS.Timeout | undefined
   /** The last usage reading, or `undefined` before the first read. */
@@ -355,6 +367,23 @@ class RegionRuntime {
       logger: ctx.logger,
     })
     /**
+     * The region's own credential file, and the reader/rotator over it.
+     *
+     * Built before the cache because the cache takes the reader as a source.
+     * The path follows the catalog's convention (`.qoder-*.<region>.json`) so
+     * that two regions can never see each other's credential, and is derived
+     * from DSH home rather than the app's data root on purpose: this file is
+     * the plugin's, not the application's.
+     */
+    this.device = new DeviceCredentialSource({
+      region: region.id,
+      vault: new CredentialVault({
+        path: qoderCatalogPath(`.qoder-auth.${region.id}.json`),
+        logger: ctx.logger,
+      }),
+      logger: ctx.logger,
+    })
+    /**
      * The credential cache, holding the app-store reader, the PAT fallback and
      * the exchange. It carries the "a re-sign-in needs no restart" rule, which
      * lives in its own module so it can be tested without a Cordis context.
@@ -367,6 +396,14 @@ class RegionRuntime {
       // entirely. The synchronous `loadCredential` remains for the startup
       // sweep and the probes, which are not on anyone's latency budget.
       loadApp: () => loadCredentialAsync(this.region, appDataRootFor()),
+      // Third source, and deliberately THIRD: the desktop application keeps its
+      // own login fresh while it runs, so wherever it answers it is the newest
+      // credential on the machine and must win. The vault is only reached when
+      // the app has nothing to say — which is the machine that has no app
+      // installed, or whose app is not signed in. That ordering is also why
+      // this is safe to ship: on every machine that works today the answer is
+      // unchanged, and the vault is not even read.
+      loadDevice: () => this.device.load(),
       loadEnv: () => loadEnvCredential(this.region),
       exchangePat: async (credential) => exchangePat(this.region, credential.token),
       // The PAT exchange throttle is persisted so a platform-stated rate-limit
@@ -439,9 +476,19 @@ class RegionRuntime {
    * The next {@link RegionRuntime.resolveCredential} call re-reads the app's
    * store, so a re-sign-in is picked up without a restart. This is called
    * from the shim when the upstream answers with a sign-in failure.
+   *
+   * The device source is told too, so that a rejection clears its 60 s "that
+   * renewal was refused" window: a gateway rejection is independent evidence
+   * that the credential on disk is no longer the whole story, and without this
+   * a user who signs in again would still be held back by the window for up to
+   * a minute. The reverse leak — a device rejection clearing the PAT throttle's
+   * parked state — is deliberate and harmless: the parked state is this
+   * region's, both live credentials are this region's, and the next resolve
+   * re-reads whichever source wins anyway.
    */
   invalidateCredential() {
     this.credentials.invalidate()
+    this.device.retry()
   }
 
   /**

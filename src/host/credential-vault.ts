@@ -159,6 +159,19 @@ export function vaultRecordFrom(value: unknown): VaultRecord | undefined {
 }
 
 /**
+ * What a read of the vault found, including the cases that `read` folds into
+ * `null`. See {@link CredentialVault.readResult}.
+ */
+export type VaultRead =
+  | { kind: 'ok'; record: VaultRecord }
+  /** No file: nobody has signed in through this plugin on this machine. */
+  | { kind: 'absent' }
+  /** A file that would not parse; it has been moved aside (see `quarantine`). */
+  | { kind: 'unreadable' }
+  /** A file that parsed but is not a record this build can use. */
+  | { kind: 'unrecognised' }
+
+/**
  * One region's credential file, with serialized read-modify-write.
  *
  * @see module:dsh-connect-qoder/credential-vault for why each rule exists.
@@ -201,15 +214,35 @@ export class CredentialVault {
    * evidence of a version skew, not of damage, and the next write replaces it.
    */
   read(): VaultRecord | null {
-    if (!existsSync(this.path)) return null
+    const result = this.readResult()
+    return result.kind === 'ok' ? result.record : null
+  }
+
+  /**
+   * Read the credential and say WHY, where {@link CredentialVault.read} says
+   * only "nothing usable".
+   *
+   * `read` is the right call for control flow: every empty answer has the same
+   * consequence (this region has no device credential). This is the call for
+   * the panel, where "you have not signed in on this machine" and "your
+   * credential file is damaged" are different sentences with different next
+   * steps, and telling a user the wrong one is the class of failure this repo's
+   * first red line exists for.
+   */
+  readResult(): VaultRead {
+    if (!existsSync(this.path)) return { kind: 'absent' }
     let parsed: unknown
     try {
       parsed = JSON.parse(readFileSync(this.path, 'utf8'))
     } catch (error) {
       this.quarantine(error)
-      return null
+      return { kind: 'unreadable' }
     }
-    return vaultRecordFrom(parsed) ?? null
+    const record = vaultRecordFrom(parsed)
+    if (record !== undefined) return { kind: 'ok', record }
+    // It parsed, so it is not damage: either written by a future version or a
+    // shape this build does not know. Both mean the same thing to a user.
+    return { kind: 'unrecognised' }
   }
 
   /**
