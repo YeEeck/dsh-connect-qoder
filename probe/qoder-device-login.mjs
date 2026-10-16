@@ -326,11 +326,12 @@ async function loginRegion(key, options) {
   console.log(`    access_token   : ${mask(payload.accessToken)}`)
   console.log(`    refresh_token  : ${mask(payload.refreshToken)}`)
   if (payload.refreshToken === undefined && payload.refreshTokenId !== undefined) {
-    // Report what the region actually handed back rather than an empty refresh
-    // token that reads like the login failed to produce one. A refresh token
-    // that is only an ID means the refresh half is a different call, and the
-    // reference implementation leaves that half untested.
-    console.log('    note           : no refresh_token, but a refresh_token_id was issued — the refresh half needs its own probe')
+    // Defensive, not descriptive: qoder.cn answers BOTH a `drt-` refresh token
+    // and a refresh_token_id, so this branch does not fire there. It exists
+    // because an empty refresh token reads like a failed login, and because the
+    // refresh CALL itself is still unexercised — a region that stopped issuing a
+    // refresh token would need that path first.
+    console.log('    note           : no refresh_token, but a refresh_token_id was issued — refresh needs its own call')
   }
   const expiry =
     payload.expiresAt === undefined ? 'absent' : `${String(payload.expiresAt)} (${typeof payload.expiresAt})`
@@ -340,7 +341,7 @@ async function loginRegion(key, options) {
   console.log(`    user_name      : ${payload.userName ?? 'absent'}`)
   console.log(`    machine_id     : ${session.machineId}`)
   console.log(`    fields present : ${payload.fieldsPresent}`)
-  console.log(`    refresh path   : ${region.openApiUrl}${REFRESH_PATH}`)
+  console.log(`    refresh path   : ${region.openApiUrl}${REFRESH_PATH} (not exercised here)`)
 
   // The closure that matters: feed it to the plugin's OWN header builder and
   // model list. If this returns a catalog, the login half is additive and the

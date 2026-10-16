@@ -21,7 +21,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { bodyForDisplay, mask, parsePollBody, parseTokenPayload, pollOnce } from '../probe/qoder-device-login.mjs'
 
-/** The shape qoder.cn actually answered with; the token value is a placeholder. */
+/** The shape qoder.cn actually answered with; the token values are placeholders. */
 const CN_PAYLOAD = {
   id: '01a14590-538b-7e1e-8a9e-33ac4b367354',
   token: 'dt-EXAMPLE00000000000000000',
@@ -29,9 +29,14 @@ const CN_PAYLOAD = {
   code_challenge: 'QipFX9pZAQskb5pMZWPoeT4mJ2wij3eU4dbeqW0BIC4',
   code_challenge_method: 'S256',
   nonce: '7706ae3b-adfd-4bf1-a4da-79b3df44e7b1',
-  expires_at: '2026-11-15T16:34:08Z',
+  expires_at: '2026-11-15T16:39:32Z',
+  expires_in: 2592000,
+  refresh_token: 'drt-EXAMPLE00000000000000000',
+  refresh_token_expires_at: '2027-10-11T16:39:32Z',
+  refresh_token_expires_in: 31104000,
   refresh_token_id: '01a14590-537f-7413-86e4-20ba6b870816',
   created_at: '2026-10-16T16:34:08',
+  updated_at: '2026-10-16T16:39:32',
 }
 
 const REGION = { openApiUrl: 'https://openapi.example.test' }
@@ -81,13 +86,24 @@ test('the CN poll payload maps onto the plugin credential shape', () => {
   const parsed = parseTokenPayload(CN_PAYLOAD)
 
   assert.strictEqual(parsed.accessToken, CN_PAYLOAD.token)
-  assert.strictEqual(parsed.expiresAt, '2026-11-15T16:34:08Z', 'the region answers an ISO string, not epoch millis')
+  assert.strictEqual(parsed.expiresAt, '2026-11-15T16:39:32Z', 'the region answers an ISO string, not epoch millis')
   assert.strictEqual(parsed.uid, CN_PAYLOAD.user_id)
   assert.strictEqual(parsed.userName, undefined)
-  // A refresh_token_id is NOT a refresh token; reporting it as one would invent
-  // a credential the region never issued.
-  assert.strictEqual(parsed.refreshToken, undefined)
+  // `drt-…` is the same refresh-token shape the plugin already reads out of the
+  // app's own `auth.v1.dat`, so the login half needs no new credential plumbing.
+  assert.strictEqual(parsed.refreshToken, CN_PAYLOAD.refresh_token)
   assert.strictEqual(parsed.refreshTokenId, CN_PAYLOAD.refresh_token_id)
+})
+
+test('the fixture carries the refresh material a truncated read once hid', () => {
+  // The first run bounded the read at 400 characters and the cut landed before
+  // `refresh_token`, so the probe reported that qoder.cn issues only a
+  // refresh_token_id — a wrong "measured fact" produced entirely by the bug. It
+  // issues both, and this keeps the fixture from drifting back to the truncated
+  // shape and re-teaching that same wrong lesson.
+  const body = JSON.stringify(CN_PAYLOAD)
+  assert.ok(body.includes('"refresh_token"'), 'the region issues a `drt-` refresh token')
+  assert.ok(body.includes('"refresh_token_id"'))
 })
 
 test('mask reports a secret without disclosing it', () => {
