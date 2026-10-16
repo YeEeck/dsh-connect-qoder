@@ -56,8 +56,13 @@ export const zhUsage = {
 	"pill.balance": "余额",
 	"pill.loading": "正在读取用量…",
 	"pill.unavailable": "读不到用量",
-	"pill.checkinAvailable": "今日签到可领 {amount} Credits",
-	"pill.checkinDone": "今日已签到"
+	"pill.checkinDone": "今日已签到",
+	// 胶囊面板里的签到**动作**（不只是显示）：可领取时给一个真按钮，点了就走
+	// 与 Plugins 页同一个 claim 路由。`busy` 是请求在途，`failed` 是宿主给的失败
+	// 理由（红线 1：新失败路径必须给用户可见的错误，不许吞）。
+	"pill.checkinNow": "签到领 {amount} Credits",
+	"pill.checkinBusy": "签到中…",
+	"pill.checkinFailed": "签到失败：{message}"
 };
 /** English — usage panel copy. */
 export const enUsage = {
@@ -95,6 +100,8 @@ export const enUsage = {
 	"pill.balance": "Balance",
 	"pill.loading": "Reading usage…",
 	"pill.unavailable": "No usage reading",
-	"pill.checkinAvailable": "Check in today for {amount} Credits",
-	"pill.checkinDone": "Checked in today"
+	"pill.checkinDone": "Checked in today",
+	"pill.checkinNow": "Check in · {amount} Credits",
+	"pill.checkinBusy": "Checking in…",
+	"pill.checkinFailed": "Check-in failed: {message}"
 };

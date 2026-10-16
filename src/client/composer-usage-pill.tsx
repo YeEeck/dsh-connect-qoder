@@ -34,7 +34,9 @@
  * 只染圆点。
  *
  * **展开面板**：胶囊点一下展开额度卡，画的是胶囊装不下的东西——主额度的原始
- * used/total 与 remaining、各专属资源包分项、以及今日签到行。**不放百分比**：胶囊
+ * used/total 与 remaining、各专属资源包分项、以及今日签到行（未签到给一个真按钮，
+ * 点了走与 Plugins 页 `QoderUsagePanel` 同一条 claim 路由，领完立刻重读把 Credits
+ * 推回余额；失败把宿主给的理由显示在按钮下，不静默）。**不放百分比**：胶囊
  * 已经显示了余额，再来一个百分比是同一个数字说两遍。面板是触发器的兄弟节点非子
  * 节点（inline style，不注入样式表）。读不到的字段显示 `—`，永不 `0`——`0` 是
  * 「确认是零」的读数，`—` 是「查不到」，二者不等价（`QuotaBlock` 同裁定）。
@@ -62,8 +64,8 @@ import {
 	type Tier,
 	type ModelSelectionLike
 } from "./pill-model.ts"
-import { QODER_USAGE_PATH } from "./paths.ts"
-import { getJson } from "./http.ts"
+import { QODER_USAGE_PATH, QODER_CHECKIN_PATH } from "./paths.ts"
+import { getJson, postJson } from "./http.ts"
 
 /** 轮询间隔：5 分钟。余额是存量，秒级轮询只会闪数字。 */
 const POLL_MS = 5 * 60 * 1000
@@ -172,6 +174,28 @@ function ActiveUsagePill({ t, region }: ActiveUsagePillProps) {
 	const prefix = regionPrefixOf(region);
 	const exhausted = tier === "exhausted";
 	const checkin = usage?.checkin;
+
+	// 签到动作（不只是显示）。与 Plugins 页 `QoderUsagePanel` 走同一条 claim
+	// 路由和同一个「领完立刻重读」约定，所以面板上的按钮和设置卡里的按钮说的
+	// 是同一件事——Credits 落回资源包，重读才把余额推上去。
+	const [claimBusy, setClaimBusy] = react.useState(false);
+	const [claimFailedMessage, setClaimFailedMessage] = react.useState<string | undefined>(undefined);
+
+	const claim = react.useCallback(async () => {
+		setClaimBusy(true);
+		setClaimFailedMessage(undefined);
+		try {
+			await postJson(`${QODER_CHECKIN_PATH}?region=${encodeURIComponent(region)}`);
+			await load();
+		} catch (error) {
+			// 红线 1：签到动作失败必须给用户可见的理由（http.ts 抛的 Error 里就是
+			// 宿主给的 `error` 字段），不许静默吞掉——静默等于用户以为领了但没领。
+			if (!mounted.current) return;
+			setClaimFailedMessage(error instanceof Error ? error.message : String(error));
+		} finally {
+			if (mounted.current) setClaimBusy(false);
+		}
+	}, [load, region]);
 
 	return (
 		<span
@@ -296,10 +320,45 @@ function ActiveUsagePill({ t, region }: ActiveUsagePillProps) {
 					) : null}
 
 					{checkin !== undefined && checkin.active === true ? (
-						<div style={{ fontSize: "12px", color: "var(--dsw-alias-state-success-primary, #12b76a)" }}>
-							{checkin.todayCheckedIn === true
-								? t("pill.checkinDone")
-								: t("pill.checkinAvailable", { amount: formatCredits(num(checkin.amount)) })}
+						<div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+							{checkin.todayCheckedIn === true ? (
+								<span style={{ fontSize: "12px", color: "var(--dsw-alias-state-success-primary, #12b76a)" }}>
+									{t("pill.checkinDone")}
+								</span>
+							) : (
+								<button
+									type="button"
+									disabled={claimBusy}
+									aria-busy={claimBusy}
+									onClick={() => {
+										void claim();
+									}}
+									style={{
+										alignSelf: "flex-start",
+										display: "inline-flex",
+										alignItems: "center",
+										height: "26px",
+										padding: "0 10px",
+										border: "1px solid var(--dsw-alias-brand-primary, #5686fe)",
+										borderRadius: "999px",
+										background: "transparent",
+										color: "var(--dsw-alias-state-success-primary, #12b76a)",
+										font: "inherit",
+										fontSize: "12px",
+										cursor: "pointer",
+										opacity: claimBusy ? "0.6" : "1"
+									}}
+								>
+									{claimBusy
+										? t("pill.checkinBusy")
+										: t("pill.checkinNow", { amount: formatCredits(num(checkin.amount)) })}
+								</button>
+							)}
+							{claimFailedMessage === undefined ? null : (
+								<span style={{ fontSize: "11px", color: "var(--dsw-alias-state-error-primary, #d92d20)" }}>
+									{t("pill.checkinFailed", { message: claimFailedMessage })}
+								</span>
+							)}
 						</div>
 					) : null}
 				</div>

@@ -92,7 +92,7 @@ test('opens the panel on click and shows the raw quota detail', async () => {
     const text = panel.textContent ?? ''
     assert.match(text, /1,034/)
     assert.match(text, /100/)
-    assert.match(text, /今日签到可领/)
+    assert.match(text, /签到领/)
   } finally {
     unmount()
   }
@@ -162,6 +162,69 @@ test('a missing region shows the dash, never a fabricated zero', async () => {
   try {
     assert.match(container.textContent ?? '', /Qoder CN\s*·\s*—/)
     assert.ok(!/0\s*$/.test((container.textContent ?? '').trim()))
+  } finally {
+    unmount()
+  }
+})
+
+test('the panel claims today\'s check-in and reflects it after the re-read', async () => {
+  // 有状态的桩：第一次读 todayCheckedIn=false，POST /checkin 后置 true，下一次
+  // GET /usage 返回已签到——复现「领取 → 重读 → 余额与状态一起更新」的真实链路。
+  const calls = []
+  let checkedIn = false
+  const usageOf = () => ({
+    regions: [
+      {
+        region: 'qoder-cn',
+        available: true,
+        userQuota: { used: 266, total: 1300, remaining: 1034, unit: 'credits', percentage: 0.2046 },
+        addOnQuota: { used: 0, total: 100, remaining: 100, unit: 'credits', percentage: 0 },
+        checkin: { active: true, todayCheckedIn: checkedIn, amount: 100 },
+      },
+    ],
+  })
+  const stub = async (url, options) => {
+    const path = String(url)
+    if (path.includes('/plugins/dsh-connect-qoder/checkin')) {
+      calls.push({ path, method: options?.method ?? 'GET' })
+      checkedIn = true
+      return jsonResponse({ amount: 100 })
+    }
+    if (path.includes('/plugins/dsh-connect-qoder/usage')) return jsonResponse(usageOf())
+    return jsonResponse({})
+  }
+  const { slots, window: w, registered, scope } = await loadCardBundle({ fetchImpl: stub })
+  const card = composerSlotOf(slots)
+  const { container, unmount, react } = await renderCards({
+    card,
+    registered,
+    scope,
+    window: w,
+    props: { useProjection: () => ({ next: { provider: 'qoder-cn' } }) },
+  })
+  try {
+    const toggle = container.querySelector('button')
+    await react.act(async () => {
+      toggle.dispatchEvent(new w.MouseEvent('click', { bubbles: true }))
+    })
+    const panel = container.querySelector('[role="dialog"]')
+    assert.ok(panel, 'expected the popover')
+    const claimButton = [...panel.querySelectorAll('button')].find((b) =>
+      (b.textContent ?? '').includes('签到领'))
+    assert.ok(claimButton, 'expected a check-in claim button in the popover')
+    assert.ok((claimButton.textContent ?? '').includes('100'))
+
+    await react.act(async () => {
+      claimButton.dispatchEvent(new w.MouseEvent('click', { bubbles: true }))
+    })
+    // 领取后组件会重读 usage；多让几条微任务落定。
+    for (let i = 0; i < 5; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+
+    assert.ok(calls.length >= 1, 'expected the check-in route to be called')
+    assert.match(calls[0].path, /region=qoder-cn/)
+    assert.match((panel.textContent ?? '') + (container.textContent ?? ''), /今日已签到/)
   } finally {
     unmount()
   }
