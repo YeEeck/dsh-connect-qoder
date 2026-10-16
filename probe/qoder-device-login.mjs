@@ -224,6 +224,23 @@ export function credentialOf(payload, machineId) {
   }
 }
 
+/**
+ * Overlay a refresh response on the credential it rotated — the reference
+ * implementation's `applyQoderRefresh`, and not a stylistic choice.
+ *
+ * Measured: a refresh response carries new token material and little else. A
+ * credential rebuilt from it alone loses `uid`, which `authHeaders` encrypts into
+ * the signed info block (`src/host/upstream.ts:279`) — so both regions answered
+ * `{"code":"101","message":"Signature invalid"}` until the overlay was added.
+ */
+export function mergeRotation(original, rotated) {
+  const merged = { ...original }
+  for (const [key, value] of Object.entries(rotated)) {
+    if (value !== undefined && value !== '') merged[key] = value
+  }
+  return merged
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** Report a secret without disclosing it. */
@@ -453,7 +470,13 @@ export async function refreshStep(region, session, payload, fetchImpl = fetch) {
   console.log(`    access_token   : ${mask(rotated.accessToken)}`)
   console.log(`    refresh_token  : ${mask(rotated.refreshToken)}`)
   console.log(`    expires_at     : ${rotatedExpiry}`)
-  if (!(await probeModelList(region, credentialOf(rotated, session.machineId), fetchImpl))) {
+  console.log(`    fields present : ${rotated.fieldsPresent}`)
+  if (rotated.uid === undefined) {
+    // The measured reason the overlay is not optional.
+    console.log('    uid            : ABSENT — kept from the credential that was rotated')
+  }
+  const rotatedCredential = credentialOf(mergeRotation(payload, rotated), session.machineId)
+  if (!(await probeModelList(region, rotatedCredential, fetchImpl))) {
     console.log('  verdict   : the rotated credential was refused by the gateway')
     return false
   }

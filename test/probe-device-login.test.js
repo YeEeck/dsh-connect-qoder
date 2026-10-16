@@ -21,7 +21,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   bodyForDisplay,
+  credentialOf,
   mask,
+  mergeRotation,
   parsePollBody,
   parseTokenPayload,
   pollOnce,
@@ -134,11 +136,15 @@ test('bodyForDisplay bounds the print and still reports the real size', () => {
   assert.strictEqual(bodyForDisplay(''), '<empty>')
 })
 
-/** The rotation the reference implementation performs, and what it answers with. */
+/**
+ * The shape the live refresh endpoint answers with: new token material, no uid.
+ * Both regions returned exactly this, and rebuilding a credential from it alone
+ * is what drew `{"code":"101","message":"Signature invalid"}` from both of them.
+ */
 const ROTATED = {
-  ...CN_PAYLOAD,
   token: 'dt-ROTATED0000000000000000',
   refresh_token: 'drt-ROTATED000000000000000',
+  expires_at: '2026-11-15T16:46:38Z',
 }
 
 /** Serves the refresh POST and then the model list the rotated credential must pass. */
@@ -181,6 +187,24 @@ test('refresh posts the refresh token and machine id, then re-checks the gateway
     machine_id: SESSION.machineId,
   })
   assert.strictEqual(calls.length, 2, 'the rotated credential must be re-checked against the model list')
+
+  // The live failure this pins down: `authHeaders` sends the uid here in the
+  // clear and inside the signed info block, so an empty one is refused. The
+  // refresh response carries no uid, and the overlay is what puts it back.
+  const listCall = calls.find((call) => !call.url.includes('/deviceToken/refresh'))
+  assert.ok(listCall, 'the model list must be called with the rotated credential')
+  assert.strictEqual(listCall.init.headers['Cosy-User'], CN_PAYLOAD.user_id)
+})
+
+test('a rotation is overlaid on the credential, never substituted for it', () => {
+  const merged = mergeRotation(parseTokenPayload(CN_PAYLOAD), parseTokenPayload(ROTATED))
+
+  assert.strictEqual(merged.uid, CN_PAYLOAD.user_id, 'a uid the response omits must survive')
+  assert.strictEqual(merged.accessToken, ROTATED.token)
+  assert.strictEqual(merged.refreshToken, ROTATED.refresh_token)
+  assert.strictEqual(credentialOf(merged, 'machine-1').userID, CN_PAYLOAD.user_id)
+  // Substituting the response would send this empty string to the gateway.
+  assert.strictEqual(credentialOf(parseTokenPayload(ROTATED), 'machine-1').userID, '')
 })
 
 test('a successful rotation reports the new tokens without printing them', async () => {
