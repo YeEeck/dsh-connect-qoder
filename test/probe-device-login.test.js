@@ -19,7 +19,14 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { bodyForDisplay, mask, parsePollBody, parseTokenPayload, pollOnce } from '../probe/qoder-device-login.mjs'
+import {
+  bodyForDisplay,
+  mask,
+  parsePollBody,
+  parseTokenPayload,
+  pollOnce,
+  refreshStep,
+} from '../probe/qoder-device-login.mjs'
 
 /** The shape qoder.cn actually answered with; the token values are placeholders. */
 const CN_PAYLOAD = {
@@ -39,7 +46,7 @@ const CN_PAYLOAD = {
   updated_at: '2026-10-16T16:39:32',
 }
 
-const REGION = { openApiUrl: 'https://openapi.example.test' }
+const REGION = { openApiUrl: 'https://openapi.example.test', baseUrl: 'https://gateway.example.test/' }
 const SESSION = { nonce: 'n', pkce: { verifier: 'v'.repeat(43) }, machineId: 'm' }
 
 test('a poll body is read whole, never bounded at the read site', async () => {
@@ -125,4 +132,92 @@ test('bodyForDisplay bounds the print and still reports the real size', () => {
   assert.ok(shown.includes('500'), 'the real size must survive the bound')
   assert.strictEqual(bodyForDisplay('short'), 'short')
   assert.strictEqual(bodyForDisplay(''), '<empty>')
+})
+
+/** The rotation the reference implementation performs, and what it answers with. */
+const ROTATED = {
+  ...CN_PAYLOAD,
+  token: 'dt-ROTATED0000000000000000',
+  refresh_token: 'drt-ROTATED000000000000000',
+}
+
+/** Serves the refresh POST and then the model list the rotated credential must pass. */
+function refreshFetch(calls) {
+  return async (url, init) => {
+    calls.push({ url: String(url), init })
+    return String(url).includes('/deviceToken/refresh')
+      ? { ok: true, status: 200, text: async () => JSON.stringify(ROTATED) }
+      : { ok: true, status: 200, text: async () => JSON.stringify({ chat: new Array(14).fill({}) }) }
+  }
+}
+
+/** Run `body` with console.log captured, and hand back what it printed. */
+async function capturingConsole(body) {
+  const lines = []
+  const original = console.log
+  console.log = (...args) => lines.push(args.join(' '))
+  try {
+    return { result: await body(), output: lines.join('\n') }
+  } finally {
+    console.log = original
+  }
+}
+
+test('refresh posts the refresh token and machine id, then re-checks the gateway', async () => {
+  const calls = []
+  const { result } = await capturingConsole(() =>
+    refreshStep(REGION, SESSION, parseTokenPayload(CN_PAYLOAD), refreshFetch(calls)),
+  )
+
+  assert.strictEqual(result, true)
+  const refresh = calls.find((call) => call.url.includes('/deviceToken/refresh'))
+  assert.ok(refresh, 'the refresh endpoint must be called')
+  assert.strictEqual(refresh.init.method, 'POST')
+  assert.strictEqual(refresh.init.headers['Content-Type'], 'application/json')
+  // The body shape is the part taken from the reference implementation, so it is
+  // pinned: a refresh token and a machine id, and nothing else.
+  assert.deepStrictEqual(JSON.parse(refresh.init.body), {
+    refresh_token: CN_PAYLOAD.refresh_token,
+    machine_id: SESSION.machineId,
+  })
+  assert.strictEqual(calls.length, 2, 'the rotated credential must be re-checked against the model list')
+})
+
+test('a successful rotation reports the new tokens without printing them', async () => {
+  const { result, output } = await capturingConsole(() =>
+    refreshStep(REGION, SESSION, parseTokenPayload(CN_PAYLOAD), refreshFetch([])),
+  )
+
+  assert.strictEqual(result, true)
+  assert.ok(output.includes('REFRESH WORKS'))
+  // The defect this whole file grew out of: a credential reaching the log.
+  assert.ok(!output.includes(ROTATED.token), 'the rotated access token must not be printed')
+  assert.ok(!output.includes(ROTATED.refresh_token), 'the rotated refresh token must not be printed')
+  assert.ok(!output.includes(CN_PAYLOAD.refresh_token), 'the incoming refresh token must not be printed')
+})
+
+test('a refused refresh says so and does not echo the refused body', async () => {
+  const { result, output } = await capturingConsole(() =>
+    refreshStep(REGION, SESSION, parseTokenPayload(CN_PAYLOAD), async () => ({
+      ok: false,
+      status: 401,
+      text: async () => '{"error":"dt-SECRETVALUE1234567890"}',
+    })),
+  )
+
+  assert.strictEqual(result, false)
+  assert.ok(output.includes('REFUSED'))
+  assert.ok(output.includes('re-login required'), 'a rejected refresh token means sign in again')
+  assert.ok(!output.includes('SECRETVALUE'), 'the 401 path must not echo the body')
+})
+
+test('a login that issued no refresh token is not reported as a rotation failure', async () => {
+  const { result, output } = await capturingConsole(() =>
+    refreshStep(REGION, SESSION, { accessToken: 'dt-x', refreshToken: undefined }, async () => {
+      throw new Error('this fake must never be called')
+    }),
+  )
+
+  assert.strictEqual(result, false)
+  assert.ok(output.includes('nothing to rotate'))
 })

@@ -7,6 +7,11 @@
  *   node probe/qoder-device-login.mjs --region cn      # interactive: open, approve
  *   node probe/qoder-device-login.mjs --url-only       # print the URL, exit
  *
+ * A login run measures three things in ONE approval: that the credential
+ * arrives, that the token it carries drives this plugin's own gateway path (a
+ * model list), and that the refresh call rotates it into one that still does
+ * (`--no-refresh` skips the third).
+ *
  * WHY this exists: `docs/KNOWN_GAPS.md` item 6（跨平台凭据链未实现（macOS / Linux））
  * leaves the OS-keystore half unbuilt — macOS needs Chromium's PBKDF2
  * ("peanuts", 1003 iterations, a different algorithm from Windows DPAPI) and
@@ -46,6 +51,8 @@ import { authHeaders, modelListUrl } from '../src/host/upstream.ts'
 const POLL_INTERVAL_MS = 1000
 const DEFAULT_TIMEOUT_MS = 300_000
 const POLL_MAX_FAILURES = 5
+/** Per-request budget, matching the reference implementation's 30s. */
+const REQUEST_TIMEOUT_MS = 30_000
 
 /** The PKCE verifier alphabet (RFC 7636 unreserved characters). */
 const PKCE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'
@@ -79,11 +86,12 @@ const PRODUCTS = {
 
 /** Command line: `--dry`, `--url-only`, `--region cn|global|both`, `--timeout <s>`. */
 function parseArgs(argv) {
-  const options = { dry: false, urlOnly: false, region: 'both', timeoutMs: DEFAULT_TIMEOUT_MS }
+  const options = { dry: false, urlOnly: false, refresh: true, region: 'both', timeoutMs: DEFAULT_TIMEOUT_MS }
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]
     if (token === '--dry') options.dry = true
     else if (token === '--url-only') options.urlOnly = true
+    else if (token === '--no-refresh') options.refresh = false
     else if (token === '--region') options.region = argv[++i] ?? 'both'
     else if (token === '--timeout') options.timeoutMs = Number(argv[++i] ?? '') * 1000
     else throw new Error(`unknown argument: ${token}`)
@@ -347,9 +355,28 @@ async function loginRegion(key, options) {
   // model list. If this returns a catalog, the login half is additive and the
   // entire upstream layer stays untouched.
   const credential = credentialOf(payload, session.machineId)
+  if (!(await probeModelList(region, credential))) {
+    console.log('  verdict   : token obtained but the gateway refused it')
+    return false
+  }
+  console.log('  verdict   : CLOSURE WORKS — the device token drives the plugin\'s existing gateway path')
+
+  if (!options.refresh) return true
+  return refreshStep(region, session, payload)
+}
+
+/**
+ * The closure that matters, in one place.
+ *
+ * `authHeaders` is the builder the chat path itself uses, so a 200 here means a
+ * credential drives the existing gateway with no upstream change — the whole
+ * question this probe exists to answer. Shared by the login and the refresh
+ * steps so the two cannot drift into testing different things.
+ */
+export async function probeModelList(region, credential, fetchImpl = fetch) {
   const url = modelListUrl(region)
   try {
-    const response = await fetch(url, {
+    const response = await fetchImpl(url, {
       method: 'GET',
       headers: { Accept: 'application/json', ...authHeaders(Buffer.alloc(0), url, credential) },
       redirect: 'error',
@@ -363,16 +390,75 @@ async function loginRegion(key, options) {
       chat = 'not-json'
     }
     console.log(`  model list: HTTP ${response.status}, chat=${chat}`)
-    if (response.ok && response.status === 200) {
-      console.log('  verdict   : CLOSURE WORKS — the device token drives the plugin\'s existing gateway path')
-    } else {
-      console.log(`  verdict   : token obtained but the gateway refused it — body:\n${indent(bodyForDisplay(text))}`)
-    }
-    return response.status === 200
+    if (response.ok && response.status === 200) return true
+    console.log(`  body      :\n${indent(bodyForDisplay(text))}`)
+    return false
   } catch (error) {
     console.log(`  model list: ERROR ${error?.message ?? String(error)}`)
     return false
   }
+}
+
+/**
+ * Phase 3: rotate the credential.
+ *
+ * A login whose credentials nothing can renew is only half a source, so the
+ * refresh call is measured rather than assumed. The reference implementation
+ * POSTs the refresh token and the machine id and parses the answer with the same
+ * tolerant parser; nothing here persists a credential, so rotating one costs
+ * nothing.
+ */
+export async function refreshStep(region, session, payload, fetchImpl = fetch) {
+  const url = `${region.openApiUrl}${REFRESH_PATH}`
+  console.log(`  refresh   : POST ${url}`)
+  if (payload.refreshToken === undefined) {
+    console.log('  verdict   : the login issued no refresh token, so there is nothing to rotate')
+    return false
+  }
+  let response
+  try {
+    response = await fetchImpl(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ refresh_token: payload.refreshToken, machine_id: session.machineId }),
+      redirect: 'error',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
+  } catch (error) {
+    console.log(`  refresh   : NETWORK ERROR ${error?.message ?? String(error)}`)
+    return false
+  }
+  const text = await response.text()
+  if (response.status === 401 || response.status === 403) {
+    // The one refusal that means something specific: the refresh token itself
+    // was rejected, which is "sign in again" rather than "the call failed".
+    console.log(`  refresh   : HTTP ${response.status} — the refresh token was REFUSED (re-login required)`)
+    return false
+  }
+  const read = parsePollBody(text)
+  if (!read.ok) {
+    console.log(`  refresh   : HTTP ${response.status}, ${read.bytes} bytes, not JSON (${read.name})`)
+    console.log(`  shape     : ${read.truncated ? 'does NOT end with a closing brace — looks TRUNCATED' : 'ends with a closing brace'}`)
+    console.log('  body      : withheld — a refresh body is credential material once it parses')
+    return false
+  }
+  if (!response.ok) {
+    console.log(`  refresh   : HTTP ${response.status} — REFUSED. Body verbatim:`)
+    console.log(indent(bodyForDisplay(text)))
+    return false
+  }
+  const rotated = parseTokenPayload(read.value)
+  const rotatedExpiry =
+    rotated.expiresAt === undefined ? 'absent' : `${String(rotated.expiresAt)} (${typeof rotated.expiresAt})`
+  console.log(`    access_token   : ${mask(rotated.accessToken)}`)
+  console.log(`    refresh_token  : ${mask(rotated.refreshToken)}`)
+  console.log(`    expires_at     : ${rotatedExpiry}`)
+  if (!(await probeModelList(region, credentialOf(rotated, session.machineId), fetchImpl))) {
+    console.log('  verdict   : the rotated credential was refused by the gateway')
+    return false
+  }
+  console.log('  verdict   : REFRESH WORKS — the rotated credential drives the same path')
+  return true
 }
 
 /**
