@@ -62,7 +62,13 @@ export const zhUsage = {
 	// 理由（红线 1：新失败路径必须给用户可见的错误，不许吞）。
 	"pill.checkinNow": "签到领 {amount} Credits",
 	"pill.checkinBusy": "签到中…",
-	"pill.checkinFailed": "签到失败：{message}"
+	"pill.checkinFailed": "签到失败：{message}",
+	// 错峰折扣（面板顶部的「当前模型」块）。折扣挂在模型上，所以块里先说当前是哪个
+	// 模型，再说它的窗口状态；`offpeakIdle` 是「有窗口但不在窗口内」，不是假装在打折。
+	"pill.modelLabel": "当前模型",
+	"pill.offpeakActive": "错峰折扣生效 · 费率 {rate}",
+	"pill.offpeakIdle": "错峰窗口 {window} · 未生效",
+	"pill.offpeakRemaining": "剩余 {time}"
 };
 /** English — usage panel copy. */
 export const enUsage = {
@@ -103,5 +109,9 @@ export const enUsage = {
 	"pill.checkinDone": "Checked in today",
 	"pill.checkinNow": "Check in · {amount} Credits",
 	"pill.checkinBusy": "Checking in…",
-	"pill.checkinFailed": "Check-in failed: {message}"
+	"pill.checkinFailed": "Check-in failed: {message}",
+	"pill.modelLabel": "Current model",
+	"pill.offpeakActive": "Off-peak active · rate {rate}",
+	"pill.offpeakIdle": "Off-peak window {window} · inactive",
+	"pill.offpeakRemaining": "{time} remaining"
 };

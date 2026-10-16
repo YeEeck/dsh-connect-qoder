@@ -5,7 +5,8 @@
  * 不解析 JSX，所以纯函数若留在那里，`node --test` 无法 import。凡是「给定输入算出
  * 输出」的逻辑都住这里；`.tsx` 只做渲染与 hook。
  */
-import type { CardQuota, CardUsageRegion } from "./card-model.ts"
+import { offPeakState, rateAt, rateLabelOf } from "./card-model.ts"
+import type { CardModelRow, CardQuota, CardUsageRegion, TranslateFn } from "./card-model.ts"
 
 /** 与 Plugins 页卡片 `QuotaBlock` 的 warn 阈值同源（已用比例 0.8 = 剩余 20%）。 */
 export const WARN_SHARE = 0.8
@@ -109,4 +110,53 @@ export function primaryQuotaOf(region: CardUsageRegion | null | undefined): { qu
 	if (plan != null && usableTotal(plan)) return { quota: plan, known: true };
 	if (region.addOnQuota != null) return { quota: region.addOnQuota, known: true };
 	return { quota: undefined, known: false }
+}
+
+/** `modelSelection` 里当前选中的模型标识（id 或显示名），无则 undefined。 */
+export function selectedModelOf(projection: ModelSelectionLike | undefined): string | undefined {
+	const candidate = candidateOf(projection);
+	const model = candidate?.model;
+	return typeof model === "string" && model !== "" ? model : undefined
+}
+
+/**
+ * 在（已按 region 过滤的）名册里找当前选中的模型。
+ *
+ * `projection.model` 可能是模型 id 也可能是显示名，两份都试；都不命中返回
+ * undefined——调用方此时**不显示错峰信息**，因为声称折扣必须精确，猜不得。
+ */
+export function matchingModel(rows: unknown, modelKey: string | undefined): CardModelRow | undefined {
+	if (typeof modelKey !== "string" || modelKey === "") return undefined;
+	if (!Array.isArray(rows)) return undefined;
+	return (rows as CardModelRow[]).find((m) => m != null && (m.id === modelKey || m.name === modelKey))
+}
+
+/** 错峰摘要：只有模型确实带 promotion 且 `offPeakState` 能算才给值。 */
+export interface OffPeakSummary {
+	active: boolean
+	remainingSeconds: number
+	rate: string
+	window: string
+}
+
+/**
+ * 当前模型的错峰状态。`promotion` 缺失/非对象（含 `null`，与卡片同裁）→ undefined，
+ * 面板不画错峰块；有 promotion 但不在窗口内 → `{active:false}`，画「未生效」而非假装
+ * 在打折。`rate` 用卡片同一 `rateAt`/`rateLabelOf`，保证两屏费率一致。
+ */
+export function offPeakSummary(
+	model: CardModelRow | undefined,
+	now: Date,
+	t: TranslateFn
+): OffPeakSummary | undefined {
+	if (model === undefined) return undefined;
+	const promo = model.promotion;
+	if (promo === null || typeof promo !== "object") return undefined;
+	const state = offPeakState(model, now);
+	if (state === undefined) return undefined;
+	const rate = rateLabelOf(t, rateAt(model, now)) ?? "";
+	const window = [promo.windowStart, promo.windowEnd]
+		.filter((value): value is string => typeof value === "string" && value !== "")
+		.join("–");
+	return { active: state.active, remainingSeconds: state.remainingSeconds, rate, window }
 }

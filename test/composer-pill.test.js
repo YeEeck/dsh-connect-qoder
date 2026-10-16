@@ -24,6 +24,7 @@ import {
   isQoderRegion,
   regionPrefixOf,
   selectedRegionOf,
+  selectedModelOf,
   candidateOf,
   primaryQuotaOf,
   remainingOf,
@@ -31,6 +32,8 @@ import {
   tierOfQuota,
   num,
   usableTotal,
+  matchingModel,
+  offPeakSummary,
   WARN_SHARE,
 } from '../src/client/pill-model.ts'
 import { zh, en } from '../src/client/copy.ts'
@@ -239,4 +242,79 @@ test('D: the renderer materializes session scopes strictly (optional=false)', { 
   assert.match(js, /materializeStandardBinding\(binding,\s*optional/)
   assert.match(js, /materializeStandardBinding\(scopeBinding,\s*scope\s*===\s*["']session-maybe["']/)
   assert.match(js, /if \(source === void 0 && !optional\) throw/)
+})
+
+/* ---------------------------------------------------------------- */
+/* 9. 错峰折扣（模型级事实，面板顶部）                                   */
+/* ---------------------------------------------------------------- */
+
+const tOf = (key) => zh[key] ?? key
+
+test('selectedModelOf reads the model of the active candidate only', () => {
+  assert.equal(selectedModelOf({ next: { provider: 'qoder-cn', model: 'qwen3.5-coder' } }), 'qwen3.5-coder')
+  assert.equal(selectedModelOf({ next: { provider: 'qoder-cn' } }), undefined)
+  assert.equal(selectedModelOf({ next: { provider: 'qoder-cn', model: '' } }), undefined)
+  assert.equal(selectedModelOf(undefined), undefined)
+})
+
+test('matchingModel finds a row by id or by display name, never by guessing', () => {
+  const rows = [
+    { id: 'a', name: 'Alpha' },
+    { id: 'b', name: 'Beta' },
+  ]
+  assert.equal(matchingModel(rows, 'a').id, 'a')
+  assert.equal(matchingModel(rows, 'Beta').id, 'b')
+  assert.equal(matchingModel(rows, 'gamma'), undefined)
+  assert.equal(matchingModel(rows, undefined), undefined)
+  assert.equal(matchingModel('not-an-array', 'a'), undefined)
+})
+
+const offPeakModel = (windowStart, windowEnd) => ({
+  id: 'qwen3.5-coder',
+  name: 'Qwen3.5 Coder',
+  region: 'qoder-cn',
+  priceFactor: 0.5,
+  promotion: {
+    active: true,
+    windowStart,
+    windowEnd,
+    timezone: 'Asia/Shanghai',
+    discountFactor: 1,
+    beforePromotionPriceFactor: 0.5,
+  },
+})
+const AT_NIGHT = new Date('2026-10-16T23:00:00+08:00')
+
+test('offPeakSummary reports an active window with the discounted rate and the window label', () => {
+  const summary = offPeakSummary(offPeakModel('22:00:00', '08:00:00'), AT_NIGHT, tOf)
+  assert.equal(summary.active, true)
+  assert.equal(summary.rate, 'x0.50')
+  assert.equal(summary.window, '22:00:00–08:00:00')
+  assert.ok(summary.remainingSeconds > 0)
+})
+
+test('offPeakSummary reports inactive when now is outside the window, instead of pretending', () => {
+  const summary = offPeakSummary(offPeakModel('08:00:00', '22:00:00'), AT_NIGHT, tOf)
+  assert.equal(summary.active, false)
+  assert.equal(summary.rate, 'x0.50')
+})
+
+test('offPeakSummary returns undefined when the model carries no usable promotion', () => {
+  assert.equal(offPeakSummary(undefined, AT_NIGHT, tOf), undefined)
+  assert.equal(offPeakSummary({ id: 'a', promotion: null }, AT_NIGHT, tOf), undefined)
+  assert.equal(offPeakSummary({ id: 'a' }, AT_NIGHT, tOf), undefined)
+  // active 窗口但窗口起点不可解析 → 算不出状态，不显示。
+  assert.equal(offPeakSummary(offPeakModel(undefined, '08:00:00'), AT_NIGHT, tOf), undefined)
+})
+
+test('off-peak pill copy exists in both dictionaries with non-echo values', () => {
+  const keys = ['pill.modelLabel', 'pill.offpeakActive', 'pill.offpeakIdle', 'pill.offpeakRemaining']
+  for (const key of keys) {
+    assert.equal(typeof zh[key], 'string', `zh.${key}`)
+    assert.equal(typeof en[key], 'string', `en.${key}`)
+    assert.ok(zh[key].length > 0)
+    assert.ok(en[key].length > 0)
+    assert.notEqual(zh[key], key, `zh.${key} must not echo the key`)
+    assert.notEqual(en[key], key, `en.${key} must not echo the key`)
+  }
 })

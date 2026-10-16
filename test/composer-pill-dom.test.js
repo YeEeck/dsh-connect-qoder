@@ -30,9 +30,30 @@ const USAGE_BODY = {
   ],
 }
 
+/** 模型名册：qwen3.5-coder 带错峰窗口（全天，保证测试时刻必在窗口内）。 */
+const MODELS_BODY = {
+  models: [
+    {
+      id: 'qwen3.5-coder',
+      name: 'Qwen3.5 Coder',
+      region: 'qoder-cn',
+      priceFactor: 0.5,
+      promotion: {
+        active: true,
+        windowStart: '00:00:00',
+        windowEnd: '23:59:59',
+        timezone: 'Asia/Shanghai',
+        discountFactor: 1,
+        beforePromotionPriceFactor: 0.5,
+      },
+    },
+  ],
+}
+
 const fetchStub = async (url) => {
   const path = String(url)
   if (path.includes('/plugins/dsh-connect-qoder/usage')) return jsonResponse(USAGE_BODY)
+  if (path.includes('/plugins/dsh-connect-qoder/models')) return jsonResponse(MODELS_BODY)
   return jsonResponse({})
 }
 
@@ -225,6 +246,71 @@ test('the panel claims today\'s check-in and reflects it after the re-read', asy
     assert.ok(calls.length >= 1, 'expected the check-in route to be called')
     assert.match(calls[0].path, /region=qoder-cn/)
     assert.match((panel.textContent ?? '') + (container.textContent ?? ''), /今日已签到/)
+  } finally {
+    unmount()
+  }
+})
+
+test('the panel shows the off-peak block only for the selected model, and only inside its window', async () => {
+  const { slots, window: w, registered, scope } = await loadCardBundle({ fetchImpl: fetchStub })
+  const card = composerSlotOf(slots)
+  const { container, unmount, react } = await renderCards({
+    card,
+    registered,
+    scope,
+    window: w,
+    props: {
+      useProjection: () => ({ next: { provider: 'qoder-cn', model: 'qwen3.5-coder' } }),
+    },
+  })
+  try {
+    const button = container.querySelector('button')
+    await react.act(async () => {
+      button.dispatchEvent(new w.MouseEvent('click', { bubbles: true }))
+    })
+    // 名册是异步读的，多让几条微任务落定。
+    for (let i = 0; i < 5; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    const panel = container.querySelector('[role="dialog"]')
+    const text = panel.textContent ?? ''
+    // 折扣挂在模型上，块里必须先说当前是哪个模型，再说费率与倒计时。
+    assert.match(text, /Qwen3.5 Coder/)
+    assert.match(text, /错峰折扣生效/)
+    assert.match(text, /x0.50/)
+    assert.match(text, /剩余/)
+  } finally {
+    unmount()
+  }
+})
+
+test('a selected model outside the roster draws no off-peak block (no guessing)', async () => {
+  // `projection.model` 不在名册里：面板照常显示余额与签到，但绝不声称某条模型在打折。
+  const { slots, window: w, registered, scope } = await loadCardBundle({ fetchImpl: fetchStub })
+  const card = composerSlotOf(slots)
+  const { container, unmount, react } = await renderCards({
+    card,
+    registered,
+    scope,
+    window: w,
+    props: {
+      useProjection: () => ({ next: { provider: 'qoder-cn', model: 'not-in-roster' } }),
+    },
+  })
+  try {
+    const button = container.querySelector('button')
+    await react.act(async () => {
+      button.dispatchEvent(new w.MouseEvent('click', { bubbles: true }))
+    })
+    // 等名册加载完再断言：若名册已到位仍不画块，才是「匹配不上不猜」；还没加载
+    // 就断言没块，测的不是这个裁定。
+    for (let i = 0; i < 5; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    const panel = container.querySelector('[role="dialog"]')
+    const text = panel.textContent ?? ''
+    assert.match(text, /1,034/)
+    assert.ok(!/错峰/.test(text), 'expected no off-peak block for an unmatched model')
   } finally {
     unmount()
   }

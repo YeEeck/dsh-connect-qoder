@@ -41,19 +41,32 @@
  * 节点（inline style，不注入样式表）。读不到的字段显示 `—`，永不 `0`——`0` 是
  * 「确认是零」的读数，`—` 是「查不到」，二者不等价（`QuotaBlock` 同裁定）。
  *
+ * **错峰折扣**：折扣挂在**模型**上（`CardModelRow.promotion`），不是区域属性，所以
+ * 面板画错峰必须精确匹配当前选中模型——`projection.model` 对名册里的 `id` 或 `name`
+ * 任一命中才画块（`matchingModel`），匹配不上就什么都不说。绝不因为「这个区域别的
+ * 模型在打折」而声称当前模型在打折：那是把相邻行的事实安到这一行头上。窗口内画
+ * 「生效 · 费率 · 剩余 HH:MM:SS」，窗口外画「窗口未生效」而非假装在打折。费率和
+ * 倒计时与 Plugins 页卡片同一套 `rateAt`/`offPeakState`，两屏不会打脸。名册单独
+ * 读 `QODER_MODELS_PATH`，读失败保留上次（无从判断时就不画块）。
+ *
  * **轮询**：5 分钟（余额是存量不是秒表，秒级轮询只会闪数字）。失败保留上次数值、
- * 不抛、不显示错误条——面板照常用，读不到显示 `—`。
+ * 不抛、不显示错误条——面板照常用，读不到显示 `—`。例外是**秒级 tick 的「现在」**：
+ * 只有该 region 确有 promotion 窗口 active 时按秒刷新（同卡片 `hasActiveWindow`
+ * 门控），否则静态，避免常驻每秒重渲。
  *
  * **关闭方式**：再点一次胶囊、点面板外部（`pointerdown`，非 `click`——后者会先关
  * 面板又被触发器 toggle 重开）、按 Esc。监听只在外层开着时挂，收起即摘。
  *
- * 纯函数（门控、主额度、分级）在 `./pill-model.ts`，本文件只做渲染与 hook。
+ * 纯函数（门控、主额度、分级、模型匹配、错峰摘要）在 `./pill-model.ts`，本文件
+ * 只做渲染与 hook。
  */
 import * as react from "react"
-import type { CardUsageRegion, TranslateFn } from "./card-model.ts"
+import { formatCountdown } from "./card-model.ts"
+import type { CardModelRow, CardUsageRegion, TranslateFn } from "./card-model.ts"
 import {
 	isQoderRegion,
 	selectedRegionOf,
+	selectedModelOf,
 	regionPrefixOf,
 	primaryQuotaOf,
 	remainingOf,
@@ -61,10 +74,12 @@ import {
 	num,
 	tierOfQuota,
 	usableTotal,
+	matchingModel,
+	offPeakSummary,
 	type Tier,
 	type ModelSelectionLike
 } from "./pill-model.ts"
-import { QODER_USAGE_PATH, QODER_CHECKIN_PATH } from "./paths.ts"
+import { QODER_USAGE_PATH, QODER_CHECKIN_PATH, QODER_MODELS_PATH } from "./paths.ts"
 import { getJson, postJson } from "./http.ts"
 
 /** 轮询间隔：5 分钟。余额是存量，秒级轮询只会闪数字。 */
@@ -98,18 +113,27 @@ export interface ComposerPillProps {
 interface ActiveUsagePillProps {
 	t: TranslateFn
 	region: string
+	/** 当前选中模型的标识（id 或显示名），错峰折扣是模型级事实，缺了就无从谈起。 */
+	modelKey: string | undefined
 }
 
-function ActiveUsagePill({ t, region }: ActiveUsagePillProps) {
+function ActiveUsagePill({ t, region, modelKey }: ActiveUsagePillProps) {
 	const [open, setOpen] = react.useState(false);
 	// 读到的用量。跨失败保留：上一帧的余额仍是「直到被反驳前为真」的事实。
 	const [usage, setUsage] = react.useState<CardUsageRegion | null>(null);
 	// 首次读之前不算「查到 0」，是「还没查」——胶囊给 `—` 而非 `0`。
 	const [loadedOnce, setLoadedOnce] = react.useState(false);
+	// 名册（错峰折扣挂在模型上）。读失败保留上次：读不到就无从判断错峰，但
+	// 也不该把已读到的模型清掉。
+	const [models, setModels] = react.useState<CardModelRow[]>([]);
+	// 错峰倒计时用的「现在」。只在该 region 确有 promotion 窗口 active 时秒级
+	// 刷新（同卡片 `hasActiveWindow` 门控），否则静态，避免常驻每秒重渲。
+	const [clock, setClock] = react.useState(() => new Date());
 	const mounted = react.useRef(true);
 	// 只允许最新一次读取落 state：轮询可以前一次还没返回就发起第二次，慢响应
-	// 后到会把屏幕上的数字搬回去。
+	// 后到会把屏幕上的数字搬回去。用量与名册各一份，互不打断。
 	const generation = react.useRef(0);
+	const modelGeneration = react.useRef(0);
 
 	react.useEffect(() => {
 		mounted.current = true;
@@ -135,15 +159,46 @@ function ActiveUsagePill({ t, region }: ActiveUsagePillProps) {
 		}
 	}, [region]);
 
+	const loadModels = react.useCallback(async () => {
+		modelGeneration.current += 1;
+		const mine = modelGeneration.current;
+		try {
+			const value = await getJson<{ models?: unknown }>(QODER_MODELS_PATH);
+			if (modelGeneration.current !== mine || !mounted.current) return;
+			setModels(Array.isArray(value.models) ? (value.models as CardModelRow[]) : []);
+		} catch {
+			// 名册读不到 → 无从判断错峰，面板不画错峰块；不抛、不清掉已读到的名册。
+		}
+	}, []);
+
 	react.useEffect(() => {
 		void load();
+		void loadModels();
 		const timer = window.setInterval(() => {
 			void load();
 		}, POLL_MS);
+		const modelsTimer = window.setInterval(() => {
+			void loadModels();
+		}, POLL_MS);
+		return () => {
+			window.clearInterval(timer);
+			window.clearInterval(modelsTimer);
+		};
+	}, [load, loadModels]);
+
+	// 秒级倒计时：只有该 region 确有 promotion 窗口开着才 tick（窗口是 22:00–08:00
+	// 那种长时段，其余时间不需要每秒刷一遍「现在」）。名册更新会重挂本 effect。
+	const hasActiveWindow = models.some((model) => model.promotion?.active === true);
+	react.useEffect(() => {
+		if (!hasActiveWindow) return;
+		setClock(new Date());
+		const timer = window.setInterval(() => {
+			setClock(new Date());
+		}, 1000);
 		return () => {
 			window.clearInterval(timer);
 		};
-	}, [load]);
+	}, [hasActiveWindow]);
 
 	// 关闭面板：点外部用 `pointerdown`（见文件头），Esc 收尾。只在开着时挂。
 	react.useEffect(() => {
@@ -174,6 +229,11 @@ function ActiveUsagePill({ t, region }: ActiveUsagePillProps) {
 	const prefix = regionPrefixOf(region);
 	const exhausted = tier === "exhausted";
 	const checkin = usage?.checkin;
+	// 错峰折扣是模型级事实，必须精确匹配当前选中模型才画；匹配不上（名册没这
+	// 条、`projection.model` 不是 id 也不是显示名）就什么都不说，不猜。
+	const regionModels = models.filter((model) => model.region === region);
+	const currentModel = matchingModel(regionModels, modelKey);
+	const offPeak = offPeakSummary(currentModel, clock, t);
 
 	// 签到动作（不只是显示）。与 Plugins 页 `QoderUsagePanel` 走同一条 claim
 	// 路由和同一个「领完立刻重读」约定，所以面板上的按钮和设置卡里的按钮说的
@@ -280,6 +340,42 @@ function ActiveUsagePill({ t, region }: ActiveUsagePillProps) {
 						</span>
 					</div>
 
+					{/* 错峰折扣：只画当前选中模型的窗口状态（见上方 `offPeak` 注释）。
+					    `promotion` 缺失不画块；有窗口但未生效画「未生效」，不假装在打折。 */}
+					{offPeak !== undefined ? (
+						<div
+							style={{
+								display: "flex",
+								flexDirection: "column",
+								gap: "4px",
+								paddingBottom: "8px",
+								borderBottom: "1px solid var(--dsw-alias-border-l2, #36373b)"
+							}}
+						>
+							<div style={{ fontSize: "11px", color: "var(--dsw-alias-label-secondary, #61666b)" }}>
+								{t("pill.modelLabel")}
+							</div>
+							<div style={{ fontSize: "12px", color: "var(--dsw-alias-label-primary, #e6e6e6)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+								{currentModel?.name ?? currentModel?.id ?? modelKey ?? ""}
+							</div>
+							<div
+								style={{
+									fontSize: "12px",
+									color: offPeak.active
+										? "var(--dsw-alias-state-success-primary, #12b76a)"
+										: "var(--dsw-alias-label-tertiary, #999)",
+									fontVariantNumeric: "tabular-nums"
+								}}
+							>
+								{offPeak.active
+									? `${t("pill.offpeakActive", { rate: offPeak.rate })} · ${t("pill.offpeakRemaining", {
+											time: formatCountdown(offPeak.remainingSeconds)
+										})}`
+									: t("pill.offpeakIdle", { window: offPeak.window })}
+							</div>
+						</div>
+					) : null}
+
 					{known && quota !== undefined ? (
 						<div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
 							<div style={{ fontSize: "11px", color: "var(--dsw-alias-label-secondary, #61666b)" }}>
@@ -380,5 +476,5 @@ export function ComposerUsagePill({ t, useProjection }: ComposerPillProps) {
 	const projection = (useProjection ?? (() => undefined))("modelSelection");
 	const region = selectedRegionOf(projection);
 	if (!isQoderRegion(region)) return null;
-	return <ActiveUsagePill t={t} region={region as string} />
+	return <ActiveUsagePill t={t} region={region as string} modelKey={selectedModelOf(projection)} />
 }

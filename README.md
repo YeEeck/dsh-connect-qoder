@@ -265,7 +265,7 @@ dsh plugin --profile web add <本仓库路径>
 | `src/client/account-panel.tsx` | 账号容器 `QoderAccountPanel`：区域条 + 选中区域登录卡，四道 fetch（读 / 重读 / 确认 / 开关写），开关写仍带完整 `enabledRegions` map |
 | `src/client/card.tsx` | 卡片的装配层 `QoderPluginCard`（把 `QoderAccountPanel` / `QoderUsagePanel` 与模型列表拼起来，纯规则委托 `card-model.ts`、可编辑状态委托 `controller.ts`、名册读走 `http.ts`）+ 三个无 hook 纯展示件（`RegionUsage` / `CheckinCard` / `QuotaBlock`） |
 | `src/client/pill-model.ts` | 输入框用量胶囊的**浏览器无关决策层**：区域归属门控（`isQoderRegion` / `selectedRegionOf` / `candidateOf`）、主额度选择（`primaryQuotaOf`——套餐优先，CN 免费层 plan 为 0 回落资源包）、分级（`tierOfQuota`，阈值与卡片同源 `WARN_SHARE = 0.8`）、读数格式化（`remainingOf` / `formatCredits`）。无 React、无 DOM、无 `fetch`，Node 测试直接 import 真规则 |
-| `src/client/composer-usage-pill.tsx` | 对话框用量胶囊 `ComposerUsagePill`：挂在宿主输入框工具栏 `conversation.input.right` 座席，读数 `Qoder CN · 1,034`（区域前缀 · 主额度剩余 Credits）+ 分级色点，点击展开原始用量卡（未签到给领取按钮，走与 Plugins 页同一条 claim 路由，领完立刻重读把 Credits 推回余额）；5 分钟轮询、读失败保留上次数值不抛。归属由 `useProjection("modelSelection")` 物化，provider 非 `qoder-cn`/`qoder` 整颗胶囊不挂载（不跑 fetch）。样式走 inline style + 一条容器锚定规则，不注入整表样式以免覆盖宿主工具栏 |
+| `src/client/composer-usage-pill.tsx` | 对话框用量胶囊 `ComposerUsagePill`：挂在宿主输入框工具栏 `conversation.input.right` 座席，读数 `Qoder CN · 1,034`（区域前缀 · 主额度剩余 Credits）+ 分级色点，点击展开原始用量卡（未签到给领取按钮，走与 Plugins 页同一条 claim 路由，领完立刻重读把 Credits 推回余额）；面板顶部画当前模型的错峰窗口状态（折扣挂在模型上，必须 `projection.model` 匹配到名册里的 `id`/`name` 才画，匹配不上不声称打折）；5 分钟轮询、读失败保留上次数值不抛。归属由 `useProjection("modelSelection")` 物化，provider 非 `qoder-cn`/`qoder` 整颗胶囊不挂载（不跑 fetch）。样式走 inline style + 一条容器锚定规则，不注入整表样式以免覆盖宿主工具栏 |
 | `src/client/index.ts` | 注册入口（`apply` / `inject` / `name`），含 `conversation.input.right` 座席注册（失败降级 `console.error`，不影响 host provider） |
 | `src/client/react-shim.d.ts` | 最小 React 类型垫片（只管类型检查，不参与构建、不随包发布） |
 
