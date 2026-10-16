@@ -37,12 +37,26 @@ function blockAfter(text, marker) {
 }
 
 test('a region builds its own vault, under a path no other region can reach', () => {
-  const device = blockAfter(source, 'this.device = new DeviceCredentialSource(')
+  const device = blockAfter(source, 'function deviceSourceFor(')
   assert.match(device, /region: region\.id/, 'the source must be bound to this region, not to "the plugin"')
   // The path carries the region id, the way the catalog and the PAT throttle
   // already do: one file per region, so switching tabs cannot cross credentials
   // and a sign-out in one region cannot delete the other region's.
   assert.match(device, /qoderCatalogPath\(`\.qoder-auth\.\$\{region\.id\}\.json`\)/)
+})
+
+test('every region resolves through the one source the routes also use', () => {
+  // Two instances over one path would mean two refresh-failure windows and two
+  // stale caches of the same credential, so the runtime takes the shared
+  // instance instead of building its own; the sign-in routes write through the
+  // same map, which is what lets a region that has never started be signed in.
+  const at = source.indexOf('this.device = device ??')
+  assert.notStrictEqual(at, -1, 'the runtime must take the shared source, not build its own')
+  assert.match(source.slice(at, at + 120), /this\.device = device \?\? deviceSourceFor\(region, ctx\)/)
+  assert.match(source, /const deviceSources = new Map<string, DeviceCredentialSource>/)
+  assert.match(source, /onAuthorized: async \(regionId, payload, machineID\) => \{/)
+  assert.match(source, /await source\.remember\(payload, machineID\)/)
+  assert.match(source, /forget: async \(regionId\) => \(await deviceSources\.get\(regionId\)\?\.forget\(\)\) \?\? false/)
 })
 
 test('the vault is handed to the cache as the third source', () => {

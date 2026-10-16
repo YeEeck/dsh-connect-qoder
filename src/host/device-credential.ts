@@ -173,6 +173,41 @@ export class DeviceCredentialSource {
   }
 
   /**
+   * Store what a completed sign-in obtained, and make it usable at once.
+   *
+   * Rejects when the file could not be written. The caller is the sign-in flow,
+   * which turns that into "signed in but could not store it" — the alternative,
+   * resolving `undefined` and calling it a success, would hand the user a
+   * session that silently vanishes at the next restart.
+   */
+  async remember(payload: DeviceTokenPayload, machineID: string): Promise<void> {
+    const record = recordOf(payload, machineID, this.now())
+    const stored = await this.vault.update(() => record)
+    if (!stored) throw new Error(`the credential file ${this.vault.path} could not be written`)
+    this.retry()
+    this.last = { state: 'ok' }
+  }
+
+  /**
+   * Delete the saved credential: this machine is signed out.
+   *
+   * Goes through the vault's serialised `clear` rather than around it, so a
+   * renewal that has already read the record cannot write it back after the
+   * sign-out lands — the resurrection the vault's chain exists to prevent.
+   *
+   * Answers whether the file is gone. `false` is reported as a failure rather
+   * than smoothed over: telling someone they are signed out while the
+   * credential is still on disk is a false confirmation, and it is also what
+   * would make the next resolve quietly sign them back in.
+   */
+  async forget(): Promise<boolean> {
+    this.retry()
+    const cleared = await this.vault.clear()
+    if (cleared) this.last = { state: 'none' }
+    return cleared
+  }
+
+  /**
    * The credential to sign a request with, or `undefined` when this machine has
    * none it can use.
    *

@@ -16,7 +16,7 @@
  */
 import { test, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -89,8 +89,13 @@ function stubbingFetch({ body = ROTATED_BODY, status = 200, throws } = {}) {
 }
 
 /** A source over a real vault in a temporary directory. */
-function makeSource({ record, fetchImpl, now = () => NOW, logger } = {}) {
-  const path = join(tempDir(), 'qoder-auth.qoder-cn.json')
+function makeSource({
+  record,
+  fetchImpl,
+  now = () => NOW,
+  logger,
+  path = join(tempDir(), 'qoder-auth.qoder-cn.json'),
+} = {}) {
   const vault = new CredentialVault({ path, now })
   if (record !== undefined) vault.save(record)
   return {
@@ -327,4 +332,114 @@ test('a throwing network is reported, never thrown out of load', async () => {
   assert.strictEqual(credential, undefined)
   assert.strictEqual(source.status.state, 'refresh-failed')
   assert.ok(source.status.reason.length > 0)
+})
+
+// --- what a completed sign-in does to the source -------------------------
+//
+// `remember` and `forget` are the two calls the sign-in routes make, and both
+// can fail in a way that must not be smoothed over: a sign-in the plugin could
+// not write, and a sign-out that did not delete anything. Reporting either as
+// success is the false confirmation the module header exists to forbid.
+
+/** The payload a completed sign-in hands over. */
+function freshPayload(overrides = {}) {
+  return {
+    token: 'dt-fresh',
+    refreshToken: 'drt-fresh',
+    expiresAt: NOW + 2 * HOUR,
+    refreshTokenExpiresAt: NOW + 400 * 24 * HOUR,
+    userID: 'uid-fresh',
+    name: 'Someone',
+    email: 'someone@example.test',
+    ...overrides,
+  }
+}
+
+test('a completed sign-in is stored, and served without a further network call', async () => {
+  const network = stubbingFetch()
+  const { source, vault } = makeSource({ fetchImpl: network })
+
+  await source.remember(freshPayload(), 'machine-9')
+
+  const credential = await source.load()
+  assert.ok(credential !== undefined)
+  assert.strictEqual(credential.token, 'dt-fresh')
+  assert.strictEqual(credential.userID, 'uid-fresh')
+  assert.strictEqual(credential.machineID, 'machine-9')
+  assert.strictEqual(credential.source, 'device')
+  assert.deepStrictEqual(source.status, { state: 'ok' })
+  assert.strictEqual(network.calls.length, 0, 'a fresh credential has nothing to renew')
+
+  // The uid is what the gateway signature is built from, so losing it on the
+  // way to disk would be a 403 at the next request rather than a visible bug.
+  const record = vault.read()
+  assert.strictEqual(record.userID, 'uid-fresh')
+  assert.strictEqual(record.machineID, 'machine-9')
+  assert.strictEqual(record.token, 'dt-fresh')
+})
+
+test('a sign-in that could not be written rejects, and never reports success', async () => {
+  // A FILE where the vault needs a directory: `mkdir` fails with ENOTDIR, which
+  // is the same shape of failure as a read-only home or a full disk. Using a
+  // directory at the vault path instead would not work — the vault would
+  // quarantine it (move it aside) and then legitimately succeed.
+  const blocked = join(tempDir(), 'not-a-directory')
+  writeFileSync(blocked, 'this name is taken by a file, so nothing can be created inside it')
+  const { source } = makeSource({ path: join(blocked, 'qoder-auth.qoder-cn.json') })
+
+  await assert.rejects(() => source.remember(freshPayload(), 'machine-9'), /could not be written/)
+  // The flow turns this into "signed in, but could not store it" -- so the
+  // source must not also be claiming to hold a usable credential.
+  assert.notDeepStrictEqual(source.status, { state: 'ok' })
+})
+
+test('a stored sign-in clears a refused renewal, so signing in again is not ignored', async () => {
+  const network = stubbingFetch({ status: 500, body: { message: 'upstream is unwell' } })
+  const { source } = makeSource({
+    record: liveRecord({ expiresAt: NOW - HOUR }),
+    fetchImpl: network,
+  })
+
+  assert.strictEqual(await source.load(), undefined)
+  assert.strictEqual(source.status.state, 'refresh-failed')
+
+  // The window exists to stop a dead refresh token being retried on every turn.
+  // Signing in produces a NEW one, so it must not be held back by that window.
+  await source.remember(freshPayload(), 'machine-9')
+  const credential = await source.load()
+  assert.ok(credential !== undefined)
+  assert.strictEqual(credential.token, 'dt-fresh')
+  assert.deepStrictEqual(source.status, { state: 'ok' })
+})
+
+test('sign-out deletes the saved credential, and says that it did', async () => {
+  const { source, vault, path } = makeSource({ record: liveRecord() })
+  assert.ok(existsSync(path))
+
+  assert.strictEqual(await source.forget(), true)
+
+  assert.strictEqual(existsSync(path), false)
+  assert.strictEqual(vault.read(), null)
+  assert.deepStrictEqual(source.status, { state: 'none' })
+  assert.strictEqual(await source.load(), undefined)
+})
+
+test('a sign-out that could not delete the file reports failure, not success', async () => {
+  // Something now occupies the path that `unlink` cannot remove, and the
+  // quarantine that would normally move an unreadable file aside is blocked by
+  // an existing non-empty directory of that name -- so the path survives the
+  // read and the delete is the thing that fails. The route turns `false` into a
+  // 500 with a reason: telling the user they are signed out while the credential
+  // is still on disk is exactly the false confirmation this module is shaped
+  // around, and it is also what would make the next resolve quietly sign them
+  // back in.
+  const path = join(tempDir(), 'qoder-auth.qoder-cn.json')
+  mkdirSync(path, { recursive: true })
+  const quarantine = `${path}.corrupt-${NOW}`
+  mkdirSync(quarantine, { recursive: true })
+  writeFileSync(join(quarantine, 'keep'), 'this is what makes the rename fail')
+  const { source } = makeSource({ path })
+
+  assert.strictEqual(await source.forget(), false)
+  assert.ok(existsSync(path), 'a failed sign-out must not report the credential as gone')
 })

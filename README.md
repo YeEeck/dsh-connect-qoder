@@ -226,6 +226,7 @@ dsh plugin --profile web add <本仓库路径>
 | `src/host/credential-vault.ts` | 插件自有凭据文件的读写（设备登录换来的可刷新令牌）：`0600` + `temp/rename` 原子写、损坏文件**隔离留存**而非被后来者覆盖、读-改-写整体串行（并发的刷新不会把刚登出的凭据写回来，无 peer 依赖） |
 | `src/host/device-login.ts` | 设备登录的协议层（两个 region 各自的端点、`client_id`、PKCE 与轮询/刷新请求）：404 与「还没审批」的空信封都读作未授权而非失败；**刷新应答不是凭据**——实测只有六个字段、把访问令牌叫 `device_token` 且**不带 `user_id`**，必须叠加回被刷新的那一份，否则签名带上空 uid 会被网关回 403 `Signature invalid`（无 peer 依赖） |
 | `src/host/device-credential.ts` | 把 vault 里那份令牌变成可签名的凭据、并在过期时轮换：**五档状态**（`none` / `ok` / `expired` / `refresh-failed` / `unreadable`）而非两档——「本机没登录过」与「文件读不出来」指向不同下一步；刷新被拒后有 60s 窗口（否则每轮对话都会重试一条已被吊销的刷新令牌）；刷新成功但落盘失败仍照常出借凭据、只 warn；**从不抛**（抛出去就等于把登录问题变成 provider 坏掉）（无 peer 依赖） |
+| `src/host/device-login-flow.ts` | 设备登录的会话状态机（按 region 一次一个尝试，5 分钟 TTL）：把探针那种「一个进程等着」拆成卡片能驱动的 `start` / `poll` / `cancel`，否则一个路由要挂五分钟且面板一关就丢；PKCE verifier 只留在宿主内存、**绝不出现在任何返回值里**；`poll` 每次只发一次请求；**兑换码只能用一次**（尝试先删再写凭据，否则之后的 poll 会给第二个令人困惑的答案）；「批准了但没存下」报 `failed` 而非成功（假确认是红线 1 禁止的）（无 peer 依赖） |
 | `src/host/account-payload.ts` | 账号面板三条路由共用的那份应答：逐区域状态 + 开关映射，以及「渲染读缓存 / 重读登录读真」这一个开关（从 `index.ts` 抽出以便直测，无 peer 依赖） |
 | `src/host/account-state.ts` | 每区域账号状态四档判定（`ok` / `expired` / `needs-app` / `signed-out`；纯本地证据、不含凭据，无 peer 依赖）；三种读取模式（默认 / `cachedOnly` 不解包 / `force` 忽略失败窗口） |
 | `src/host/settings-save.ts` | 设置命名空间的解析（0.2 代由宿主推导，插件不能自选）、设置写入、按区域合并与落盘读回校验（无 peer 依赖） |

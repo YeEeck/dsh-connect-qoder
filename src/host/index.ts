@@ -69,7 +69,13 @@ import {
   reloadHandler,
   confirmHandler,
   statusHandler,
+  deviceLoginStartHandler,
+  deviceLoginPollHandler,
+  deviceLoginCancelHandler,
+  deviceLoginSignOutHandler,
 } from './handlers.ts'
+import type { DeviceLoginDeps } from './handlers.ts'
+import { DeviceLoginFlow } from './device-login-flow.ts'
 import { regionPublishDecision, unreadableSignInDecision } from './region-gate.ts'
 
 /** Loader row id; also the plugin's identity in the composition. */
@@ -280,6 +286,31 @@ const QODER_ACCOUNT_RELOAD_PATH = '/plugins/dsh-connect-qoder/account/reload'
 const QODER_ACCOUNT_CONFIRM_PATH = '/plugins/dsh-connect-qoder/account/confirm'
 
 /**
+ * Begin a device sign-in: answers with the URL the user approves in a browser.
+ *
+ * The Plugin's own sign-in, not the desktop application's. Four routes rather
+ * than one because the user's part takes up to five minutes: holding a request
+ * open for that long would occupy a route per attempt and lose the attempt if
+ * the panel was reloaded. The card polls.
+ */
+const QODER_DEVICE_LOGIN_START_PATH = '/plugins/dsh-connect-qoder/device-login/start'
+
+/** One poll of a pending attempt; the card repeats it until it resolves. */
+const QODER_DEVICE_LOGIN_POLL_PATH = '/plugins/dsh-connect-qoder/device-login/poll'
+
+/** Abandon a pending attempt (the user closed the panel, or changed their mind). */
+const QODER_DEVICE_LOGIN_CANCEL_PATH = '/plugins/dsh-connect-qoder/device-login/cancel'
+
+/**
+ * Delete this plugin's stored credential.
+ *
+ * Only the plugin's own file: the desktop application's login, a PAT in the
+ * environment, and the other region's file are untouched, and the answer says
+ * so rather than leaving the user to discover it.
+ */
+const QODER_DEVICE_LOGIN_SIGNOUT_PATH = '/plugins/dsh-connect-qoder/device-login/signout'
+
+/**
  * How long a fetched usage reading stays fresh.
  *
  * Quota moves only when a turn runs, so a short cache keeps the panel honest
@@ -294,6 +325,31 @@ const CATALOG_TTL_MS = catalogTtlMs
 /** Plugin-owned catalog path inside the Harness home. */
 export function qoderCatalogPath(filename = '.qoder-catalog.json') {
   return join(resolveDshHome(), filename)
+}
+
+/**
+ * One region's own credential file, and the reader/rotator over it.
+ *
+ * The path follows the catalog's and the PAT throttle's convention
+ * (`.qoder-*.<region>.json`): one file per region, so switching tabs cannot
+ * cross credentials and signing out of one edition cannot delete the other's.
+ * It lives under the Harness home rather than the application's data root on
+ * purpose — this file is the plugin's, not the application's, and it is the one
+ * credential the user obtained through the plugin.
+ *
+ * Returned to every caller that needs THE instance for a region (the runtime
+ * that resolves with it, the routes that read and clear it), because two
+ * instances over one path would mean two failure windows and two stale caches.
+ */
+function deviceSourceFor(region: Region, ctx: HostContext): DeviceCredentialSource {
+  return new DeviceCredentialSource({
+    region: region.id,
+    vault: new CredentialVault({
+      path: qoderCatalogPath(`.qoder-auth.${region.id}.json`),
+      logger: ctx.logger,
+    }),
+    logger: ctx.logger,
+  })
 }
 
 /**
@@ -358,7 +414,7 @@ class RegionRuntime {
    */
   invalidate?: () => void
 
-  constructor(region: Region, ctx: HostContext) {
+  constructor(region: Region, ctx: HostContext, device?: DeviceCredentialSource) {
     this.region = region
     this.ctx = ctx
     this.logger = ctx.logger
@@ -369,20 +425,13 @@ class RegionRuntime {
     /**
      * The region's own credential file, and the reader/rotator over it.
      *
-     * Built before the cache because the cache takes the reader as a source.
-     * The path follows the catalog's convention (`.qoder-*.<region>.json`) so
-     * that two regions can never see each other's credential, and is derived
-     * from DSH home rather than the app's data root on purpose: this file is
-     * the plugin's, not the application's.
+     * Handed in rather than built here because the sign-in routes write a
+     * credential for regions that have not started. The fallback exists only so
+     * a runtime can still be constructed standalone (the tests do that); every
+     * activation path passes the shared instance, which is what keeps "the
+     * panel's sign-out" and "this region's resolve" talking about one file.
      */
-    this.device = new DeviceCredentialSource({
-      region: region.id,
-      vault: new CredentialVault({
-        path: qoderCatalogPath(`.qoder-auth.${region.id}.json`),
-        logger: ctx.logger,
-      }),
-      logger: ctx.logger,
-    })
+    this.device = device ?? deviceSourceFor(region, ctx)
     /**
      * The credential cache, holding the app-store reader, the PAT fallback and
      * the exchange. It carries the "a re-sign-in needs no restart" rule, which
@@ -706,8 +755,9 @@ async function startRegion(
   region: Region,
   ctx: HostContext,
   enabledIdsFor: (regionId: string) => string[],
+  device: DeviceCredentialSource | undefined,
 ): Promise<{ region: Region; runtime: RegionRuntime; shim: ShimHandle } | undefined> {
-  const runtime = new RegionRuntime(region, ctx)
+  const runtime = new RegionRuntime(region, ctx, device)
 
   // A region is published only when it can actually answer; the three refusals
   // and their log levels are decided in lib/region-gate.js so they can be
@@ -891,6 +941,50 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
     ctx.logger.warn?.('dsh-connect-qoder: stale credential temp sweep failed', error)
   }
 
+  /**
+   * Every region's device credential, built once and shared with its runtime.
+   *
+   * Built here rather than inside {@link RegionRuntime} because the sign-in
+   * routes must be able to WRITE a credential for a region that has not started
+   * — which is the whole point: a machine with no desktop app has no started
+   * region, and signing in is what creates one. A source owned by the runtime
+   * would not exist yet at the moment the credential arrives.
+   */
+  const deviceSources = new Map<string, DeviceCredentialSource>(
+    REGIONS.map((region) => [region.id, deviceSourceFor(region, ctx)]),
+  )
+  /**
+   * The sign-in conversation, driven by the card.
+   *
+   * Stored host-side because the PKCE verifier must not travel to the browser;
+   * see `device-login-flow.ts`.
+   */
+  const loginFlow = new DeviceLoginFlow({
+    onAuthorized: async (regionId, payload, machineID) => {
+      const source = deviceSources.get(regionId)
+      // Cannot happen through a route (they validate the region first), but the
+      // flow's contract is to report a storage failure rather than assume one.
+      if (source === undefined) throw new Error(`no device credential source for region ${regionId}`)
+      await source.remember(payload, machineID)
+    },
+    logger: ctx.logger,
+  })
+
+  /**
+   * What the four sign-in routes read.
+   *
+   * `forget` and `status` go through the shared map rather than through a
+   * runtime, because signing out of a region that never started is a case that
+   * has to work: that region has a file on disk and no runtime at all.
+   */
+  const deviceDeps: DeviceLoginDeps = {
+    regions: REGIONS,
+    flow: loginFlow,
+    forget: async (regionId) => (await deviceSources.get(regionId)?.forget()) ?? false,
+    status: (regionId) => deviceSources.get(regionId)?.status ?? { state: 'none' },
+    logger: ctx.logger,
+  }
+
   const started: Array<{ region: Region; runtime: RegionRuntime; shim: ShimHandle }> = []
   /**
    * Region ids whose start is currently in flight.
@@ -902,7 +996,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
    */
   const pendingStarts = new Set<string>()
   for (const region of REGIONS) {
-    const entry = await startRegion(region, ctx, enabledIdsFor)
+    const entry = await startRegion(region, ctx, enabledIdsFor, deviceSources.get(region.id))
     if (entry !== undefined) started.push(entry)
   }
   if (started.length === 0) {
@@ -1338,7 +1432,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
       pendingStarts.add(region.id)
       let entry: Awaited<ReturnType<typeof startRegion>>
       try {
-        entry = await startRegion(region, ctx, enabledIdsFor)
+        entry = await startRegion(region, ctx, enabledIdsFor, deviceSources.get(region.id))
       } finally {
         // Cleared on both paths, so a failed start does not wedge the region
         // out of every future reload — that would trade a leak for a region
@@ -1403,7 +1497,15 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
   // it performs belongs to `lib/account-payload.js`, which a test can import.
   // Keeping it as a closure here once meant the panel's whole read path ran
   // outside every gate in this repository. See that module's header.
-  const accountPayload = (options = {}) => buildAccountPayload({ regions: REGIONS, settings: current(), ...options })
+  const accountPayload = (options = {}) =>
+    buildAccountPayload({
+      regions: REGIONS,
+      settings: current(),
+      // Same reader the sign-out route answers with, so the sentence the panel
+      // shows after signing out is the sentence it shows on the next render.
+      deviceStatus: deviceDeps.status,
+      ...options,
+    })
 
   ctx.inject(['webServer'], (webCtx: HostContext) => {
     // Injection is the guarantee: `inject(['webServer'], …)` runs this callback
@@ -1441,6 +1543,29 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
           regions: REGIONS,
           started,
         }),
+      },
+    ], routeReleases, ctx.logger)
+
+    // The plugin's own sign-in, as one group for the same reason the account
+    // routes are: start without poll is a button that opens a browser and then
+    // reports nothing, and poll without sign-out leaves the user unable to take
+    // the credential back. All four or none.
+    mountRouteGroup(webServer, [
+      {
+        path: QODER_DEVICE_LOGIN_START_PATH,
+        handler: (req: IncomingMessage, res: ServerResponse) => deviceLoginStartHandler(req, res, deviceDeps),
+      },
+      {
+        path: QODER_DEVICE_LOGIN_POLL_PATH,
+        handler: (req: IncomingMessage, res: ServerResponse) => deviceLoginPollHandler(req, res, deviceDeps),
+      },
+      {
+        path: QODER_DEVICE_LOGIN_CANCEL_PATH,
+        handler: (req: IncomingMessage, res: ServerResponse) => deviceLoginCancelHandler(req, res, deviceDeps),
+      },
+      {
+        path: QODER_DEVICE_LOGIN_SIGNOUT_PATH,
+        handler: (req: IncomingMessage, res: ServerResponse) => deviceLoginSignOutHandler(req, res, deviceDeps),
       },
     ], routeReleases, ctx.logger)
   })

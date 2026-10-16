@@ -31,6 +31,8 @@ import type { RateHelpers } from './catalog-entry.ts'
 import { saveFieldOutcome } from './settings-save.ts'
 import type { SettingsService } from './settings-save.ts'
 import { classifyUpstreamError, describeThrown, providerRegistrationState } from './errors.ts'
+import type { DeviceLoginFlow } from './device-login-flow.ts'
+import type { DeviceCredentialStatus } from './device-credential.ts'
 import {
   campaignIsClaimed,
   checkinStateFrom,
@@ -640,4 +642,170 @@ export async function confirmHandler(
       detail: message.slice(0, 300),
     })
   }
+}
+
+/**
+ * The regions and the host-side attempt tracker the four device-login routes
+ * share.
+ *
+ * `flow` is the real class rather than a bundle of callbacks because it is
+ * peer-free: a handler test can build one over a stubbed `fetch` and exercise
+ * the whole sign-in conversation through the routes, which is the layer that
+ * would otherwise only be covered by reading source text.
+ */
+export interface DeviceLoginDeps {
+  regions: readonly Region[]
+  flow: DeviceLoginFlow
+  /** Delete one region's stored credential. Answers whether it is gone. */
+  forget: (regionId: string) => Promise<boolean>
+  /** What the panel should be told about one region's credential file. */
+  status: (regionId: string) => DeviceCredentialStatus
+  logger: PluginLogger
+}
+
+/** The region a request names, but only if it is one this plugin knows. */
+function namedRegion(
+  value: unknown,
+  regions: readonly Region[],
+): string | undefined {
+  const posted = (value ?? {}) as { region?: unknown }
+  if (typeof posted.region !== 'string') return undefined
+  return regions.some((region) => region.id === posted.region) ? posted.region : undefined
+}
+
+/** The region a query string names, on the routes a GET cannot put one in a body. */
+function queriedRegion(req: IncomingMessage, regions: readonly Region[]): string | undefined {
+  const requested = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('region')
+  if (requested === null) return undefined
+  return regions.some((region) => region.id === requested) ? requested : undefined
+}
+
+/**
+ * Begin a device sign-in and hand back the URL the user must approve.
+ *
+ * The attempt is tracked host-side and answered with a URL rather than
+ * completed here: waiting up to five minutes inside one request would occupy a
+ * route per attempt and lose the attempt if the panel was reloaded. The card
+ * polls {@link deviceLoginPollHandler} instead.
+ *
+ * An unknown region is a 404 with the same `unknown-region` code the check-in
+ * route uses, so the card has one shape to read across the account surface.
+ */
+export async function deviceLoginStartHandler(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: DeviceLoginDeps,
+): Promise<void> {
+  if (!methodAllowed(req, res, 'POST')) return
+  if (!originAllowed(req, res)) return
+  const read = await readJsonBodyOr400(req, res)
+  if (read.ok !== true) return
+  const regionId = namedRegion(read.body, deps.regions)
+  if (regionId === undefined) return sendJson(res, 404, { error: 'unknown-region' })
+  const started = deps.flow.start(regionId)
+  if (started.kind !== 'started') {
+    // A region this plugin knows but the protocol layer does not: a build whose
+    // product table and region table disagree. Named, not silently 404'd, so
+    // the disagreement is visible the first time someone tries.
+    deps.logger.warn?.(`dsh-connect-qoder: no device-login product for region ${regionId}`)
+    return sendJson(res, 404, { error: 'unknown-region' })
+  }
+  return sendJson(res, 200, {
+    region: started.region,
+    authUrl: started.authUrl,
+    expiresAt: started.expiresAt,
+  })
+}
+
+/**
+ * One poll of a region's attempt.
+ *
+ * The answer is a state the card can render directly, and the states are kept
+ * distinct on purpose: `idle` means the card is polling something that is not
+ * there (a reloaded panel), `expired` means the user waited too long and must
+ * start again, and `failed` carries the reason. Collapsing them into "not
+ * signed in yet" would leave the user polling a dead attempt forever.
+ *
+ * A GET with the region in the query string: it changes no state the caller
+ * cares about beyond redeeming the code, and the card issues it on a timer.
+ */
+export async function deviceLoginPollHandler(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: DeviceLoginDeps,
+): Promise<void> {
+  if (!methodAllowed(req, res, 'GET')) return
+  if (!originAllowed(req, res)) return
+  const regionId = queriedRegion(req, deps.regions)
+  if (regionId === undefined) return sendJson(res, 404, { error: 'unknown-region' })
+  const result = await deps.flow.poll(regionId)
+  if (result.kind === 'failed') {
+    // Logged as well as answered: the reason may be a status the user cannot
+    // act on ("Http500"), and the log is where that becomes diagnosable.
+    deps.logger.warn?.(`dsh-connect-qoder: device sign-in for ${regionId} failed: ${result.reason}`)
+    return sendJson(res, 200, { state: 'failed', reason: result.reason })
+  }
+  if (result.kind === 'unsupported-region') return sendJson(res, 404, { error: 'unknown-region' })
+  return sendJson(res, 200, { state: result.kind })
+}
+
+/**
+ * Abandon an attempt.
+ *
+ * Deliberately not an error when there was nothing to cancel: a card that
+ * unloads twice, or a user who closed the panel after the attempt expired, both
+ * land here, and neither is a problem worth a sentence.
+ */
+export async function deviceLoginCancelHandler(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: DeviceLoginDeps,
+): Promise<void> {
+  if (!methodAllowed(req, res, 'POST')) return
+  if (!originAllowed(req, res)) return
+  const read = await readJsonBodyOr400(req, res)
+  if (read.ok !== true) return
+  const regionId = namedRegion(read.body, deps.regions)
+  if (regionId === undefined) return sendJson(res, 404, { error: 'unknown-region' })
+  return sendJson(res, 200, { region: regionId, cancelled: deps.flow.cancel(regionId) })
+}
+
+/**
+ * Sign this machine out of the plugin's own credential.
+ *
+ * Only the plugin's file is deleted; the desktop application's login, a PAT in
+ * the environment, and the other region's file are all untouched. Saying so in
+ * the answer is the point — "signed out" that silently also dropped a PAT would
+ * be a surprise the user cannot undo from the panel.
+ *
+ * A `false` from `forget` is a 500, not a cheerful 200: the credential is still
+ * on disk, so the next request would sign the user straight back in, and the
+ * only honest thing to report is that the sign-out did not happen.
+ */
+export async function deviceLoginSignOutHandler(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: DeviceLoginDeps,
+): Promise<void> {
+  if (!methodAllowed(req, res, 'POST')) return
+  if (!originAllowed(req, res)) return
+  const read = await readJsonBodyOr400(req, res)
+  if (read.ok !== true) return
+  const regionId = namedRegion(read.body, deps.regions)
+  if (regionId === undefined) return sendJson(res, 404, { error: 'unknown-region' })
+  deps.flow.cancel(regionId)
+  let forgotten: boolean
+  try {
+    forgotten = await deps.forget(regionId)
+  } catch (error) {
+    deps.logger.error?.(`dsh-connect-qoder: could not sign out of the device credential for ${regionId}`, error)
+    return sendJson(res, 500, { error: 'sign-out-failed', detail: describeThrown(error).slice(0, 300) })
+  }
+  if (!forgotten) {
+    return sendJson(res, 500, {
+      error: 'sign-out-failed',
+      detail: 'the credential file could not be removed, so it is still in use',
+    })
+  }
+  return sendJson(res, 200, { region: regionId, signedOut: true, device: deps.status(regionId) })
 }

@@ -27,6 +27,7 @@
  */
 import { readAccountStateAsync } from './account-state.ts'
 import type { AccountRegion, AccountStateRecord } from './account-state.ts'
+import type { DeviceCredentialStatus } from './device-credential.ts'
 import { appDataRootFor } from './credentials.ts'
 import { regionEnabledFor } from './preferences.ts'
 import type { Preferences } from './preferences.ts'
@@ -76,6 +77,17 @@ export interface BuildAccountPayloadOptions {
   ) => Promise<AccountStateRecord>
   appDataRoot?: string
   regionEnabled?: (preferences: Preferences | undefined, regionId: string) => boolean
+  /**
+   * What the panel should say about this region's device credential.
+   *
+   * Injected rather than imported so this module keeps naming only its
+   * peer-free collaborators, and optional so a caller with no device sources
+   * produces exactly the payload shape that existed before they did — the
+   * field is added, never `undefined`-valued, because the card distinguishes
+   * "absent" from "reported as none" and a `device: undefined` key would make
+   * every existing shape assertion in the suite fail for no reason.
+   */
+  deviceStatus?: (regionId: string) => DeviceCredentialStatus
 }
 
 export async function buildAccountPayload({
@@ -85,6 +97,7 @@ export async function buildAccountPayload({
   readAccountState = readAccountStateAsync,
   appDataRoot = appDataRootFor(),
   regionEnabled = regionEnabledFor,
+  deviceStatus,
 }: BuildAccountPayloadOptions = {} as BuildAccountPayloadOptions) {
   const enabledRegions = Object.fromEntries(
     regions.map((region) => [region.id, regionEnabled(settings, region.id)]),
@@ -96,6 +109,11 @@ export async function buildAccountPayload({
     regions.map(async (region) => ({
       ...(await readAccountState(region, appDataRoot, mode)),
       enabled: enabledRegions[region.id],
+      // The plugin's own credential is reported alongside the application's
+      // sign-in, not merged into it: they are two credentials with two
+      // lifetimes, and a region can be `signed-out` of the app while the
+      // plugin's own token is perfectly good.
+      ...(deviceStatus === undefined ? {} : { device: deviceStatus(region.id) }),
     })),
   )
   return { regions: states, enabledRegions }
