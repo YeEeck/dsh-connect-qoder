@@ -33,7 +33,36 @@ export const zhAccount = {
 	"account.offerTitle": "关闭后这个版本的模型不会出现在 DSH 的模型下拉框里；登录、用量与模型设置都会保留，重新开启即恢复。",
 	"account.offerOff": "已关闭：该版本的模型不会出现在 DSH 的模型下拉框里",
 	"account.offerError": "保存「启用此版本」开关失败：{detail}",
-	"account.regionTabs": "版本：点哪个就看哪个版本的账号、用量与模型"
+	"account.regionTabs": "版本：点哪个就看哪个版本的账号、用量与模型",
+	// The plugin's OWN credential, reported BESIDE the application's sign-in and
+	// never merged into it: two credentials, two lifetimes. `device.*` keys live
+	// here because this is the account surface, the same way `pill.*` keys live
+	// in `copy-usage.ts`.
+	//
+	// Every key below that carries a `{reason}`/`{detail}` exists so a failure
+	// says WHICH failure. The alternative — one "something went wrong" — is the
+	// silent-failure class this repo's first red line names, and a sign-in button
+	// that quietly does nothing is the worst place to have one.
+	"device.title": "插件自有登录",
+	"device.available": "不装桌面端也能用：在浏览器里批准一个码，插件把换来的可刷新令牌存在本机，只放在这个版本自己的文件里。",
+	"device.signIn": "浏览器登录",
+	"device.starting": "正在获取授权链接…",
+	"device.waiting": "已打开授权页，等待批准（最多 5 分钟）",
+	"device.reopen": "重新打开授权页",
+	"device.signOut": "退出插件登录",
+	"device.signingOut": "正在退出…",
+	"device.state.ok": "插件已登录",
+	"device.state.none": "本机没有插件自己的登录",
+	"device.state.expired": "插件登录已过期——点「浏览器登录」重新授权",
+	"device.state.unknown": "插件登录状态未知（宿主比本卡片新）",
+	"device.renewFailed": "插件登录续期被拒：{reason}——点「浏览器登录」重新授权",
+	"device.unreadable": "插件保存的登录文件读不出来：{reason}",
+	"device.startFailed": "打开授权页失败：{detail}",
+	"device.loginFailed": "登录失败：{reason}",
+	"device.loginExpired": "授权超时了，请重新点「浏览器登录」",
+	"device.loginLost": "这次登录已经不在等待中了，请重新发起",
+	"device.signOutFailed": "退出插件登录失败：{detail}",
+	"device.signOutNote": "只删除插件自己的令牌；桌面端的登录、环境变量 PAT、另一个版本的文件都不受影响。"
 };
 /** English — account panel copy. */
 export const enAccount = {
@@ -61,5 +90,26 @@ export const enAccount = {
 	"account.offerTitle": "Turning this off hides the edition's models from DSH's model picker; the sign-in, usage and model settings are kept, and turning it back on restores them.",
 	"account.offerOff": "Disabled: this edition's models are not offered to the model picker",
 	"account.offerError": "Could not save the edition switch: {detail}",
-	"account.regionTabs": "Editions: pick which one's account, usage and models to view"
+	"account.regionTabs": "Editions: pick which one's account, usage and models to view",
+	// See the zh note above; these mirror those keys exactly.
+	"device.title": "Plugin sign-in",
+	"device.available": "Works without the desktop client: approve a code in your browser and the plugin stores the refreshable token it gets back, in this edition's own file only.",
+	"device.signIn": "Sign in with a browser",
+	"device.starting": "Getting the sign-in URL…",
+	"device.waiting": "Authorization page opened — waiting for approval (up to 5 minutes)",
+	"device.reopen": "Open the authorization page again",
+	"device.signOut": "Sign out of the plugin",
+	"device.signingOut": "Signing out…",
+	"device.state.ok": "Signed in to the plugin",
+	"device.state.none": "This machine has no plugin sign-in",
+	"device.state.expired": "The plugin sign-in has expired — press Sign in with a browser to authorize again",
+	"device.state.unknown": "The plugin sign-in is in a state this card does not know (the host is newer)",
+	"device.renewFailed": "The plugin sign-in could not be renewed: {reason} — press Sign in with a browser to authorize again",
+	"device.unreadable": "The plugin's saved sign-in file cannot be read: {reason}",
+	"device.startFailed": "Could not open the authorization page: {detail}",
+	"device.loginFailed": "Sign-in failed: {reason}",
+	"device.loginExpired": "The authorization timed out — press Sign in with a browser to start again",
+	"device.loginLost": "That sign-in attempt is no longer pending — start it again",
+	"device.signOutFailed": "Could not sign out of the plugin: {detail}",
+	"device.signOutNote": "Only the plugin's own token is deleted; the desktop client's sign-in, an environment PAT, and the other edition's file are all untouched."
 };

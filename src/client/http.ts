@@ -24,6 +24,28 @@
  * that asked for a fact must be told the fact did not arrive.
  */
 
+/**
+ * The reason to report for a refused response.
+ *
+ * The host answers refusals in two shapes and both must reach the reader:
+ * route-level gates write `{ error: "origin-not-trusted" }` (a bare string),
+ * while `writeError` writes `{ error: { message, type, code } }`. Reading only
+ * the first would turn every `writeError` refusal — including "the credential
+ * file could not be removed, so it is still in use" — into a bare `HTTP 500`,
+ * which says a request failed but not what to do about it. That is the
+ * silent-failure shape issue 06 was about, one layer down.
+ *
+ * A shape neither branch recognises still yields the status code; naming the
+ * failure is the floor, never a fabricated reason.
+ */
+function failureMessage(value: unknown, status: number): string {
+	const error = (value as { error?: unknown } | undefined)?.error;
+	if (typeof error === "string" && error !== "") return error;
+	const message = (error as { message?: unknown } | undefined | null)?.message;
+	if (typeof message === "string" && message !== "") return message;
+	return `HTTP ${status}`;
+}
+
 /** Read the host route at `path` and decode its JSON answer. */
 export async function getJson<T = unknown>(path: string, options?: { signal?: AbortSignal }): Promise<T> {
 	const response = await fetch(path, {
@@ -37,8 +59,7 @@ export async function getJson<T = unknown>(path: string, options?: { signal?: Ab
 		// origin check answers `{ error: "origin-not-trusted" }`. Surfacing it
 		// is what the module doc above promises; throwing a bare "HTTP 403"
 		// would hand the user a status code and drop the diagnosis.
-		const message = (value as { error?: unknown } | undefined)?.error;
-		throw new Error(typeof message === "string" && message !== "" ? message : `HTTP ${response.status}`);
+		throw new Error(failureMessage(value, response.status));
 	}
 	if (value === undefined) throw new Error(`unparseable JSON body (HTTP ${response.status})`);
 	return value as T;
@@ -54,8 +75,7 @@ export async function postJson<T = unknown>(path: string, body?: unknown): Promi
 	});
 	const value = (await response.json().catch((): undefined => undefined)) as T | undefined;
 	if (!response.ok) {
-		const message = (value as { error?: unknown } | undefined)?.error;
-		throw new Error(typeof message === "string" && message !== "" ? message : `HTTP ${response.status}`);
+		throw new Error(failureMessage(value, response.status));
 	}
 	return value as T;
 }

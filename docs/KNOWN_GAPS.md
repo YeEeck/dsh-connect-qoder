@@ -342,10 +342,20 @@ token_type` 6 个，访问令牌在 `device_token` 而不是 `token`，而且**�
 `403 {"code":"101","message":"Signature invalid"}`。这个坑是**实测抓到的、不是推断**
 （`7b15f37` 引入刷新阶段 → 两区各自 403 → `121805c` 改为叠加并加守门测试）。
 
-**但这不等于「已支持 macOS / Linux」**：设备登录目前**只活在探针里**，host 一行未接；协议是从客户端
-常量逆出来的非公开 API，厂商改版可能静默失效，接进去时失败必须让卡片说"登录流程坏了"而不是
-"你没登录"（红线 1）；而且要接进 host，本插件就从"不持有用户凭据"变成"持有一份自己签发的令牌"，
-AGENTS.md「三条事实」第 2 条的前提需一并改写——这需要用户明确同意。
+**且这条替代路已经接进 host 了**（2026-10-17，用户明确同意后动手）。三源优先级是
+**桌面端 → 插件自有设备登录 → 环境变量 PAT**（`credential-cache.ts` 的
+`fromApp ?? fromDevice ?? loadEnv()`）——桌面端排第一是因为它在场时它就是本机最新鲜的凭据，
+而且这个顺序让**任何今天能用的机器行为一字不变**，这才是"可以安全发出去"的依据。令牌存
+`$DSH_HOME/.qoder-auth.<region>.json`（`0600` + temp/rename、按 region 分文件、RMW 在 vault 层
+串行），面板上的「浏览器登录」/「退出插件登录」走四条 `device-login/*` 路由，登录流程按区域
+一次一个尝试、PKCE verifier 只留宿主内存。这改掉了 AGENTS.md「三条事实」第 2 条的前提
+（本插件不再"不持有用户凭据"），该条已同步改写。落地过程与八条验收见
+[`issues/21-device-login-credential-source.md`](issues/21-device-login-credential-source.md)。
+
+**余下的仍未解决**：协议是从客户端常量逆出来的非公开 API，厂商改版可能静默失效——探针
+（[`../probe/qoder-device-login.mjs`](../probe/qoder-device-login.mjs)）是唯一的先行发现手段，
+而卡片在失败时会说"登录流程坏了/续期被拒：<原因>"而不是"你没登录"（红线 1）；设备登录这条
+路径本身**只在 Windows 上真机跑过**，macOS / Linux 的实机验证仍属下面第 4 项。
 
 **位置**：`src/host/credentials.ts`（OS keystore 封装、`runUnwrap` 平台守卫）、
 `src/client/copy-account.ts`（`account.readFail` 文案）、`src/host/account-state.ts`（`appDataRoot` 注入）、
@@ -371,8 +381,9 @@ AGENTS.md「三条事实」第 2 条的前提需一并改写——这需要用�
 - 第 4 项决定是否敢作为"正式支持"发布。
 
 **影响面**：所有 macOS / Linux 上的 Qoder 桌面端用户，「零配置读应用凭据」卖点在那些平台上仍
-不存在——设备登录那条替代路已实测可行，但**尚未接进 host**（见上），故用户侧行为一字未变；
-README 的「平台边界」段已同步说明。
+不存在——但设备登录那条替代路**已经接进 host**（见上），所以那些平台上现在有了一条零配置的
+出路（浏览器授权一次）；README 的「平台边界」段与「凭据来源」段已同步说明。**第 1 项（OS
+keystore）因此从"必须补"变成"可选"：不补也不再有平台是彻底没路的。**
 
 ---
 

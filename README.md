@@ -54,12 +54,18 @@ Node 没有内置 DPAPI 绑定，这一步交给 PowerShell，并通过临时文
 没有桌面应用登录时，可以用官方文档的 **PAT** 兜底：设置 `QODERCN_PAT`（国内版）或
 `QODER_PAT`（国际版），插件会用它换取 job token。
 
-**平台边界：零配置路径只在 Windows 成立。** 解密链路是 PowerShell + DPAPI（`Crypt32.dll`），
-`src/host/` 里没有任何 macOS / Linux 解包分支——在其它平台上应用目录**找得到**（应用数据根目录
-已按平台解析，见下），但凭据读不出来（`loadCredential` 返回 `undefined`，该区域不注册），
-只剩上面的 PAT 兜底。非 Windows 上的失败**说的是真话**：`runUnwrap` 在 spawn 之前就判平台，
+**平台边界：读桌面端登录态那条路径只在 Windows 成立。** 解密链路是 PowerShell + DPAPI
+（`Crypt32.dll`），`src/host/` 里没有任何 macOS / Linux 解包分支——在其它平台上应用目录
+**找得到**（应用数据根目录已按平台解析，见下），但凭据读不出来（`loadCredential` 返回
+`undefined`）。非 Windows 上的失败**说的是真话**：`runUnwrap` 在 spawn 之前就判平台，
 记下的是"这个版本只在 Windows 上读得到登录"，而不是一条在 Mac 上显示的 Windows 路径；
 账号面板的提示也随之改为指向 PAT，而不是让一个已经装了客户端的用户去确认"客户端在不在"。
+
+**但那些平台已经不再只有 PAT 一条路**：插件自己的**设备登录**（上面「凭据来源」的第 2 条）
+不读桌面端任何东西——在浏览器里批准一次，凭据就落在本机，平台无关。所以第 1 项 keystore
+从"必须补"变成"可选"。**诚实的限定**：设备登录这条路径**只在 Windows 上真机跑过**（两区各
+一次授权闭环，见 [`probe/qoder-device-login.mjs`](probe/qoder-device-login.mjs)），它用到的
+都是跨平台 API，但"在 macOS / Linux 上也确实能用"仍属下面第 2 项那类实机验证。
 
 **这不是"没有跨平台客户端"，而是客户端已跨平台、插件尚未跟上**：Qoder 桌面版在
 macOS 12+ / Linux (.deb/.rpm) / HarmonyOS 上都有下载（[qoder.com.cn/download](https://qoder.com.cn/download)），
@@ -80,7 +86,7 @@ macOS `~/Library/Application Support`、Linux `$XDG_CONFIG_HOME`/`~/.config`）�
 `x86_64_darwin` / `aarch64_darwin` 一律正常应答）。
 
 剩下的是**实机工作**：service 名、PBKDF2 参数、Linux 的变体都必须实测确认，写出来就是盲代码。
-macOS / Linux 用户只能走 PAT 兜底，或自行从本仓库移植。
+macOS / Linux 用户现在可以走设备登录（零配置），或 PAT 兜底，或自行从本仓库移植解密链。
 
 CI 的 Ubuntu 绿灯说明**测试**在那边能跑，不等于零配置在 Linux 上存在。
 
@@ -279,9 +285,10 @@ dsh plugin --profile web add <本仓库路径>
 | `src/client/copy.ts` | 卡片文案聚合入口（中/英），`index.ts` 与 `card.tsx` 只从这里取 |
 | `src/client/copy-row.ts` `copy-usage.ts` `copy-account.ts` | 按面板拆分的三段文案：模型行与错峰、用量与签到、账号与区域标签条 |
 | `src/client/card-model.ts` | 卡片的**浏览器无关决策层**：视图模型类型词汇 + 纯规则（`offPeakState` / `rateAt` / `windowLabelOf` / `refreshNoticeKey` / 格式化 / `describeThrown`——卡片所有 catch 块给用户看的失败文案都过它）。无 React、无 DOM、无 `fetch`，因此 Node 测试可直接 import 真规则，而非镜像副本（这是向 sensenova `snapshot.ts` 对齐的那一刀；`describeThrown` 也从 `card.tsx` 挪进来，拆掉装配层与两个容器之间的循环 import） |
-| `src/client/http.ts` | 卡片**唯一的 `fetch` 收口**：`getJson` / `postJson`，模型名册读与两台容器（用量 / 账号）共六道宿主路由 fetch 都只通过这里（向 sensenova `http.ts` 看齐）；GET / POST 失败都先取宿主的 `error` 字段（如 loopback origin 检查的 `origin-not-trusted`），无才回落 `HTTP {status}`；GET 200 但 body 解析失败按 `unparseable JSON body` 抛出而非当空数据，避免「假 undefined 失败」 |
+| `src/client/http.ts` | 卡片**唯一的 `fetch` 收口**：`getJson` / `postJson`，模型名册读与两台容器（用量 / 账号）共六道宿主路由 fetch 都只通过这里（向 sensenova `http.ts` 看齐）；GET / POST 失败都先取宿主的 `error` 字段（如 loopback origin 检查的 `origin-not-trusted`），无才回落 `HTTP {status}`；宿主的 `writeError` 写的是 `{error:{message,type,code}}`，故对象形状也取它的 `message`（否则每道 `writeError` 拒绝都会退化成一句没有下文的 `HTTP 500`）；GET 200 但 body 解析失败按 `unparseable JSON body` 抛出而非当空数据，避免「假 undefined 失败」 |
 | `src/client/usage-panel.tsx` | 用量容器 `QoderUsagePanel`：自有额度读 + 每日签到领取两条 fetch，渲染 `RegionUsage` / `CheckinCard`（二者留在 `card.tsx` 作为无 hook 纯展示件） |
 | `src/client/account-panel.tsx` | 账号容器 `QoderAccountPanel`：区域条 + 选中区域登录卡，四道 fetch（读 / 重读 / 确认 / 开关写），开关写仍带完整 `enabledRegions` map |
+| `src/client/device-login-panel.tsx` | **插件自有登录**那一块（第三个凭据来源的卡片半边）：与账号行的 `state` **并列上报、绝不合并**——桌面端登录与插件令牌是两份凭据两种寿命。两层结构（外层无 hook 做门控，`device` 缺席 = 老宿主 → 什么都不渲染、绝不报「未登录」；内层持全部 hook）。`start` → `window.open` 授权页 + 保留可点回退链接 → 每 2s 轮询一次（链式而非 interval，慢响应只会推迟下一次而不会叠请求）；`authorized` 停并回读，`expired`/`idle`/`failed` 各给不同文案；卸载时若仍在等待就 best-effort `cancel`（宿主 5 分钟 TTL 是兜底）。**每个失败都说出是哪个失败**，`t`/`onChanged` 由 ref 持有并刻意排除在轮询 effect 依赖外（否则父组件每次渲染都会重启计时器） |
 | `src/client/card.tsx` | 卡片的装配层 `QoderPluginCard`（把 `QoderAccountPanel` / `QoderUsagePanel` 与模型列表拼起来，纯规则委托 `card-model.ts`、可编辑状态委托 `controller.ts`、名册读走 `http.ts`）+ 三个无 hook 纯展示件（`RegionUsage` / `CheckinCard` / `QuotaBlock`） |
 | `src/client/pill-model.ts` | 输入框用量胶囊的**浏览器无关决策层**：区域归属门控（`isQoderRegion` / `selectedRegionOf` / `candidateOf`）、主额度选择（`primaryQuotaOf`——套餐优先，CN 免费层 plan 为 0 回落资源包）、分级（`tierOfQuota`，阈值与卡片同源 `WARN_SHARE = 0.8`）、读数格式化（`remainingOf` / `formatCredits`）。无 React、无 DOM、无 `fetch`，Node 测试直接 import 真规则 |
 | `src/client/composer-usage-pill.tsx` | 对话框用量胶囊 `ComposerUsagePill`：挂在宿主输入框工具栏 `conversation.input.right` 座席，读数 `Qoder CN · 1,034`（区域前缀 · 主额度剩余 Credits）+ 分级色点，点击展开原始用量卡（未签到给领取按钮，走与 Plugins 页同一条 claim 路由，领完立刻重读把 Credits 推回余额）；面板顶部画当前模型的错峰窗口状态（折扣挂在模型上，必须 `projection.model` 匹配到名册里的 `id`/`name` 才画，匹配不上不声称打折）；5 分钟轮询、读失败保留上次数值不抛。归属由 `useProjection("modelSelection")` 物化，provider 非 `qoder-cn`/`qoder` 整颗胶囊不挂载（不跑 fetch）。样式走 inline style + 一条容器锚定规则，不注入整表样式以免覆盖宿主工具栏 |

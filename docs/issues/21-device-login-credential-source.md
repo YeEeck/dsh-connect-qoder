@@ -1,6 +1,6 @@
 # 设备登录作为第三个凭据来源：插件自有 vault 存可刷新令牌
 
-**P2 · 规模 L · 依赖 —**（另需用户明确同意改「三条事实」第 2 条，见「风险」）
+**P2 · 规模 L · 依赖 —**（已实现；改「三条事实」第 2 条的那一步已获用户明确同意，见「风险」3）
 
 ## 背景（我们缺的不是"能力"，是"零配置"）
 
@@ -92,15 +92,34 @@
 
 ## 验收标准
 
-- [ ] vault 落盘：`$DSH_HOME/qoder-auth.{region}.json`，`0o600` + temp/rename，两区互不干扰
-- [ ] 写并发：并发 RMW 后磁盘状态等于串行结果（照上面两个场景写成测试，先让它红）
-- [ ] 凭据优先级明确，且**桌面端失联不再等于"没登录"**——三个来源各自的"缺失"与
-      "存在但读不出来"都要能在卡片上分辨
-- [ ] 设备登录的刷新是**叠加**而非替换（`user_id` 缺失时保留原 uid；这条照 `121805c` 的测试形状）
-- [ ] 失败必须发声：登录失败 / 刷新被拒 / vault 写失败，卡片各自显示**具体原因**，不吞
-- [ ] 断链可恢复：刷新令牌被拒时提示重新登录，而不是静默变回"未登录"
-- [ ] `probe/qoder-device-login.mjs` 保留为真机复现手段；协议若静默失效，探针能先发现
-- [ ] 测试 + `npm run verify` 全绿；`lib/` 与 `src/` **同一次提交**（红线 3）
+全部已落地。每条的落点：
+
+- [x] vault 落盘：`$DSH_HOME/qoder-auth.{region}.json`，`0o600` + temp/rename，两区互不干扰
+      —— `src/host/credential-vault.ts`；路径由 `index.ts` 的 `deviceSourceFor(region, ctx)` 按
+      `region.id` 拼出，一个 region 一个文件、一个共享实例（两个实例就是两个失败窗口）
+- [x] 写并发：并发 RMW 后磁盘状态等于串行结果（照上面两个场景写成测试，先让它红）
+      —— `test/credential-vault.test.js` 的 20 个并发 `update` 全部落地，以及
+      "先 update 后 clear 则不复活" / "先 clear 后 update 则留新值" 两条（变异验证：把
+      `read()` 从 chain 内提到 chain 外，恰好挂那一条）
+- [x] 凭据优先级明确，且**桌面端失联不再等于"没登录"**——三个来源各自的"缺失"与
+      "存在但读不出来"都要能在卡片上分辨 —— `credential-cache.ts` 的
+      `fromApp ?? fromDevice ?? loadEnv()`（桌面端优先：它在场时它就是本机最新鲜的，
+      且**任何今天能用的机器上行为一字不变**）；`DeviceCredentialStatus` 五档
+      （`none` / `ok` / `expired` / `refresh-failed` / `unreadable`），经账号路由的 `device` 键
+      与 `deviceLoginNotice` 到卡片；`absent` 与 `unreadable` 在 vault 层就已分开
+      （`readResult()` 的四个 kind）
+- [x] 设备登录的刷新是**叠加**而非替换（`user_id` 缺失时保留原 uid；这条照 `121805c` 的测试形状）
+      —— `device-login.ts` 的 `mergeRotation`，tripwire 测试断言刷新信封只有实测的 6 个键
+- [x] 失败必须发声：登录失败 / 刷新被拒 / vault 写失败，卡片各自显示**具体原因**，不吞
+      —— `device.*` 文案里每个带 `{reason}`/`{detail}` 的键；`remember` 落盘失败 reject
+      （"登录了但存不下"），`forget` 返 false 走 **500** 而不是欢快的 200
+- [x] 断链可恢复：刷新令牌被拒时提示重新登录，而不是静默变回"未登录"
+      —— 刷新被拒**保留记录**（它是"本机曾登录过"的证据），状态是 `expired`/`refresh-failed`
+      而非 `none`；`retry()` 让重新登录立刻生效
+- [x] `probe/qoder-device-login.mjs` 保留为真机复现手段；协议若静默失效，探针能先发现
+      —— 两区真机闭环 + `test/probe-imports.test.js` 守它的 import，探针被改单入口构建打烂过
+      一次（`a7a08a6`）
+- [x] 测试 + `npm run verify` 全绿；`lib/` 与 `src/` **同一次提交**（红线 3）
 
 ## 风险（不粉饰）
 
@@ -121,8 +140,16 @@
 
 ## 相关提交
 
-`a7a08a6`（修复被改单入口构建打烂的探针 + 守门 `test/probe-imports.test.js`）、
+探针与实测：`a7a08a6`（修复被改单入口构建打烂的探针 + 守门 `test/probe-imports.test.js`）、
 `43edbd7`（poll body 读取不再截断；截断曾让一枚可用设备令牌泄进 stderr）、
 `f6702f1`（撤回"CN 只签发 `refresh_token_id`"——那是截断编出来的）、
 `7b15f37`（一次授权量登录 + 目录 + 刷新）、`121805c`（刷新叠加保 uid）、
 `a148f73`（`docs/KNOWN_GAPS.md` 记录实测闭环）。
+
+接入：`44877ff`（本文件 + 索引行）、`b413ae1`（`credential-vault.ts`）、
+`eba129b`（`device-login.ts` 纯协议层）、`70b64a3`（三源凭据链 + `device-credential.ts`）、
+`ce7d4b1`（登录流程 + 四路由 + 卡片可驱动的 host 接线）、
+`fce869f`（README 与 `AGENTS.md` 的诚实性修正：三条事实第 2 条改为三种来源），
+以及**同一次提交**里的卡片半边：`src/client/device-login-panel.tsx`（新）+ `device.*` 文案 +
+`card-model.ts` 的 `deviceLoginNotice` / `deviceLoginHasToken` + `http.ts` 开始读 `writeError`
+的 `error.message`（否则每道 `writeError` 拒绝都退化成一句没有下文的 `HTTP 500`）。

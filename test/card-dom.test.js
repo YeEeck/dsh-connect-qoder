@@ -880,3 +880,97 @@ test('a registered provider produces no warning at all', async () => {
 
   assert.equal(container.querySelector('.dsm-qoder-error'), null)
 })
+
+// ---------------------------------------------------------------------------
+// The plugin's OWN credential (`device-login-panel.tsx`).
+//
+// Every case below drives the block through the ACCOUNT route, because that is
+// where the host reports it: `device` rides on each region entry, beside `state`
+// and never merged into it. The block is absent from the rest of this file's
+// fixtures on purpose — those carry no `device` at all, which is exactly the
+// older-host case, and their passing is the compatibility half of this.
+// ---------------------------------------------------------------------------
+
+/** The region list with a `device` entry hung on the selected edition. */
+const regionsWithDevice = (device) => [
+  { ...REGIONS[0], device },
+  { ...REGIONS[1] },
+]
+
+/** The rendered plugin-sign-in block, or null when it did not render. */
+const deviceBlock = (container) => container.querySelector('.dsm-qoder-device')
+
+/** The block's buttons, labelled by their visible text. */
+const deviceButtons = (block) => [...block.querySelectorAll('button')].map((n) => text(n))
+
+test('a stored plugin credential offers sign-out, and says it is signed in', async () => {
+  const { container } = await mount({ accountRegions: regionsWithDevice({ state: 'ok' }) })
+
+  const block = deviceBlock(container)
+  assert.ok(block !== null, 'a host that reports a device credential must show the block')
+  const body = text(block)
+  assert.match(body, /插件自有登录/, 'the block must name itself')
+  assert.match(body, /插件已登录/, 'the ok state must be stated, not left to the buttons')
+  // Sign-out is the whole point of showing this: the token is on disk and the
+  // user is the only one who can remove it.
+  assert.ok(deviceButtons(block).includes('退出插件登录'), 'a stored token must be removable')
+  // And the note says what the removal does NOT touch — the desktop sign-in, an
+  // environment PAT, the other edition.
+  assert.match(body, /只删除插件自己的令牌/)
+})
+
+test('a machine with no plugin credential offers the browser sign-in', async () => {
+  const { container } = await mount({ accountRegions: regionsWithDevice({ state: 'none' }) })
+
+  const block = deviceBlock(container)
+  assert.ok(block !== null, 'the sign-in affordance is the reason this block exists')
+  const body = text(block)
+  assert.match(body, /本机没有插件自己的登录/)
+  assert.ok(deviceButtons(block).includes('浏览器登录'), 'the way in must be offered')
+  // Nothing to remove — offering it would be a button that does nothing.
+  assert.equal(
+    deviceButtons(block).some((label) => label.includes('退出插件登录')),
+    false,
+    'sign-out must not be offered when there is no token',
+  )
+})
+
+test('a refused renewal shows the host reason, and keeps sign-out available', async () => {
+  // The state where the plugin HAS a token that no longer works. Reporting only
+  // "sign in again" would strand it: the file is still on disk, still the
+  // credential the next request picks up, and the user can see no way to clear it.
+  const { container } = await mount({
+    accountRegions: regionsWithDevice({ state: 'refresh-failed', reason: 'the renewal was refused' }),
+  })
+
+  const block = deviceBlock(container)
+  assert.ok(block !== null, 'a refused renewal is a state the user has to act on')
+  assert.match(text(block), /the renewal was refused/, 'the host reason must reach the reader')
+  assert.ok(deviceButtons(block).includes('退出插件登录'), 'a dead token must still be removable')
+  // Rendered as a failure, not as a neutral note: this is the difference
+  // between "worth reading" and "worth acting on".
+  assert.ok(
+    block.querySelector('.dsm-qoder-account-note-error') !== null,
+    'a refused renewal must read as an error',
+  )
+})
+
+test('a host that reports no device entry renders no block at all', async () => {
+  // The older-host direction. Rendering "not signed in" here would be a claim
+  // the card cannot make: the host never looked, so the honest answer is
+  // silence — not a sign-in button for a route that does not exist.
+  const { container } = await mount()
+
+  assert.equal(deviceBlock(container), null, 'no device entry must render nothing')
+})
+
+test('an unrecognised device state is named, never rendered as fine', async () => {
+  // A newer host that grew a state this build does not know must not be shown
+  // as `ok` — that is the false-reassurance direction, and it is the one a
+  // keyword lookup would get wrong by falling through to a default.
+  const { container } = await mount({ accountRegions: regionsWithDevice({ state: 'some-new-state' }) })
+
+  const block = deviceBlock(container)
+  assert.ok(block !== null, 'an unknown state is still a state worth stating')
+  assert.match(text(block), /状态未知/, 'an unknown state must say so')
+})

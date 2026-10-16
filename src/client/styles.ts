@@ -206,6 +206,13 @@ const QODER_CARD_CSS = [
 	".dsm-qoder-account-note{margin:0;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-tertiary,#999)}",
 	".dsm-qoder-account-note-error{color:var(--dsw-alias-state-error-primary,#d92d20)}",
 	".dsm-qoder-account-note a{color:inherit}",
+	// The plugin's OWN credential, below the desktop application's sign-in and
+	// separated from it by a rule: they are two credentials with two lifetimes
+	// (see `device-login-panel.tsx`), and a hairline is what keeps the second one
+	// from reading as another fact about the first. Only the wrapper is new — the
+	// row, buttons and notes inside are the account panel's own classes, so this
+	// block cannot drift away from the frame it lives in.
+	".dsm-qoder-device{border-top:1px solid var(--dsw-alias-border-l1,#2a2b31);padding-top:8px;display:flex;flex-direction:column;gap:6px}",
 	// The per-region provider switch, WorkBuddy's tab-switch shape: a compact
 	// 30x17 track with a sliding thumb. Unchecked = this edition's models are
 	// not offered to DSH; the row dimming (below) is the resting look of an

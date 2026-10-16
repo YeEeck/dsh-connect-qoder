@@ -21,6 +21,7 @@ import { QODER_ACCOUNT_PATH, QODER_ACCOUNT_RELOAD_PATH, QODER_ACCOUNT_CONFIRM_PA
 import { getJson, postJson } from "./http.ts"
 import { writeSettingsField } from "./settings-write.ts"
 import type { SettingsScope } from "./settings-write.ts"
+import { QoderDeviceLoginPanel } from "./device-login-panel.tsx"
 
 /** Props for {@link QoderAccountPanel}. */
 interface QoderAccountPanelProps {
@@ -445,6 +446,23 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 										{t("account.confirmFailed", { detail: activeResult.detail ?? "" })}
 									</p>
 								) : null}
+								{/* The plugin's own credential, for the machines with no desktop
+								    client to read a login out of. It renders nothing when the
+								    host reported no `device` entry at all (an older build), which
+								    is why it is a separate component rather than three more
+								    conditionals here. Both reads go out on a change: the account
+								    route's own `device` state, and — through `onReconciled` — the
+								    model roster and usage, since gaining a credential can make an
+								    edition that resolved nothing before resolve now. */}
+								<QoderDeviceLoginPanel
+									t={t}
+									region={activeRegionId}
+									device={activeEntry.device}
+									onChanged={() => {
+										void reload();
+										onReconciled?.();
+									}}
+								/>
 							</react.Fragment>
 						) : null}
 					</react.Fragment>

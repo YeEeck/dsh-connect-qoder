@@ -113,6 +113,14 @@ const HOST_CSS = hostTokenSource()
 const VERIFIED_TOKENS = [
   '--dsw-alias-bg-layer-2',
   '--dsw-alias-bg-layer-3',
+  // The rule that separates the plugin's own credential block from the desktop
+  // application's sign-in line (`device-login-panel.tsx`). Verified 2026-10-17
+  // against the installed host: 62 occurrences in
+  // `%LOCALAPPDATA%\Programs\DeepSeek Harness\resources\app.asar`. It is NOT in
+  // the two sources `hostTokenSource` reads on this machine (neither
+  // `dsh-client-ui-theme` nor `dsh-web-frontend` is unpacked into `$DSH_HOME`),
+  // which is why this note records the check rather than pointing at a file.
+  '--dsw-alias-border-l1',
   '--dsw-alias-border-l2',
   '--dsw-alias-brand-primary',
   // Referenced by the host and used here as a border with a literal fallback;

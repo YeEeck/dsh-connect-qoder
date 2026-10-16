@@ -125,7 +125,26 @@ export interface CardAccountEntry {
 	/** The provider switch, as the route resolved it (absent = offered). */
 	enabled?: boolean
 	identity?: { name?: string; email?: string; expiresAt?: number } | null
+	/**
+	 * This region's plugin-owned credential, when the host reports one.
+	 *
+	 * Reported BESIDE `state`, never merged into it: the desktop application's
+	 * sign-in and the plugin's own token are two credentials with two lifetimes,
+	 * and a region can be `signed-out` of the application while the plugin's
+	 * token is perfectly usable. Absent means the host has no device source to
+	 * report — an older build — which is why the panel renders nothing at all
+	 * rather than a "not signed in" that would be a claim it cannot make.
+	 */
+	device?: CardDeviceEntry
 	[key: string]: unknown
+}
+
+/** One region's plugin-owned credential, as the account route reports it. */
+export interface CardDeviceEntry {
+	/** `none` | `ok` | `expired` | `refresh-failed` | `unreadable`. */
+	state?: string
+	/** Why, when the state is one the user has to act on. */
+	reason?: string
 }
 
 /** The translation function the host injects. */
@@ -396,6 +415,57 @@ export function providerRegistrationFailure(value: unknown): string | null {
 	const record = registration as { ok?: unknown; errorName?: unknown };
 	if (record.ok !== false) return null;
 	return typeof record.errorName === "string" && record.errorName !== "" ? record.errorName : "Error";
+}
+
+/**
+ * What to say about a region's plugin-owned credential, or nothing at all.
+ *
+ * React-free on purpose: this is the whole decision table (which state means
+ * which sentence, and which of them the user must act on) and it touches no DOM
+ * and no React state, so it belongs here rather than inside the panel, where a
+ * DOM test would be the only thing able to reach it.
+ *
+ * `undefined` means "say nothing", and it covers exactly one case: a host that
+ * did not report a device entry at all. That is NOT the same as `none` — `none`
+ * is the host stating that this machine has no plugin token, which is what the
+ * sign-in button exists for. Collapsing them would put a "not signed in" claim
+ * on a panel whose host never looked.
+ *
+ * An unrecognised state reads as unknown rather than falling through to a
+ * reassuring sentence: a newer host that grew a state this build does not know
+ * must not be rendered as `ok`.
+ */
+export function deviceLoginNotice(
+	device: CardDeviceEntry | undefined,
+): { key: string; kind: "note" | "error"; detail?: string } | undefined {
+	if (device === undefined || device === null) return undefined;
+	const reason = typeof device.reason === "string" ? device.reason : "";
+	switch (device.state) {
+		case "none":
+			return { key: "device.state.none", kind: "note" };
+		case "ok":
+			return { key: "device.state.ok", kind: "note" };
+		case "expired":
+			return { key: "device.state.expired", kind: "error" };
+		case "refresh-failed":
+			return { key: "device.renewFailed", kind: "error", detail: reason };
+		case "unreadable":
+			return { key: "device.unreadable", kind: "error", detail: reason };
+		default:
+			return { key: "device.state.unknown", kind: "note" };
+	}
+}
+
+/**
+ * Whether the panel should offer to sign out of the plugin's own credential.
+ *
+ * True whenever a token exists in any form — including one that has expired or
+ * whose renewal was refused. Those are exactly the states a user wants to be
+ * able to clear: leaving them with only a "sign in again" button would strand a
+ * token on disk that they can see and cannot remove.
+ */
+export function deviceLoginHasToken(device: CardDeviceEntry | undefined): boolean {
+	return device?.state === "ok" || device?.state === "expired" || device?.state === "refresh-failed";
 }
 
 /**
