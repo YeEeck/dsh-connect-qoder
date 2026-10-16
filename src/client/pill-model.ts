@@ -1,0 +1,112 @@
+/**
+ * 对话框用量胶囊的纯模型层（无 JSX，可被 Node 测试直接 import）。
+ *
+ * 从 `composer-usage-pill.tsx` 拆出：那个文件是 `.tsx`，Node 的原生 type-stripping
+ * 不解析 JSX，所以纯函数若留在那里，`node --test` 无法 import。凡是「给定输入算出
+ * 输出」的逻辑都住这里；`.tsx` 只做渲染与 hook。
+ */
+import type { CardQuota, CardUsageRegion } from "./card-model.ts"
+
+/** 与 Plugins 页卡片 `QuotaBlock` 的 warn 阈值同源（已用比例 0.8 = 剩余 20%）。 */
+export const WARN_SHARE = 0.8
+
+/** 座席接受的 provider id（区域）。`qoder` 是国际版。 */
+const QODER_REGIONS = ["qoder-cn", "qoder"] as const
+export const isQoderRegion = (value: string | undefined): boolean =>
+	typeof value === "string" && (QODER_REGIONS as readonly string[]).includes(value)
+
+/** 胶囊正文的区域前缀。未知回落 "Qoder" 而非报错。 */
+const REGION_PREFIX: Record<string, string> = { "qoder-cn": "Qoder CN", qoder: "Qoder" }
+export const regionPrefixOf = (region: string | undefined): string => {
+	if (typeof region === "string") {
+		const hit = REGION_PREFIX[region];
+		if (typeof hit === "string") return hit;
+	}
+	return "Qoder"
+}
+
+/** 数字窄化：是有限数字才认，其余按缺失处理。 */
+export const num = (value: unknown): number | null =>
+	typeof value === "number" && Number.isFinite(value) ? value : null
+
+/**
+ * 剩余 Credits，`0` 是有效读数（耗尽），只有缺失/非有限才是 null。
+ * `remaining` 缺失时可用 used/total 反推，仍是上游给的原始数字的差。
+ */
+export const remainingOf = (quota: CardQuota | null | undefined): number | null => {
+	const remaining = num(quota?.remaining);
+	if (remaining !== null) return remaining;
+	const total = num(quota?.total);
+	const used = num(quota?.used);
+	if (total !== null && used !== null) return total - used;
+	return null
+}
+
+/** 千分位格式，最多 1 位小数；未知显示 —。 */
+export const formatCredits = (value: number | null): string => {
+	if (value === null) return "—";
+	return new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value)
+}
+
+/** 一条额度是否有可用总额（决定它算不算「查不到」）。 */
+export const usableTotal = (quota: CardQuota | null | undefined): boolean => (num(quota?.total) ?? 0) > 0
+
+/** 四档分级，worst-first 便于比较。 */
+export type Tier = "ok" | "warn" | "exhausted" | "unknown"
+
+/**
+ * 一条额度的分级色档。阈值与卡片 `QuotaBlock` 一致：
+ * `total > 0` 且 `remaining <= 0` → 耗尽；已用比例 `>= 0.8` → 黄；否则绿；
+ * 缺字段（total 非正、used/remaining/percentage 皆未知）→ 灰。
+ */
+export function tierOfQuota(quota: CardQuota | null | undefined): Tier {
+	if (quota == null) return "unknown";
+	const total = num(quota.total);
+	const remaining = num(quota.remaining);
+	const percentage = num(quota.percentage); // 上游给的已用比例，0..1
+	if (total === null || total <= 0) return "unknown";
+	if (remaining !== null && remaining <= 0) return "exhausted";
+	if (percentage !== null) return percentage >= WARN_SHARE ? "warn" : "ok";
+	const used = num(quota.used);
+	if (used !== null) return used / total >= WARN_SHARE ? "warn" : "ok";
+	if (remaining !== null) return (total - remaining) / total >= WARN_SHARE ? "warn" : "ok";
+	return "unknown"
+}
+
+/** `modelSelection` projection 里这份组件需要的切片。 */
+export interface ModelSelectionLike {
+	next?: { provider?: string; model?: string } | null
+	lastUsed?: { provider?: string; model?: string } | null
+}
+
+/**
+ * 候选选择：`next` 优先于 `lastUsed`，但一个空的 `next`（切换的瞬态）不得遮蔽
+ * 仍可用的 `lastUsed`——否则切模型的那几帧胶囊会消失（sensenova 踩过）。
+ */
+export function candidateOf(projection: ModelSelectionLike | undefined): { provider?: string; model?: string } | undefined {
+	const p = projection ?? {};
+	const usable = (c: { provider?: string; model?: string } | null | undefined) =>
+		c !== null && c !== undefined && (typeof c.provider === "string" || typeof c.model === "string");
+	if (usable(p.next)) return p.next ?? undefined;
+	if (usable(p.lastUsed)) return p.lastUsed ?? undefined;
+	return undefined
+}
+
+/** 会话当前指向的 provider（区域），`next` 优先。 */
+export function selectedRegionOf(projection: ModelSelectionLike | undefined): string | undefined {
+	const candidate = candidateOf(projection);
+	const provider = candidate?.provider;
+	return typeof provider === "string" && provider !== "" ? provider : undefined
+}
+
+/**
+ * 主额度：套餐内 Credits 可用就优先，否则（CN 免费层 plan=0）回落个人资源包。
+ * 返回的 `known` 区分「查不到」（false）与「真的是 0」（true，走 `0` 而非 `—`）。
+ */
+export function primaryQuotaOf(region: CardUsageRegion | null | undefined): { quota: CardQuota | undefined; known: boolean } {
+	if (region == null) return { quota: undefined, known: false };
+	const plan = region.userQuota;
+	if (plan != null && usableTotal(plan)) return { quota: plan, known: true };
+	if (region.addOnQuota != null) return { quota: region.addOnQuota, known: true };
+	return { quota: undefined, known: false }
+}

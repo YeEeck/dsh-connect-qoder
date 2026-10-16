@@ -1,0 +1,325 @@
+/**
+ * 对话框用量胶囊 — 输入框工具栏 `conversation.input.right` 座席。
+ *
+ * 形态跟随 dsh-connect-workbuddy 的 ComposerCredits：**裸可点击余额读数**
+ * `Qoder CN · 1,034`（区域前缀 · 剩余 Credits），无进度条、无百分比。
+ * 不跟随 sensenova 的「已用百分比」形态，因为两家的上游不同：Token Plan 是
+ * 5h/周 滚动额度池、没有单一余额可显示，只能用百分比；Qoder 的额度是**分条**
+ * 的（套餐 / 个人资源包 / 专属资源包），但每条都带 `remaining`（剩余 Credits）——
+ * 上游给的单池事实。选读主额度是**拿上游给的事实**，不是把几条加成一个总数：
+ * 加总等于发明上游没公布的口径，是本插件不做的（sensenova 对「把余额换算成
+ * 百分比」的禁令，换了个方向同样成立）。
+ *
+ * **主额度**：套餐内 Credits 有可用额度就优先读它；套餐不可用（CN 免费层
+ * plan=0，`total` 不是正数）时回落到个人资源包——签到资源包是免费层唯一额度
+ * （README:204-205）。两条都不可用出灰 `—`，绝不合并、绝不算出一个「总额」。
+ * 选择逻辑在 `./pill-model.ts`（`primaryQuotaOf`）。
+ *
+ * **归属门控**：`useProjection("modelSelection")`，`next` 优先于 `lastUsed`——但
+ * 一个空的 `next`（切换模型的瞬态）不得遮蔽仍可用的 `lastUsed`，否则切换的那几帧
+ * 胶囊会消失。该 prop 是 session 作用域槽位**严格必需**的物化 prop（见
+ * `test/composer-pill.test.js`：session 作用域 `optional=false`，缺源抛
+ * `SlotAssemblyError`），这里的 noop 兜底只是让 Node 侧单测能脱离 Host 注入。
+ * provider 不是 `qoder-cn` / `qoder` 时胶囊不挂载，也不跑任何 fetch 循环。
+ *
+ * **三层结构**（不「切模型即消失」的关键）：归属门控发生在**组件边界**——外层
+ * `ComposerUsagePill` 只决定内层 `ActiveUsagePill` 挂/摘，轮询 hook 全在内层，外层
+ * 不调用任何 React hook。若在同一组件里先调 hook 再按门控早退（`return null`），
+ * 切模型会踩 Rules of Hooks 的红线（组件被 React 甩出树）。
+ *
+ * **分级色点**（7px，`--dsw-alias-state-*` token）：剩余 >20% 绿 / ≤20% 黄 / 耗尽
+ * 红 / 未知灰。阈值与 Plugins 页卡片的 `QuotaBlock` 同源（`percentage >= 0.8` 黄，
+ * `remaining <= 0 && total > 0` 耗尽，`tierOfQuota` 在 `./pill-model.ts`）——同一屏
+ * 里两套阈值互相打脸比任何一套都糟。只有耗尽档给正文上色（error token），其余档
+ * 只染圆点。
+ *
+ * **展开面板**：胶囊点一下展开额度卡，画的是胶囊装不下的东西——主额度的原始
+ * used/total 与 remaining、各专属资源包分项、以及今日签到行。**不放百分比**：胶囊
+ * 已经显示了余额，再来一个百分比是同一个数字说两遍。面板是触发器的兄弟节点非子
+ * 节点（inline style，不注入样式表）。读不到的字段显示 `—`，永不 `0`——`0` 是
+ * 「确认是零」的读数，`—` 是「查不到」，二者不等价（`QuotaBlock` 同裁定）。
+ *
+ * **轮询**：5 分钟（余额是存量不是秒表，秒级轮询只会闪数字）。失败保留上次数值、
+ * 不抛、不显示错误条——面板照常用，读不到显示 `—`。
+ *
+ * **关闭方式**：再点一次胶囊、点面板外部（`pointerdown`，非 `click`——后者会先关
+ * 面板又被触发器 toggle 重开）、按 Esc。监听只在外层开着时挂，收起即摘。
+ *
+ * 纯函数（门控、主额度、分级）在 `./pill-model.ts`，本文件只做渲染与 hook。
+ */
+import * as react from "react"
+import type { CardUsageRegion, TranslateFn } from "./card-model.ts"
+import {
+	isQoderRegion,
+	selectedRegionOf,
+	regionPrefixOf,
+	primaryQuotaOf,
+	remainingOf,
+	formatCredits,
+	num,
+	tierOfQuota,
+	usableTotal,
+	type Tier,
+	type ModelSelectionLike
+} from "./pill-model.ts"
+import { QODER_USAGE_PATH } from "./paths.ts"
+import { getJson } from "./http.ts"
+
+/** 轮询间隔：5 分钟。余额是存量，秒级轮询只会闪数字。 */
+const POLL_MS = 5 * 60 * 1000
+/** 面板元素 id，供 a11y（`aria-controls` / 测试查询）。 */
+const POPOVER_ID = "dsh-connect-qoder-composer-pill-popover"
+
+const TIER_DOT: Record<Tier, string> = {
+	ok: "var(--dsw-alias-state-success-primary, #12b76a)",
+	warn: "var(--dsw-alias-state-warn-primary, #f59e0b)",
+	exhausted: "var(--dsw-alias-state-error-primary, #d92d20)",
+	unknown: "var(--dsw-alias-label-tertiary, #999)"
+}
+const TIER_INK: Record<Tier, string> = {
+	ok: "var(--dsw-alias-label-primary, #e6e6e6)",
+	warn: "var(--dsw-alias-label-primary, #e6e6e6)",
+	exhausted: "var(--dsw-alias-state-error-primary, #d92d20)",
+	unknown: "var(--dsw-alias-label-tertiary, #999)"
+}
+
+/** 座席交给组件的 props：插件字典 `t` + renderer 物化的 `useProjection`。 */
+export interface ComposerPillProps {
+	t: TranslateFn
+	useProjection?: (key: "modelSelection") => ModelSelectionLike | undefined
+}
+
+/* ------------------------------------------------------------------ */
+/* 内层：真正持有 hook 与轮询的组件                                      */
+/* ------------------------------------------------------------------ */
+
+interface ActiveUsagePillProps {
+	t: TranslateFn
+	region: string
+}
+
+function ActiveUsagePill({ t, region }: ActiveUsagePillProps) {
+	const [open, setOpen] = react.useState(false);
+	// 读到的用量。跨失败保留：上一帧的余额仍是「直到被反驳前为真」的事实。
+	const [usage, setUsage] = react.useState<CardUsageRegion | null>(null);
+	// 首次读之前不算「查到 0」，是「还没查」——胶囊给 `—` 而非 `0`。
+	const [loadedOnce, setLoadedOnce] = react.useState(false);
+	const mounted = react.useRef(true);
+	// 只允许最新一次读取落 state：轮询可以前一次还没返回就发起第二次，慢响应
+	// 后到会把屏幕上的数字搬回去。
+	const generation = react.useRef(0);
+
+	react.useEffect(() => {
+		mounted.current = true;
+		return () => {
+			mounted.current = false;
+		};
+	}, []);
+
+	const load = react.useCallback(async () => {
+		generation.current += 1;
+		const mine = generation.current;
+		const isCurrent = () => generation.current === mine;
+		try {
+			const value = await getJson<{ regions?: unknown }>(QODER_USAGE_PATH);
+			if (!isCurrent() || !mounted.current) return;
+			const regions = Array.isArray(value.regions) ? (value.regions as CardUsageRegion[]) : [];
+			setUsage(regions.find((entry) => entry.region === region) ?? null);
+			setLoadedOnce(true);
+		} catch {
+			// 读不到不是「额度没了」：保留上次数值，面板照常用。不抛、不显示错误条。
+			if (!isCurrent() || !mounted.current) return;
+			setLoadedOnce(true);
+		}
+	}, [region]);
+
+	react.useEffect(() => {
+		void load();
+		const timer = window.setInterval(() => {
+			void load();
+		}, POLL_MS);
+		return () => {
+			window.clearInterval(timer);
+		};
+	}, [load]);
+
+	// 关闭面板：点外部用 `pointerdown`（见文件头），Esc 收尾。只在开着时挂。
+	react.useEffect(() => {
+		if (!open) return;
+		const onPointerDown = (event: PointerEvent) => {
+			const target = event.target;
+			if (!(target instanceof Node)) return;
+			const root = document.querySelector('[data-dsh-qoder-pill-root]');
+			if (root !== null && root.contains(target)) return;
+			setOpen(false);
+		};
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Escape") setOpen(false);
+		};
+		document.addEventListener("pointerdown", onPointerDown);
+		document.addEventListener("keydown", onKeyDown);
+		return () => {
+			document.removeEventListener("pointerdown", onPointerDown);
+			document.removeEventListener("keydown", onKeyDown);
+		};
+	}, [open]);
+
+	const { quota, known } = primaryQuotaOf(usage);
+	const tier = known ? tierOfQuota(quota) : "unknown";
+	const remaining = known ? remainingOf(quota) : null;
+	// 首次读之前是「还没查」，一律 `—` 灰；查到后按实际读数。
+	const display = remaining === null ? "—" : formatCredits(remaining);
+	const prefix = regionPrefixOf(region);
+	const exhausted = tier === "exhausted";
+	const checkin = usage?.checkin;
+
+	return (
+		<span
+			className="dsm-qoder-composer-pill"
+			data-dsh-qoder-pill-root="true"
+			style={{
+				display: "inline-flex",
+				alignItems: "center",
+				height: "28px",
+				position: "relative"
+			}}
+		>
+			<button
+				type="button"
+				aria-expanded={open}
+				aria-controls={open ? POPOVER_ID : undefined}
+				title={t("pill.details")}
+				onClick={() => {
+					setOpen(!open);
+				}}
+				style={{
+					display: "inline-flex",
+					alignItems: "center",
+					gap: "6px",
+					height: "28px",
+					padding: "0 8px",
+					border: "0",
+					borderRadius: "999px",
+					background: "transparent",
+					color: TIER_INK[tier],
+					font: "inherit",
+					fontVariantNumeric: "tabular-nums",
+					cursor: "pointer"
+				}}
+			>
+				<span
+					aria-hidden="true"
+					style={{
+						width: "7px",
+						height: "7px",
+						borderRadius: "50%",
+						background: TIER_DOT[tier],
+						flex: "none"
+					}}
+				/>
+				<span style={{ fontSize: "12px", lineHeight: "1", whiteSpace: "nowrap" }}>
+					{`${prefix} · ${display}`}
+				</span>
+			</button>
+			{open ? (
+				<div
+					id={POPOVER_ID}
+					role="dialog"
+					aria-label={t("pill.details")}
+					style={{
+						position: "absolute",
+						bottom: "calc(100% + 8px)",
+						right: "0",
+						width: "280px",
+						maxWidth: "80vw",
+						padding: "10px 12px",
+						borderRadius: "10px",
+						border: "1px solid var(--dsw-alias-border-l2, #36373b)",
+						background: "var(--dsw-alias-bg-layer-3, #202126)",
+						boxShadow: "0 8px 24px rgba(0,0,0,.4)",
+						display: "flex",
+						flexDirection: "column",
+						gap: "10px",
+						zIndex: 40,
+						fontVariantNumeric: "tabular-nums"
+					}}
+				>
+					<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+						<span style={{ fontSize: "13px", fontWeight: "600" }}>{prefix}</span>
+						<span
+							style={{
+								fontSize: "11px",
+								color: exhausted ? "var(--dsw-alias-state-error-primary, #d92d20)" : "var(--dsw-alias-label-tertiary, #999)"
+							}}
+						>
+							{exhausted ? t("usage.exceeded") : t("pill.balance")}
+						</span>
+					</div>
+
+					{known && quota !== undefined ? (
+						<div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+							<div style={{ fontSize: "11px", color: "var(--dsw-alias-label-secondary, #61666b)" }}>
+								{t("usage.planCredits")}
+							</div>
+							<div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "8px", fontSize: "12px", color: "var(--dsw-alias-label-secondary, #61666b)" }}>
+								<span>{`${t("usage.used")} ${formatCredits(num(quota.used))}`}</span>
+								<span>
+									{`${t("usage.remaining")} `}
+									<strong style={{ fontSize: "16px", fontWeight: "600", color: TIER_INK[tier], fontVariantNumeric: "tabular-nums" }}>{display}</strong>
+								</span>
+							</div>
+						</div>
+					) : (
+						// 未完成首次读 ≠ 读不到：前者只是还没答案（loading），后者是
+						// 真查过却没有——两种状态说两句话，不把未加载画成失败。
+						<div style={{ fontSize: "11px", color: "var(--dsw-alias-label-tertiary, #999)" }}>
+							{loadedOnce ? t("pill.unavailable") : t("pill.loading")}
+						</div>
+					)}
+
+					{Array.isArray(usage?.dedicatedPackages) && usage.dedicatedPackages.length > 0 ? (
+						<div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+							<div style={{ fontSize: "11px", color: "var(--dsw-alias-label-secondary, #61666b)" }}>
+								{t("usage.dedicatedPackage")}
+							</div>
+							{usage.dedicatedPackages.map((item, index) => (
+								<div key={index} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "8px", fontSize: "12px", color: "var(--dsw-alias-label-primary, #e6e6e6)" }}>
+									<span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+										{`${t("usage.remaining")} ${formatCredits(remainingOf(item))}`}
+									</span>
+									<span style={{ fontSize: "11px", color: "var(--dsw-alias-label-tertiary, #999)", whiteSpace: "nowrap" }}>
+										{usableTotal(item) ? `${formatCredits(num(item.total))} ${t("usage.credits")}` : ""}
+									</span>
+								</div>
+							))}
+						</div>
+					) : null}
+
+					{checkin !== undefined && checkin.active === true ? (
+						<div style={{ fontSize: "12px", color: "var(--dsw-alias-state-success-primary, #12b76a)" }}>
+							{checkin.todayCheckedIn === true
+								? t("pill.checkinDone")
+								: t("pill.checkinAvailable", { amount: formatCredits(num(checkin.amount)) })}
+						</div>
+					) : null}
+				</div>
+			) : null}
+		</span>
+	)
+}
+
+/* ------------------------------------------------------------------ */
+/* 外层：只做归属门控，不调用任何 hook                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 输入框工具栏用量胶囊。仅当会话当前指向 Qoder 区域时挂载内层；否则不渲染、
+ * 也不跑 fetch 循环。
+ */
+export function ComposerUsagePill({ t, useProjection }: ComposerPillProps) {
+	// renderer 物化的 keyed 标准 prop；Node 单测不注入时回落 noop（见文件头）。
+	const projection = (useProjection ?? (() => undefined))("modelSelection");
+	const region = selectedRegionOf(projection);
+	if (!isQoderRegion(region)) return null;
+	return <ActiveUsagePill t={t} region={region as string} />
+}

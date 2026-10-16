@@ -47,7 +47,17 @@ export const zhUsage = {
 	"usage.checkinClaimed": "今日已签到",
 	"usage.checkinGranted": "已领取 {amount} Credits",
 	"usage.checkinAlready": "今天这份已经领过了",
-	"usage.checkinError": "签到失败：{message}"
+	"usage.checkinError": "签到失败：{message}",
+	// 对话框用量胶囊（composer-usage-pill.tsx）。胶囊正文只放 `Qoder CN · 1,034`，
+	// 这些词都是展开面板里的：面板右上「余额」标签、读不到时的说明、以及今日签到行
+	// 的两个状态。复用 `usage.planCredits` / `usage.dedicatedPackage` / `usage.remaining`
+	// / `usage.used` / `usage.exceeded`，所以胶囊与 Plugins 页卡片说同一套词。
+	"pill.details": "用量详情",
+	"pill.balance": "余额",
+	"pill.loading": "正在读取用量…",
+	"pill.unavailable": "读不到用量",
+	"pill.checkinAvailable": "今日签到可领 {amount} Credits",
+	"pill.checkinDone": "今日已签到"
 };
 /** English — usage panel copy. */
 export const enUsage = {
@@ -80,5 +90,11 @@ export const enUsage = {
 	"usage.checkinClaimed": "Checked in today",
 	"usage.checkinGranted": "Claimed {amount} Credits",
 	"usage.checkinAlready": "Already claimed today",
-	"usage.checkinError": "Check-in failed: {message}"
+	"usage.checkinError": "Check-in failed: {message}",
+	"pill.details": "Usage details",
+	"pill.balance": "Balance",
+	"pill.loading": "Reading usage…",
+	"pill.unavailable": "No usage reading",
+	"pill.checkinAvailable": "Check in today for {amount} Credits",
+	"pill.checkinDone": "Checked in today"
 };

@@ -244,6 +244,15 @@ const QODER_CARD_CSS = [
 	".dsm-qoder-region-dot-expired{background:var(--dsw-alias-state-error-primary,#d92d20)}",
 	".dsm-qoder-region-dot-needs{background:var(--dsw-alias-state-warn-primary,#f59e0b)}",
 	".dsm-qoder-region-name{font-size:13px;font-weight:500;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}",
+	// --- Composer usage pill (input toolbar, `conversation.input.right`) ---
+	// Deliberately the SMALLEST rule that still owns the node. The pill lives
+	// inside the host's toolbar, whose chrome is its own CSS domain; a full
+	// stylesheet injection here would paint over the host's toolbar sizing.
+	// So the reading, the dot and the popover are all inline style, and this
+	// rule only pins the container and lays the children out. The class is
+	// still load-bearing: it is the hook the class-name parity gate tracks,
+	// and the anchor a reader can grep for when the popover misbehaves.
+	".dsm-qoder-composer-pill{position:relative;display:inline-flex;align-items:center;gap:6px;font:inherit}",
 ].join("");
 /** Inject the card stylesheet once per page. */
 export function installStyles() {
