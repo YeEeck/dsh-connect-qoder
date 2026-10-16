@@ -39,6 +39,7 @@ import {
   accountHandler,
   reloadHandler,
   confirmHandler,
+  statusHandler,
 } from '../src/host/handlers.ts'
 import { REGIONS } from '../src/host/credentials.ts'
 
@@ -797,4 +798,67 @@ test('reload: naming one region leaves the other region caches alone', async () 
   assert.equal(out.status, 200)
   assert.equal(cn.invalidated, false, 'the other region is not touched')
   assert.deepEqual(calls, ['qoder'], 'the named-but-stopped region is still started')
+})
+
+// ---------------------------------------------------------------------------
+// /models and /status: the provider-registration verdict
+// ---------------------------------------------------------------------------
+
+test('models: the provider-registration failure is reported on the roster the card reads', async () => {
+  // docs/issues/20 left two ways to learn that the provider half is dead: the
+  // host log, and /status. The card reads neither. Folding the verdict into the
+  // roster is what makes it reachable without a new fetch — so this asserts the
+  // WIRING in handlers.ts, which the payload builders alone would not catch.
+  const runtime = stubRuntime()
+  const req = fakeReq({ url: '/plugins/dsh-connect-qoder/models' })
+  const { res, out, bodies } = fakeRes(req)
+  await modelsHandler(req, res, {
+    started: [{ region: CN, runtime }],
+    currentSettings: () => ({}),
+    logger: quiet,
+    rates: fakeRates,
+    providerRegistrationError: new TypeError('this.ctx is undefined'),
+  })
+  assert.equal(out.status, 200, 'the roster still answers; the failure is added, not traded')
+  assert.deepStrictEqual(lastJson({ bodies }).providerRegistration, {
+    ok: false,
+    errorName: 'TypeError',
+  })
+})
+
+test('models: a healthy registration says so, and carries no error name', async () => {
+  const runtime = stubRuntime()
+  const req = fakeReq({ url: '/plugins/dsh-connect-qoder/models' })
+  const { res, bodies } = fakeRes(req)
+  await modelsHandler(req, res, {
+    started: [{ region: CN, runtime }],
+    currentSettings: () => ({}),
+    logger: quiet,
+    rates: fakeRates,
+  })
+  assert.deepStrictEqual(lastJson({ bodies }).providerRegistration, { ok: true })
+})
+
+test('status: the same failure is still reported on the diagnostic route', async () => {
+  // The card learns from /models, but /models only answers when the card routes
+  // mounted. /status is the route that survives issue 20's original symptom, so
+  // the two must not drift apart.
+  const req = fakeReq({ url: '/plugins/dsh-connect-qoder/status' })
+  const { res, out, bodies } = fakeRes(req)
+  await statusHandler(req, res, { startedCount: 1, providerRegistrationError: new TypeError('nope') })
+  assert.equal(out.status, 200)
+  assert.deepStrictEqual(lastJson({ bodies }), {
+    activated: false,
+    startedRegions: 1,
+    providerRegistration: { ok: false, errorName: 'TypeError' },
+  })
+})
+
+test('status: a non-string error name is narrowed instead of passed through', async () => {
+  // The old `?? ''` style narrowing let a non-string `name` become the string
+  // "42", which reads as a plausible class name in a warning line.
+  const req = fakeReq({ url: '/plugins/dsh-connect-qoder/status' })
+  const { res, bodies } = fakeRes(req)
+  await statusHandler(req, res, { startedCount: 0, providerRegistrationError: { name: 42 } })
+  assert.deepStrictEqual(lastJson({ bodies }).providerRegistration, { ok: false, errorName: 'Error' })
 })

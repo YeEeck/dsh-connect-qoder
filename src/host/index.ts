@@ -1180,6 +1180,13 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
         currentSettings: current,
         logger: ctx.logger,
         rates: MODEL_RATES,
+        // Read at request time, not at registration time: this route mounts
+        // after the registration above has already settled, so the captured
+        // binding is always the final verdict. Shipping it here (as well as on
+        // `QODER_STATUS_PATH`) is what puts the failure in front of the user —
+        // the roster renders either way, so a card that never mentions it shows
+        // a full list of models the picker cannot offer. See `ModelsDeps`.
+        providerRegistrationError,
       }),
     }], routeReleases, ctx.logger)
   })

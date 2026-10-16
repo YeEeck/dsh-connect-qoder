@@ -20,6 +20,7 @@
 import { regionEnabledFor, HIDE_ALL_MODELS } from './preferences.ts'
 import { contextWindowLabelFor, resolveContextWindow } from './pi-model.ts'
 import { unwrapVolatile } from './volatile.ts'
+import { providerRegistrationState } from './errors.ts'
 import type { CatalogEntry, Promotion, RefreshFailureReason, Region } from './domain.ts'
 import type { Preferences } from './preferences.ts'
 
@@ -229,6 +230,15 @@ export function filterByEnabled(
  * catalog is stale and why (see {@link refreshFailuresOf}). They are what let
  * the card stop implying a refresh it did not get.
  *
+ * `providerRegistration` is the third such field, and it is about activation
+ * rather than the catalog: since docs/issues/20 a failed provider registration
+ * no longer unwinds `activate()`, so this route answers normally with the
+ * provider half dead. Folding the verdict in here is what makes that state
+ * visible without a second request and without a second failure path — a card
+ * that listed selectable models no chat could offer, explained by a route
+ * nobody called, was issue 20's leftover. See
+ * {@link providerRegistrationState} for why only the error's name ships.
+ *
  * @param options.runtimes - `[{ runtime }]`, the started regions. Each runtime
  *   carries `catalog.fetchedAt` and `refreshFailed`; both are optional, because
  *   a stand-in without them must still produce a body.
@@ -237,6 +247,12 @@ export function filterByEnabled(
  * @param options.projectRow - the row projector, injected so this module stays
  *   free of the adapter import.
  * @param options.rates - the rate helpers `projectRow` uses.
+ * @param options.providerRegistrationError - the error `activate()` recorded
+ *   when the host refused the provider registration, or `undefined` when it
+ *   landed. Optional so a stand-in runtime that predates the field still
+ *   produces a body; `undefined` IS the success sentinel, so an omitted option
+ *   reads as a healthy registration, which is what every test fixture that does
+ *   not exercise this field means.
  * @returns the JSON body.
  */
 export function buildModelRowsPayload({
@@ -245,12 +261,14 @@ export function buildModelRowsPayload({
   now,
   projectRow,
   rates,
+  providerRegistrationError,
 }: {
   runtimes: RuntimeRef[]
   settings: Preferences | undefined
   now: Date
   projectRow: (entry: CatalogEntry, region: Region, now: Date, rates: RateHelpers, preferMax: boolean) => unknown
   rates: RateHelpers
+  providerRegistrationError?: unknown
 }): Record<string, unknown> {
   const models: unknown[] = []
   const preferMax = unwrapVolatile(settings?.useMaximumContextWindow) === true
@@ -282,6 +300,10 @@ export function buildModelRowsPayload({
     // instead of guessing from a timestamp.
     refreshedAt: oldestFetchedAtOf(runtimes),
     refreshFailures: refreshFailuresOf(runtimes),
+    // Activation health, folded into the roster the card already fetches. See
+    // the doc comment above: a card route that answers while the provider half
+    // is dead is exactly the state docs/issues/20 left unexplained.
+    providerRegistration: providerRegistrationState(providerRegistrationError),
   }
 }
 

@@ -54,6 +54,13 @@ export const zhRow = {
 	"row.refreshFailed": "刷新失败：{reason}",
 	"row.refreshNotPersisted": "已刷新，但写盘失败——重启后会回到旧目录（下次刷新会自动重试）",
 	"row.protocolChanged": "Qoder 的接口返回了本插件不认识的格式——请更新插件（重新登录没有用）",
+	// Issue 20's leftover: activation survives a provider-registration failure
+	// now, so the roster renders even when the provider half is dead. The card
+	// has to say so, or the list below reads as usable and the chat picker
+	// silently disagrees with it. `{reason}` is the host's own error name
+	// (never empty) and the last clause sends the user to the log instead of
+	// offering a re-sign-in ritual that cannot fix this.
+	"row.providerRegistrationFailed": "插件启动时模型 provider 注册失败（{reason}）：下面的模型在对话里选不到。完整错误已写入宿主日志。",
 	"row.offPeakOn": "错峰价",
 	"row.offPeakOff": "标准价",
 	// The badge names the boundary the rate flips at, not a countdown to it:
@@ -128,6 +135,7 @@ export const enRow = {
 	"row.refreshFailed": "Refresh failed: {reason}",
 	"row.refreshNotPersisted": "Refreshed, but the catalog could not be written — it will revert after a restart (the next refresh retries automatically)",
 	"row.protocolChanged": "Qoder replied in a format this plugin does not recognise — update the plugin (signing in again will not help)",
+	"row.providerRegistrationFailed": "The model provider failed to register when the plugin started ({reason}): the models below cannot be picked in chat. The full error is in the host log.",
 	"row.offPeakOn": "off-peak",
 	"row.offPeakOff": "standard",
 	"row.offPeakEnd": "until {time}",

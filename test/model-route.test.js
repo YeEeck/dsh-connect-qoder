@@ -340,3 +340,84 @@ test('a failed refresh does not change the rows the payload serves', () => {
     assert.strictEqual(payload.refreshedAt, ok.refreshedAt, 'and its age does not move')
   }
 })
+
+test('a healthy payload reports a registered provider rather than omitting the field', () => {
+  // Sent as an object, not left out, so the card's check is a comparison
+  // instead of an `in` check on a key that may be missing — the same rule
+  // `refreshFailures` follows.
+  const runtime = runtimeOf('qoder-cn', [entryFor()])
+  const payload = buildModelRowsPayload({
+    runtimes: [runtime],
+    settings: {},
+    now: NOW,
+    projectRow: projectModelRow,
+    rates: RATES,
+  })
+  assert.deepStrictEqual(payload.providerRegistration, { ok: true })
+})
+
+test('a failed provider registration is named on the roster the card already reads', () => {
+  // This is the field the card turns into a warning. Since docs/issues/20 the
+  // roster route mounts even when `ctx.llm.registerAdapter` threw, so these rows
+  // are exactly the ones a user would otherwise try (and fail) to pick in chat.
+  const runtime = runtimeOf('qoder-cn', [entryFor()])
+  const payload = buildModelRowsPayload({
+    runtimes: [runtime],
+    settings: {},
+    now: NOW,
+    projectRow: projectModelRow,
+    rates: RATES,
+    providerRegistrationError: new TypeError('x is not a function'),
+  })
+  assert.deepStrictEqual(payload.providerRegistration, { ok: false, errorName: 'TypeError' })
+})
+
+test('a failed provider registration does not change the rows the payload serves', () => {
+  // Same shape as the refreshFailures rule above: the roster is still the best
+  // answer available, and it still renders. The warning is ADDED, not traded
+  // for the content — a card that hid its models on this failure would be
+  // strictly worse than the silence this closes.
+  const runtime = runtimeOf('qoder-cn', [entryFor()])
+  const withError = (error) => {
+    const options = {
+      runtimes: [runtime],
+      settings: {},
+      now: NOW,
+      projectRow: projectModelRow,
+      rates: RATES,
+    }
+    return error === undefined
+      ? buildModelRowsPayload(options)
+      : buildModelRowsPayload({ ...options, providerRegistrationError: error })
+  }
+  const ok = withError(undefined)
+  for (const error of [new Error('boom'), 'a string throw', { code: 'ENOENT' }, 0]) {
+    const payload = withError(error)
+    assert.deepStrictEqual(payload.models, ok.models)
+    assert.strictEqual(payload.refreshedAt, ok.refreshedAt)
+    assert.strictEqual(payload.providerRegistration.ok, false, 'a throw is never a success')
+  }
+})
+
+test('the registration verdict never carries an empty or non-string name', () => {
+  // "注册失败（）" names nothing. The host narrows here so the card can render
+  // the name verbatim without a second-guessing branch of its own.
+  const named = (error) => {
+    const payload = buildModelRowsPayload({
+      runtimes: [],
+      settings: {},
+      now: NOW,
+      projectRow: projectModelRow,
+      rates: RATES,
+      providerRegistrationError: error,
+    })
+    return payload.providerRegistration
+  }
+  assert.deepStrictEqual(named(new Error('boom')), { ok: false, errorName: 'Error' })
+  assert.deepStrictEqual(named({ name: 42 }), { ok: false, errorName: 'Error' })
+  assert.deepStrictEqual(named({ name: '' }), { ok: false, errorName: 'Error' })
+  assert.deepStrictEqual(named({ name: 'SignInExpiredError' }), {
+    ok: false,
+    errorName: 'SignInExpiredError',
+  })
+})

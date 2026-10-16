@@ -33,6 +33,7 @@ import {
 	windowLabelOf,
 	rateAt,
 	refreshNoticeKey,
+	providerRegistrationFailure,
 	describeThrown,
 } from "./card-model.ts"
 import { getJson } from "./http.ts"
@@ -345,6 +346,14 @@ export function QoderPluginCard({ t, settingsScope, view }: QoderPluginCardProps
 	// inference and the documented contract disagreed, which the setter below
 	// is where it surfaced.
 	const [refreshFailure, setRefreshFailure] = react.useState<string | null>(null);
+	// The host's error NAME for a failed provider registration, or `null` when
+	// the registration landed or the payload did not report it —
+	// providerRegistrationFailure draws that line, and it is deliberately not
+	// the same line as "the roster route answered". Since docs/issues/20
+	// activation survives a registration failure, so this is the only thing
+	// standing between a fully rendered roster and the chat picker silently
+	// offering none of it.
+	const [providerFailure, setProviderFailure] = react.useState<string | null>(null);
 	// Bumped when the account panel's re-read lands; the usage panel
 	// treats a non-zero value as "force a fresh quota pull".
 	const [usageBump, setUsageBump] = react.useState(0);
@@ -436,6 +445,7 @@ export function QoderPluginCard({ t, settingsScope, view }: QoderPluginCardProps
 			// nothing honest to show, so nothing is shown.
 			setRefreshedAt(typeof value.refreshedAt === "number" ? value.refreshedAt : undefined);
 			setRefreshFailure(refreshNoticeKey(value));
+			setProviderFailure(providerRegistrationFailure(value));
 			setStatus("ready");
 		} catch (error) {
 			if (!mounted.current || signal?.aborted === true) return;
@@ -594,6 +604,19 @@ export function QoderPluginCard({ t, settingsScope, view }: QoderPluginCardProps
 			<div className="dsm-plugin-card-body" hidden={!open}>
 				{open ? (
 					<div className="dsm-qoder-body">
+						{/* Above every panel, and outside the `status` ladder below:
+						    this is not about whether a route answered, it is about
+						    whether the plugin's provider half came up. The roster
+						    renders either way, so a user who only ever saw this
+						    card would tick models the chat picker refuses to
+						    offer — the run of docs/issues/20 that its fix left
+						    behind. `row.providerRegistrationFailed` carries the
+						    host's own error name, never a blank. */}
+						{providerFailure !== null ? (
+							<p className="dsm-qoder-error">
+								{t("row.providerRegistrationFailed", { reason: providerFailure })}
+							</p>
+						) : null}
 						<QoderAccountPanel
 							t={t}
 							onReconciled={reconcile}

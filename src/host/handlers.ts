@@ -30,7 +30,7 @@ import { buildModelRowsPayload, projectModelRow } from './catalog-entry.ts'
 import type { RateHelpers } from './catalog-entry.ts'
 import { saveFieldOutcome } from './settings-save.ts'
 import type { SettingsService } from './settings-save.ts'
-import { classifyUpstreamError, describeThrown } from './errors.ts'
+import { classifyUpstreamError, describeThrown, providerRegistrationState } from './errors.ts'
 import {
   campaignIsClaimed,
   checkinStateFrom,
@@ -73,6 +73,17 @@ export interface ModelsDeps {
   logger: PluginLogger
   /** The rate helpers `projectModelRow` calls, injected from the adapter. */
   rates: RateHelpers
+  /**
+   * The error `activate()` recorded when the host refused the provider
+   * registration, or `undefined` when it landed.
+   *
+   * Carried on this route as well as on `/status` because this is the route the
+   * card reads: a registration failure no longer unwinds `activate()`
+   * (docs/issues/20), so without it here the card would render a full, tickable
+   * roster for models the chat picker cannot offer, with nothing saying why.
+   * Optional so a host that predates the field still serves its roster.
+   */
+  providerRegistrationError?: unknown
 }
 
 /**
@@ -116,6 +127,7 @@ export async function modelsHandler(
       now,
       projectRow: projectModelRow,
       rates: deps.rates,
+      providerRegistrationError: deps.providerRegistrationError,
     }),
   )
 }
@@ -442,6 +454,10 @@ export interface StatusDeps {
  * names the failure kind (`TypeError`, `Error`), and the full error is already
  * in the host log, where the recording block in `activate()` put it. That split
  * is deliberate: log the whole thing, publish the shape.
+ *
+ * The shaping itself lives in {@link providerRegistrationState}, shared with the
+ * models payload, so the two surfaces that publish this fact cannot drift into
+ * two vocabularies for it.
  */
 export async function statusHandler(
   req: IncomingMessage,
@@ -450,16 +466,11 @@ export async function statusHandler(
 ): Promise<void> {
   if (!methodAllowed(req, res, 'GET')) return
   if (!originAllowed(req, res)) return
-  const ok = deps.providerRegistrationError === undefined
+  const providerRegistration = providerRegistrationState(deps.providerRegistrationError)
   sendJson(res, 200, {
-    activated: ok,
+    activated: providerRegistration.ok,
     startedRegions: deps.startedCount,
-    providerRegistration: ok
-      ? { ok: true }
-      : {
-          ok: false,
-          errorName: (deps.providerRegistrationError as { name?: unknown } | undefined)?.name ?? 'Error',
-        },
+    providerRegistration,
   })
 }
 

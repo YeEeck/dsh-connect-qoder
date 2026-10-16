@@ -363,6 +363,42 @@ export function refreshNoticeKey(value: unknown): string | null {
 }
 
 /**
+ * The provider-registration failure the models envelope carried, or `null`.
+ *
+ * The card's half of the fact the host publishes on `QODER_STATUS_PATH` and
+ * folds into the roster payload. Since docs/issues/20 a failed registration no
+ * longer unwinds activation: every card route mounts and the roster arrives
+ * normally, so the card renders a complete, tickable list of models the chat
+ * picker will not offer — because no provider was registered to offer them.
+ * Nothing on screen said so, and the explanation lived on a route no client code
+ * ever called. This is that gap: the card reads the verdict from the payload it
+ * already fetches and names the failure in the host's own words.
+ *
+ * `null` covers BOTH "registration succeeded" and "this payload does not report
+ * it". A host from before this field, or a stand-in fixture, sends no
+ * `providerRegistration` at all, and inventing a warning out of a missing field
+ * would be the false-alarm twin of the silent failure this closes. Only an
+ * explicit `{ ok: false }` becomes a warning; anything unreadable is silence.
+ *
+ * The name is never empty. The host already narrows a missing or non-string
+ * `name` to `'Error'` (`host/errors.ts#providerRegistrationState`) and this
+ * narrows again rather than trusting it, because a host from another version is
+ * not a contract. A warning that renders "注册失败（）" names nothing, which is
+ * the failure mode `docs/KNOWN_GAPS.md` item 8（国际版 campaigns 端点按 umid 机器身份门控每日签到）exists to prevent.
+ *
+ * @param value - the parsed models payload.
+ * @returns the host's non-empty error name, or `null` when there is nothing
+ *   trustworthy to warn about.
+ */
+export function providerRegistrationFailure(value: unknown): string | null {
+	const registration = (value as { providerRegistration?: unknown } | null | undefined)?.providerRegistration;
+	if (registration === null || typeof registration !== "object") return null;
+	const record = registration as { ok?: unknown; errorName?: unknown };
+	if (record.ok !== false) return null;
+	return typeof record.errorName === "string" && record.errorName !== "" ? record.errorName : "Error";
+}
+
+/**
  * A readable description of a thrown value, for the card's `catch` blocks
  * that show a failure reason to the user.
  *

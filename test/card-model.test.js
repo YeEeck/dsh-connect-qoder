@@ -30,6 +30,7 @@ import {
   formatContextWindowForUi,
   rateAt,
   describeThrown,
+  providerRegistrationFailure,
 } from '../src/client/card-model.ts'
 
 /** A translation stub that names the key it is asked for. */
@@ -163,4 +164,49 @@ test('describeThrown never prints the literal word undefined', () => {
 test('describeThrown falls back to String() for a message-less throw', () => {
   assert.equal(describeThrown({ code: 42 }), '[object Object]')
   assert.equal(describeThrown({ message: 42 }), '[object Object]', 'a non-string message is not a message')
+})
+
+test('providerRegistrationFailure names a failed registration, and only a failure', () => {
+  // The card's half of the fact the host publishes on /status and folds into
+  // the roster. Since docs/issues/20 the roster renders even when the provider
+  // half is dead, so this verdict is the only thing that stops the card showing
+  // a tickable list the chat picker will not offer.
+  assert.equal(providerRegistrationFailure({ providerRegistration: { ok: false, errorName: 'TypeError' } }), 'TypeError')
+  assert.equal(providerRegistrationFailure({ providerRegistration: { ok: true } }), null)
+})
+
+test('providerRegistrationFailure treats an unreported or unreadable field as silence', () => {
+  // The other direction of the same rule: a host from before this field, or a
+  // stand-in fixture, sends nothing. Inventing a warning from a missing field
+  // would be the false-alarm twin of the silent failure this closes — the card
+  // would shout at users whose registration is fine.
+  for (const value of [
+    undefined,
+    null,
+    0,
+    '',
+    'x',
+    [],
+    {},
+    { providerRegistration: null },
+    { providerRegistration: 'yes' },
+    { providerRegistration: [] },
+    { providerRegistration: {} },
+    { providerRegistration: { ok: 'false', errorName: 'TypeError' } },
+    { providerRegistration: { ok: 0, errorName: 'TypeError' } },
+    { providerRegistration: { ok: undefined } },
+  ]) {
+    assert.equal(providerRegistrationFailure(value), null, `${JSON.stringify(value)} must not warn`)
+  }
+})
+
+test('providerRegistrationFailure never returns an empty name', () => {
+  // A warning that reads "注册失败（）" names nothing, which is the failure mode
+  // docs/KNOWN_GAPS.md item 8（国际版 campaigns 端点按 umid 机器身份门控每日签到）
+  // exists to prevent. The host narrows this too; the card narrows again rather
+  // than trusting another version's payload.
+  assert.equal(providerRegistrationFailure({ providerRegistration: { ok: false } }), 'Error')
+  assert.equal(providerRegistrationFailure({ providerRegistration: { ok: false, errorName: '' } }), 'Error')
+  assert.equal(providerRegistrationFailure({ providerRegistration: { ok: false, errorName: 42 } }), 'Error')
+  assert.equal(providerRegistrationFailure({ providerRegistration: { ok: false, errorName: null } }), 'Error')
 })

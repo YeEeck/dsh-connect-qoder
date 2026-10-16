@@ -71,6 +71,40 @@ export function thrownFlag(error: unknown, key: ThrownFlag): unknown {
 export type ThrownFlag = 'name' | 'message' | 'cause' | 'code' | 'retryable' | 'dailyLimit' | 'signInExpired' | 'protocolShapeChanged' | 'retryAfterSeconds' | 'status'
 
 /**
+ * The provider-registration verdict, in the shape the browser is allowed to see.
+ *
+ * Since docs/issues/20 a registration failure is RECORDED rather than allowed to
+ * unwind `activate()`, so every card route still mounts and the card still
+ * renders — which means the failure has to be published somewhere or it is
+ * invisible. Two surfaces need this one fact: the always-mounted `/status` route
+ * (which answers it even when a card route is a 404, separating "this host does
+ * not serve that path" from "this plugin failed to activate") and the models
+ * payload the card actually reads. Shaping it once here is what keeps those two
+ * from drifting into two vocabularies for one condition.
+ *
+ * Only the error's `name` is published, never its `message`: an arbitrary thrown
+ * value can carry a credential-bearing URL, and this is a browser-visible body.
+ * The whole error goes to the host log, where the recording block in `activate()`
+ * put it. That split is deliberate — log the whole thing, publish the shape.
+ *
+ * `errorName` is never empty, even when the thrown value has no usable `name`:
+ * the card renders it inside a sentence, and a warning that names nothing is the
+ * exact failure mode `docs/KNOWN_GAPS.md` item 8（国际版 campaigns 端点按 umid 机器身份门控每日签到）exists to
+ * prevent. Absent, non-string and empty names all become `'Error'`.
+ *
+ * @param error - the recorded registration error, or `undefined` when the
+ *   host-side registration succeeded.
+ * @returns `{ ok: true }`, or `{ ok: false, errorName }` with a non-empty name.
+ */
+export function providerRegistrationState(
+  error: unknown,
+): { ok: true } | { ok: false; errorName: string } {
+  if (error === undefined) return { ok: true }
+  const name = thrownFlag(error, 'name')
+  return { ok: false, errorName: typeof name === 'string' && name !== '' ? name : 'Error' }
+}
+
+/**
  * A refusal that means the sign-in is gone, so the cached credential is stale.
  *
  * The upstream layer used to build this as `const error: any = new Error(msg)`

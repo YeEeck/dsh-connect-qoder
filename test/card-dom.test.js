@@ -808,3 +808,75 @@ test('every setting the commit bar saves renders above it', async () => {
   )
 })
 
+
+test('a failed provider registration is warned about on the roster that renders anyway', async () => {
+  // docs/issues/20 stopped the roster route from 404-ing when the provider half
+  // dies, which fixed the blank card but created a worse-looking state: a full,
+  // tickable roster whose models the chat picker does not offer, with nothing on
+  // screen explaining why. The warning is the explanation.
+  const { container } = await mount({
+    models: [model({ id: 'm1', promotion: { active: false, windowStart: '22:00', windowEnd: '08:00' } })],
+    fetch: (() => {
+      const json = (value) => ({ ok: true, status: 200, json: async () => value })
+      return async (url) => {
+        const path = String(url)
+        if (path.includes('/models')) {
+          return json({
+            models: [{ id: 'm1', region: 'qoder-cn', name: 'Alpha', isVL: false }],
+            imageOverrides: {},
+            enabledModelIds: {},
+            useMaximumContextWindow: false,
+            refreshedAt: 1750000000000,
+            refreshFailures: [],
+            providerRegistration: { ok: false, errorName: 'TypeError' },
+          })
+        }
+        if (path.includes('/account')) {
+          return json({ regions: REGIONS, enabledRegions: { 'qoder-cn': true, qoder: true } })
+        }
+        if (path.includes('/usage')) return json({ regions: [] })
+        throw new Error(`unexpected fetch: ${path}`)
+      }
+    })(),
+  })
+
+  const warning = container.querySelector('.dsm-qoder-error')
+  assert.ok(warning !== null, 'a dead provider must be visible, not just logged')
+  assert.match(text(warning), /TypeError/, 'the warning must name the failure, not just report one')
+  assert.match(text(warning), /注册失败/)
+  // The rows are STILL there — the warning explains the roster, it does not
+  // replace it. Hiding the models would leave nothing to explain.
+  assert.deepEqual([...container.querySelectorAll('.dsm-qoder-name')].map((n) => text(n)), ['Alpha'])
+})
+
+test('a registered provider produces no warning at all', async () => {
+  // The false-alarm direction: warning on a healthy host would train people to
+  // ignore the line, which is how the real one gets missed.
+  const { container } = await mount({
+    models: [model({ id: 'm1', promotion: { active: false, windowStart: '22:00', windowEnd: '08:00' } })],
+    fetch: (() => {
+      const json = (value) => ({ ok: true, status: 200, json: async () => value })
+      return async (url) => {
+        const path = String(url)
+        if (path.includes('/models')) {
+          return json({
+            models: [{ id: 'm1', region: 'qoder-cn', name: 'Alpha', isVL: false }],
+            imageOverrides: {},
+            enabledModelIds: {},
+            useMaximumContextWindow: false,
+            refreshedAt: 1750000000000,
+            refreshFailures: [],
+            providerRegistration: { ok: true },
+          })
+        }
+        if (path.includes('/account')) {
+          return json({ regions: REGIONS, enabledRegions: { 'qoder-cn': true, qoder: true } })
+        }
+        if (path.includes('/usage')) return json({ regions: [] })
+        throw new Error(`unexpected fetch: ${path}`)
+      }
+    })(),
+  })
+
+  assert.equal(container.querySelector('.dsm-qoder-error'), null)
+})
