@@ -37,6 +37,8 @@
  * A token is reported by presence, length and a masked prefix/suffix only.
  */
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
+import { resolve } from 'node:path'
 import { REGIONS } from '../src/host/credentials.ts'
 import { authHeaders, modelListUrl } from '../src/host/upstream.ts'
 
@@ -144,19 +146,42 @@ function buildPollUrl(session, region) {
  * implementation's "still waiting" case, and anything else non-OK is a refusal
  * whose body this probe must surface verbatim rather than swallow.
  */
-async function pollOnce(session, region) {
+export async function pollOnce(session, region, fetchImpl = fetch) {
   const url = buildPollUrl(session, region)
   try {
-    const response = await fetch(url, { method: 'GET', headers: { Accept: 'application/json' }, redirect: 'error' })
-    const text = (await response.text()).slice(0, 400)
+    const response = await fetchImpl(url, { method: 'GET', headers: { Accept: 'application/json' }, redirect: 'error' })
+    // Read the body WHOLE. Bounding the read here once truncated a real success
+    // payload mid-string, and the resulting uncaught SyntaxError printed the
+    // raw body — a live device token — into the log. Bounding is a DISPLAY
+    // concern; see `bodyForDisplay`.
+    const text = await response.text()
     return { reachable: true, status: response.status, text }
   } catch (error) {
     return { reachable: false, error: error?.message ?? String(error) }
   }
 }
 
+/**
+ * Parse a poll body without ever letting its CONTENTS reach an exception.
+ *
+ * `JSON.parse` syntax errors embed a snippet of their input in V8, and on a
+ * success response that input is the credential — which is exactly how a live
+ * device token once escaped into the log. Only the byte count and the body's
+ * shape leave this function, and it is exported so a test can hold that.
+ */
+export function parsePollBody(text) {
+  if (typeof text !== 'string' || text.length === 0) {
+    return { ok: false, bytes: 0, truncated: false, name: 'EmptyBody' }
+  }
+  try {
+    return { ok: true, value: JSON.parse(text) }
+  } catch (error) {
+    return { ok: false, bytes: text.length, truncated: !text.trimEnd().endsWith('}'), name: error?.name ?? 'Error' }
+  }
+}
+
 /** The fields the reference implementation reads, and every spelling it tolerates. */
-function parseTokenPayload(value) {
+export function parseTokenPayload(value) {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return { accessToken: '' }
   const readString = (keys) => {
     for (const key of keys) {
@@ -168,6 +193,7 @@ function parseTokenPayload(value) {
   return {
     accessToken: readString(['token', 'device_token', 'access_token']) ?? '',
     refreshToken: readString(['refresh_token', 'refreshToken']),
+    refreshTokenId: readString(['refresh_token_id', 'refreshTokenId']),
     expiresAt: value.expires_at ?? value.expiresAt,
     refreshTokenExpiresAt: value.refresh_token_expires_at ?? value.refreshTokenExpiresAt,
     uid: readString(['user_id', 'userId']),
@@ -181,7 +207,7 @@ function parseTokenPayload(value) {
  * consumed as `security_oauth_token` by `authHeaders` — the same field name the
  * device login produces, which is why this closure needs no upstream change.
  */
-function credentialOf(payload, machineId) {
+export function credentialOf(payload, machineId) {
   return {
     userID: payload.uid ?? '',
     token: payload.accessToken,
@@ -193,7 +219,7 @@ function credentialOf(payload, machineId) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** Report a secret without disclosing it. */
-function mask(secret) {
+export function mask(secret) {
   if (typeof secret !== 'string' || secret.length === 0) return 'absent'
   if (secret.length <= 12) return `present (${secret.length} chars, too short to mask)`
   return `present (${secret.length} chars, ${secret.slice(0, 4)}…${secret.slice(-4)})`
@@ -201,6 +227,19 @@ function mask(secret) {
 
 function indent(text, pad = '    ') {
   return String(text).split('\n').map((line) => pad + line).join('\n')
+}
+
+/**
+ * Bound a response body for DISPLAY only, never for parsing.
+ *
+ * A deviceToken poll body is credential material the moment it succeeds, so it
+ * is echoed only through here — never by an exception, and never by a parse
+ * failure. Keeping the limit at the print site is what makes that possible.
+ */
+export function bodyForDisplay(text, limit = 400) {
+  if (typeof text !== 'string' || text.length === 0) return '<empty>'
+  if (text.length <= limit) return text
+  return `${text.slice(0, limit)}… [${text.length} bytes total]`
 }
 
 /** Phase 1: prove the poll endpoint answers at all, without authorizing anything. */
@@ -221,7 +260,7 @@ async function dryRegion(key) {
   // A 404 here is the expected, healthy answer: the nonce does not exist yet.
   const verdict = result.status === 404 ? 'expected (unknown nonce)' : 'UNEXPECTED — investigate'
   console.log(`  poll      : HTTP ${result.status} — ${verdict}`)
-  console.log(`  body      :\n${indent(result.text.length > 0 ? result.text : '<empty>')}`)
+  console.log(`  body      :\n${indent(bodyForDisplay(result.text))}`)
   return result.status === 404
 }
 
@@ -256,13 +295,21 @@ async function loginRegion(key, options) {
     if (result.status < 200 || result.status >= 300) {
       // Red line 1: a refusal is reported, never reinterpreted as "not signed in".
       console.log(`  poll      : HTTP ${result.status} — REFUSED. Body verbatim:`)
-      console.log(indent(result.text.length > 0 ? result.text : '<empty>'))
+      console.log(indent(bodyForDisplay(result.text)))
       if (result.status === 401 || result.status === 403) {
         console.log(`  verdict   : this is the wrong-clientId symptom — check ${product.clientId}`)
       }
       return false
     }
-    const parsed = parseTokenPayload(JSON.parse(result.text))
+    const read = parsePollBody(result.text)
+    if (!read.ok) {
+      // Only the byte count and the shape are printed; see `parsePollBody`.
+      console.log(`  poll      : HTTP ${result.status}, ${read.bytes} bytes, body is not JSON (${read.name})`)
+      console.log(`  shape     : ${read.truncated ? 'does NOT end with a closing brace — the body looks TRUNCATED' : 'ends with a closing brace'}`)
+      console.log('  body      : withheld — a deviceToken body is credential material once it parses')
+      return false
+    }
+    const parsed = parseTokenPayload(read.value)
     if (parsed.accessToken.length > 0) {
       payload = parsed
       break
@@ -278,7 +325,16 @@ async function loginRegion(key, options) {
   console.log('  credential received:')
   console.log(`    access_token   : ${mask(payload.accessToken)}`)
   console.log(`    refresh_token  : ${mask(payload.refreshToken)}`)
-  console.log(`    expires_at     : ${payload.expiresAt ?? 'absent'}`)
+  if (payload.refreshToken === undefined && payload.refreshTokenId !== undefined) {
+    // Report what the region actually handed back rather than an empty refresh
+    // token that reads like the login failed to produce one. A refresh token
+    // that is only an ID means the refresh half is a different call, and the
+    // reference implementation leaves that half untested.
+    console.log('    note           : no refresh_token, but a refresh_token_id was issued — the refresh half needs its own probe')
+  }
+  const expiry =
+    payload.expiresAt === undefined ? 'absent' : `${String(payload.expiresAt)} (${typeof payload.expiresAt})`
+  console.log(`    expires_at     : ${expiry}`)
   console.log(`    refresh expiry : ${payload.refreshTokenExpiresAt ?? 'absent'}`)
   console.log(`    uid            : ${payload.uid ?? 'absent'}`)
   console.log(`    user_name      : ${payload.userName ?? 'absent'}`)
@@ -309,7 +365,7 @@ async function loginRegion(key, options) {
     if (response.ok && response.status === 200) {
       console.log('  verdict   : CLOSURE WORKS — the device token drives the plugin\'s existing gateway path')
     } else {
-      console.log(`  verdict   : token obtained but the gateway refused it — body:\n${indent(text.slice(0, 400))}`)
+      console.log(`  verdict   : token obtained but the gateway refused it — body:\n${indent(bodyForDisplay(text))}`)
     }
     return response.status === 200
   } catch (error) {
@@ -318,17 +374,30 @@ async function loginRegion(key, options) {
   }
 }
 
-const options = parseArgs(process.argv.slice(2))
-const keys = options.region === 'both' ? ['cn', 'global'] : [options.region]
-let allPassed = true
-for (const key of keys) {
-  const passed = options.dry ? await dryRegion(key) : await loginRegion(key, options)
-  if (passed === false) allPassed = false
-  console.log('')
+/**
+ * Run only when executed directly.
+ *
+ * `test/probe-device-login.test.js` imports this file to exercise the token
+ * shape and the poll read, and importing it must not open a sign-in flow, read
+ * argv, or set an exit code.
+ */
+async function main() {
+  const options = parseArgs(process.argv.slice(2))
+  const keys = options.region === 'both' ? ['cn', 'global'] : [options.region]
+  let allPassed = true
+  for (const key of keys) {
+    const passed = options.dry ? await dryRegion(key) : await loginRegion(key, options)
+    if (passed === false) allPassed = false
+    console.log('')
+  }
+  // `process.exitCode`, never `process.exit()`: the latter tears the process down
+  // while fetch's sockets are still open, which on Windows trips a libuv fail-fast
+  // (`Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)`, exit 0xC0000409) and
+  // destroys the exit code a hand-run check reads. Setting the code lets the loop
+  // drain first.
+  process.exitCode = allPassed ? 0 : 1
 }
-// `process.exitCode`, never `process.exit()`: the latter tears the process down
-// while fetch's sockets are still open, which on Windows trips a libuv fail-fast
-// (`Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)`, exit 0xC0000409) and
-// destroys the exit code a hand-run check reads. Setting the code lets the loop
-// drain first.
-process.exitCode = allPassed ? 0 : 1
+
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main()
+}
