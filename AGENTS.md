@@ -39,8 +39,12 @@ DSH 插件：把本机已登录的 **Qoder**（国内版 `qoder-cn` / 国际版 
 1. **双 region 是两根平行的线**：账号、凭据、用量、模型目录、勾选草稿全部按 region 隔离；
    切 tab 不允许影响另一侧。`enabledRegions` 等设置保存必须带**完整 map**（host 可能是逐区合并，
    也可能整字段替换，两种宿主都不能丢兄弟区，见 `src/client/card.tsx` 的 `toggleRegion` 注释）。
-2. **本插件不持有用户密码**：凭据来源是 Qoder Electron 应用的本地登录态（OSCrypt 解密）或
-   `QODERCN_*` / `QODER_*` 环境变量 PAT。解密主密钥会在 `%TEMP%` 短暂明文落盘，清理逻辑有过
+2. **本插件不持有用户密码**：凭据来源按优先级是 Qoder Electron 应用的本地登录态（OSCrypt 解密）、
+   **插件自己的设备登录令牌**、或 `QODERCN_*` / `QODER_*` 环境变量 PAT。前两条差别很大：桌面端的
+   凭据只读打开、插件不留副本；设备登录那条是**插件唯一自己持有的凭据**，存在
+   `$DSH_HOME/.qoder-auth.<region>.json`（`0600`、按 region 分文件、读-改-写整体串行）——
+   动它要同时考虑越界、残留与并发，见 `docs/issues/21-device-login-credential-source.md`。
+   解密主密钥会在 `%TEMP%` 短暂明文落盘，清理逻辑有过
    **越界删空插件目录外文件**的 P0 事故——动凭据/临时目录代码前必读 `docs/issues/01`、`02`。
 3. **client 源码是逆向恢复的**：`src/client/` 由已发布的 `lib/client.js` 机械还原
    （`docs/issues/17`），历史形态是手写 `(0, react_jsx_runtime.jsx)(…)` 调用而非 JSX 语法，
