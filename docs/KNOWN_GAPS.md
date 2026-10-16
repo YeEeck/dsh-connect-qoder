@@ -318,6 +318,35 @@ Qoder 客户端"——对着一个已经装了并登录了的用户。现在：
 均已变异验证。**注意**：这只改好了**说法**，第 1 项的 keystore 仍缺——macOS 上这仍是
 "读不到"，只是现在说得对。
 
+**设备登录闭环已实测（2026-10-17，两区各一次真机授权）**：上面第 1 项（OS keystore）**不是唯一的
+出路**——Qoder 自己有设备登录（浏览器授权 + PKCE），走通后拿到的凭据与桌面端 `auth.v1.dat` 里
+那份同构，因此完全不必碰 keystore。[`../probe/qoder-device-login.mjs`](../probe/qoder-device-login.mjs)
+把三件事在**一次授权**里量完，两区结果：
+
+- **登录闭环成立**：poll 拿到凭据（CN uid `019ec931-…`，国际 uid `019f7d80-…`）。
+- **凭据驱动本插件自己的网关路径**：即探针直接调 `authHeaders()` + `modelListUrl()` 打模型目录，
+  CN `HTTP 200, chat=14`、国际 `HTTP 200, chat=17`。
+- **刷新轮换后仍驱动同一路径**：CN 与国际均 `REFRESH WORKS`，条数与刷新前一致。
+
+两区的 `client_id` 都经**真实授权**验证（`732aef47-…` 对 `qoder.cn`，`e883ade2-…` 对 `qoder.com`），
+这正是 pack.js 那条警告（clientId 用错时"授权页 302 正常、点授权后报参数无效"）唯一能证伪的方式；
+两区 `access_token` 均 27 字符、`refresh_token` 均 28 字符，`chat` 条数与
+[`machineos-probe.mjs`](../probe/machineos-probe.mjs) / [`model-shape.mjs`](../probe/model-shape.mjs)
+量到的目录条数逐一吻合。
+
+**实测出来的一个坑（接进 host 前必须带上）**：刷新响应与 poll 响应是**两个不同的信封**。poll 是 14 个
+字段；刷新只有 `created_at, device_token, expires_at, refresh_token, refresh_token_expires_at,
+token_type` 6 个，访问令牌在 `device_token` 而不是 `token`，而且**没有 `user_id`**。所以轮换必须
+**叠加**在旧凭据上、不能替换：`authHeaders` 把 uid 同时放进加密的签名 info 块
+（`src/host/upstream.ts:279`）与明文的 `Cosy-User` 头（`:328`），替换会让 uid 变空，网关两区一致地回
+`403 {"code":"101","message":"Signature invalid"}`。这个坑是**实测抓到的、不是推断**
+（`7b15f37` 引入刷新阶段 → 两区各自 403 → `121805c` 改为叠加并加守门测试）。
+
+**但这不等于「已支持 macOS / Linux」**：设备登录目前**只活在探针里**，host 一行未接；协议是从客户端
+常量逆出来的非公开 API，厂商改版可能静默失效，接进去时失败必须让卡片说"登录流程坏了"而不是
+"你没登录"（红线 1）；而且要接进 host，本插件就从"不持有用户凭据"变成"持有一份自己签发的令牌"，
+AGENTS.md「三条事实」第 2 条的前提需一并改写——这需要用户明确同意。
+
 **位置**：`src/host/credentials.ts`（OS keystore 封装、`runUnwrap` 平台守卫）、
 `src/client/copy-account.ts`（`account.readFail` 文案）、`src/host/account-state.ts`（`appDataRoot` 注入）、
 `src/host/upstream.ts`（`MACHINE_OS` darwin 回落）
@@ -341,8 +370,9 @@ Qoder 客户端"——对着一个已经装了并登录了的用户。现在：
   写出来就是"盲代码"——而本仓库的规矩是量过才写（`probe/` 下两个探测脚本都是这么来的）。
 - 第 4 项决定是否敢作为"正式支持"发布。
 
-**影响面**：所有 macOS / Linux 上的 Qoder 桌面端用户，「零配置读应用凭据」的卖点在那些
-平台上仍不存在；README 的「平台边界」段已同步说明。
+**影响面**：所有 macOS / Linux 上的 Qoder 桌面端用户，「零配置读应用凭据」卖点在那些平台上仍
+不存在——设备登录那条替代路已实测可行，但**尚未接进 host**（见上），故用户侧行为一字未变；
+README 的「平台边界」段已同步说明。
 
 ---
 
