@@ -1,0 +1,316 @@
+/**
+ * The plugin's own credential file, one per region.
+ *
+ * This is the storage half of the device-login credential source
+ * (docs/issues/21-device-login-credential-source.md). The plugin has always
+ * refused to store a credential — it read the Qoder app's sign-in and never
+ * wrote one down — so this file is the first thing in the repository that
+ * holds a secret of its own, and every rule below exists because of that.
+ *
+ * What it holds, and why it is worth holding:
+ *
+ * - The device-login token is obtained by the user scanning a code, which is
+ *   the only credential path this plugin can offer that does not depend on the
+ *   desktop app being installed on THIS machine. The app's sign-in is wrapped
+ *   in the platform keystore (DPAPI on Windows), so its ciphertext cannot be
+ *   carried to another machine; a PAT can be carried but the user has to go
+ *   mint one in a web console first. A device-login token closes both gaps.
+ * - It is per region, because the two regions are two parallel lines
+ *   everywhere else in this plugin (see the three load-bearing facts in
+ *   AGENTS.md) and their credentials are not interchangeable.
+ *
+ * The three defects this file is written against, all of them taken from a
+ * sibling plugin's own incident write-up rather than invented here:
+ *
+ * 1. **A half-written file.** A crash between "create" and "fill" must never
+ *    leave a readable file with no token in it, so writes go to a sibling
+ *    `.tmp` and are renamed onto the target (the same shape `CatalogStore` and
+ *    `FileThrottleStore` already use).
+ * 2. **A read-modify-write that loses.** `read()` then `write()` is not atomic
+ *    against a second writer, and the two writers of this file are genuinely
+ *    concurrent: a token refresh (triggered by any request that finds the token
+ *    expired) and a sign-out (triggered by the user). Interleaved, a refresh
+ *    that started before the sign-out lands after it and the signed-out
+ *    credential **comes back on the next restart**. `update()` below is the
+ *    fix: the whole read-decide-write is serialized through one chain, so the
+ *    file's final state is always some serialization of the requested writes,
+ *    never a mix of two.
+ * 3. **A damaged file that eats the good one.** A parse failure must not be
+ *    treated as "empty, so write the default over it": that converts one bad
+ *    sector into permanent credential loss on the next save. The unreadable
+ *    file is moved aside under a unique name instead, so nothing is destroyed
+ *    that a human might still recover.
+ *
+ * Permissions: `0o600` on the file and `0o700` on its directory. This is
+ * deliberately NOT applied uniformly across the plugin's files — the catalog
+ * cache and the exchange throttle hold metadata and no secret, so they do not
+ * restrict anything. The rule is "tighten when the file holds a secret", and
+ * this one does.
+ *
+ * Reads and writes here never throw: a vault that cannot be reached degrades
+ * to "no device credential", which is exactly the pre-feature state. A failure
+ * that the user needs to know about (a sign-in that succeeded but could not be
+ * saved) is reported through the return value, so the caller can say it out
+ * loud — a silent failure here would leave the panel showing a signed-in
+ * account that does not survive a restart. See issue 16's rule.
+ *
+ * @module dsh-connect-qoder/credential-vault
+ */
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
+
+/** On-disk format this reader accepts; other versions read as absent. */
+export const VAULT_FORMAT_VERSION = 1
+
+/**
+ * One stored device-login credential.
+ *
+ * Epoch milliseconds throughout, and the two expiry fields are kept apart on
+ * purpose: the access token is short-lived (the platform mints one good for
+ * weeks) while the refresh token outlives it by about a year. Collapsing them
+ * would make "the access token expired, refresh it" indistinguishable from
+ * "the account is gone, sign in again", which are different sentences on the
+ * card and different actions for the user.
+ */
+export interface VaultRecord {
+  /** The access token sent upstream. Never logged, never rendered. */
+  token: string
+  /** The token that buys a new access token. Never logged, never rendered. */
+  refreshToken: string
+  /** Epoch ms the access token stops being usable. */
+  expiresAt: number
+  /** Epoch ms the refresh token stops being usable; then a sign-in is required. */
+  refreshTokenExpiresAt: number
+  /**
+   * The account's uid.
+   *
+   * Required, and required to be non-empty, because the upstream signature
+   * carries it: `authHeaders` puts it in the encrypted signature block and in
+   * the `Cosy-User` header. A refresh response does NOT carry it, so an
+   * implementation that replaced the stored credential with the refresh
+   * response would sign an empty uid — measured on both regions as
+   * `403 {"code":"101","message":"Signature invalid"}`. Keeping it here is what
+   * lets the merge in `device-login.ts` have something to keep.
+   */
+  userID: string
+  /** Display name, when the platform published one. */
+  name: string
+  /** Display email, when the platform published one. */
+  email: string
+  /** The machine identity this credential was issued against. */
+  machineID: string
+  /** When this record was last written, epoch ms. Diagnostic only. */
+  savedAt: number
+}
+
+export interface CredentialVaultOptions {
+  /** Where the vault file lives. Required. */
+  path: string
+  /** Wall clock, injectable for tests. Defaults to `Date.now`. */
+  now?: () => number
+  logger?: { warn?: (message: string, error?: unknown) => void }
+}
+
+/**
+ * A field of a parsed record, read defensively.
+ *
+ * Records written by an older build, or edited by hand, must not be able to
+ * produce a credential with `undefined` where a string is expected: the
+ * signature is built from these, and a `undefined` there surfaces upstream as
+ * an authentication failure rather than as the shape problem it is.
+ */
+function text(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
+
+/** A timestamp field, in epoch ms. The on-disk form is a number; seconds are not accepted. */
+function stamp(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+/**
+ * Read one value out of a parsed record into a {@link VaultRecord}.
+ *
+ * Returns `undefined` for anything that is not a whole, plausible record. The
+ * bar is deliberately high — a `token` and a non-empty `userID` are the two
+ * fields without which the credential cannot be used at all, and a record
+ * missing either is treated as absent rather than as a credential that will
+ * fail upstream.
+ */
+export function vaultRecordFrom(value: unknown): VaultRecord | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  if (record.version !== VAULT_FORMAT_VERSION) return undefined
+  const token = text(record.token)
+  const userID = text(record.userID)
+  const refreshToken = text(record.refreshToken)
+  if (token === undefined || token === '' || userID === undefined || userID === '') return undefined
+  return {
+    token,
+    refreshToken: refreshToken ?? '',
+    expiresAt: stamp(record.expiresAt) ?? 0,
+    refreshTokenExpiresAt: stamp(record.refreshTokenExpiresAt) ?? 0,
+    userID,
+    name: text(record.name) ?? '',
+    email: text(record.email) ?? '',
+    machineID: text(record.machineID) ?? '',
+    savedAt: stamp(record.savedAt) ?? 0,
+  }
+}
+
+/**
+ * One region's credential file, with serialized read-modify-write.
+ *
+ * @see module:dsh-connect-qoder/credential-vault for why each rule exists.
+ */
+export class CredentialVault {
+  /** Where the vault file lives. */
+  path: string
+  /** The wall clock, stamped into `savedAt` and used for the quarantine name. */
+  private now: () => number
+  /** Optional logger for a failed write or an unreadable file. */
+  private logger?: { warn?: (message: string, error?: unknown) => void }
+  /**
+   * The tail of the write chain; see {@link CredentialVault.update}.
+   *
+   * Every mutation is appended here, so two mutations can never interleave
+   * their read-decide-write. It is a promise chain rather than a boolean "busy"
+   * flag because the work is synchronous: a caller must still be able to queue.
+   */
+  private chain: Promise<unknown> = Promise.resolve()
+
+  constructor({ path, now = () => Date.now(), logger }: CredentialVaultOptions) {
+    this.path = path
+    this.now = now
+    this.logger = logger
+  }
+
+  /**
+   * Read the stored credential, or `null`.
+   *
+   * `null` covers every "there is nothing usable here" case on purpose: no
+   * file, an unreadable file, a foreign version, or a record missing the fields
+   * a signature needs. The caller's answer to all of them is the same — treat
+   * this region as having no device credential — and keeping them distinct here
+   * would invite a caller to invent a second, differently-worded version of
+   * that answer.
+   *
+   * A file that exists but cannot be PARSED is quarantined (see
+   * {@link CredentialVault.quarantine}) so the next write does not overwrite
+   * it. A file that parses but is the wrong shape is left alone: it is
+   * evidence of a version skew, not of damage, and the next write replaces it.
+   */
+  read(): VaultRecord | null {
+    if (!existsSync(this.path)) return null
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(readFileSync(this.path, 'utf8'))
+    } catch (error) {
+      this.quarantine(error)
+      return null
+    }
+    return vaultRecordFrom(parsed) ?? null
+  }
+
+  /**
+   * Move an unparseable file aside, keeping the bytes.
+   *
+   * The name carries the clock so repeated failures accumulate rather than
+   * overwrite each other — the point is to lose nothing that a human might
+   * recover a token from. Failing to move it is not worth an error: the next
+   * write replaces the file either way, and the caller is already being told
+   * there is no credential.
+   */
+  private quarantine(error: unknown): void {
+    try {
+      renameSync(this.path, `${this.path}.corrupt-${this.now()}`)
+      this.logger?.warn?.(`dsh-connect-qoder: kept an unreadable credential file as ${this.path}.corrupt-*`)
+    } catch (renameError) {
+      this.logger?.warn?.(`dsh-connect-qoder: could not set aside an unreadable credential file ${this.path}`, renameError)
+    }
+    this.logger?.warn?.(`dsh-connect-qoder: could not read credential file ${this.path}`, error)
+  }
+
+  /**
+   * Write a record atomically, with owner-only permissions.
+   *
+   * @returns whether the bytes actually landed. A `false` is a fact the caller
+   *   must surface: a credential that could not be saved still works for this
+   *   process, but the user has signed in for nothing unless they are told.
+   */
+  save(record: VaultRecord): boolean {
+    const tmp = `${this.path}.${process.pid}.tmp`
+    try {
+      mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
+      writeFileSync(
+        tmp,
+        JSON.stringify({ version: VAULT_FORMAT_VERSION, ...record }, null, 2),
+        { encoding: 'utf8', mode: 0o600 },
+      )
+      // Rename onto the target rather than writing it in place: on Windows the
+      // rename-over-existing works (MoveFileEx), and a crash therefore leaves
+      // either the old credential or the new one, never a truncated file.
+      renameSync(tmp, this.path)
+      return true
+    } catch (error) {
+      try {
+        if (existsSync(tmp)) unlinkSync(tmp)
+      } catch {
+        // A leftover temp file is inert; the next write overwrites it.
+      }
+      this.logger?.warn?.(`dsh-connect-qoder: could not save credential file ${this.path}`, error)
+      return false
+    }
+  }
+
+  /** Remove the stored credential. An absent file is a no-op, not an error. */
+  private remove(): boolean {
+    try {
+      if (existsSync(this.path)) unlinkSync(this.path)
+      return true
+    } catch (error) {
+      this.logger?.warn?.(`dsh-connect-qoder: could not remove credential file ${this.path}`, error)
+      return false
+    }
+  }
+
+  /**
+   * Atomically apply one change to the stored credential.
+   *
+   * The mutator receives the CURRENT stored record (re-read inside the chain,
+   * not passed in by the caller) and returns the record to store, or `null` to
+   * remove the file. Because the read, the decision and the write all happen
+   * inside one chain step, a concurrent `update` cannot land between another
+   * one's read and its write.
+   *
+   * This is the whole reason the class exists rather than callers doing
+   * `read()`/`save()` themselves: a sign-out and a token refresh are both
+   * ordinary events, and interleaved they resurrect a signed-out credential.
+   *
+   * @returns whether the file's contents ended up as requested. A rejected
+   *   promise is never used to report a storage failure — the caller needs to
+   *   distinguish "the disk refused" from "the operation threw".
+   */
+  update(mutator: (current: VaultRecord | null) => VaultRecord | null): Promise<boolean> {
+    const step = this.chain.then(() => {
+      const current = this.read()
+      const next = mutator(current)
+      return next === null ? this.remove() : this.save(next)
+    })
+    // The chain must survive a throwing mutator, or every later update would
+    // reject on a promise nobody ever handled.
+    this.chain = step.catch(() => undefined)
+    return step
+  }
+
+  /**
+   * Forget the stored credential, serialized against in-flight updates.
+   *
+   * Goes through the same chain as {@link CredentialVault.update} so that a
+   * refresh which has already read the record cannot write it back after the
+   * sign-out lands.
+   */
+  clear(): Promise<boolean> {
+    return this.update(() => null)
+  }
+}
