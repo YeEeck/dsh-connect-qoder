@@ -27,9 +27,9 @@
  */
 import { test, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 import { CredentialVault, VAULT_FORMAT_VERSION, vaultRecordFrom } from '../src/host/credential-vault.ts'
 
@@ -228,4 +228,57 @@ test('clearing an absent vault is a no-op, not an error', async () => {
   const vault = new CredentialVault({ path: join(tempDir(), 'never-written.json'), now: clock })
   assert.strictEqual(await vault.clear(), true)
   assert.strictEqual(vault.read(), null)
+})
+
+// The residue half of the red-line-2 pair: `save` writes `${path}.${pid}.tmp`
+// before renaming it into place. A crash (or a kill) between the write and the
+// rename leaves a plaintext 0600 credential sitting in the directory forever —
+// the catch inside `save` only cleans the path its own process walks. Sweep
+// runs at the start of the NEXT save; it may only touch files that match this
+// vault's own name and are older than any honest write could be.
+
+test('a stale temp left by a crashed save is swept by the next one', () => {
+  const dir = tempDir()
+  const path = join(dir, 'vault.json')
+  // The sweep compares against the real wall clock, so this vault uses it too.
+  const vault = new CredentialVault({ path })
+  assert.strictEqual(vault.save(record({ token: 'dt-first' })), true)
+
+  const orphan = join(dir, `${basename(path)}.999999.tmp`)
+  writeFileSync(orphan, JSON.stringify(record({ token: 'dt-crash' })))
+  const old = Math.floor((Date.now() - 120_000) / 1000)
+  utimesSync(orphan, old, old)
+  assert.ok(existsSync(orphan))
+
+  assert.strictEqual(vault.save(record({ token: 'dt-second' })), true)
+  assert.ok(!existsSync(orphan), 'a day-old plaintext residue must not outlive the next save')
+  assert.strictEqual(vault.read().token, 'dt-second')
+})
+
+test('the sweep leaves live temps and unrelated neighbours alone', () => {
+  const dir = tempDir()
+  const path = join(dir, 'vault.json')
+  const vault = new CredentialVault({ path })
+  vault.save(record({ token: 'dt-first' }))
+
+  const old = Math.floor((Date.now() - 120_000) / 1000)
+  // A matching temp that is too young to be a crash residue — some writer is
+  // possibly mid-rename with it. Sweeping it would break THEIR save.
+  const live = join(dir, `${basename(path)}.888888.tmp`)
+  writeFileSync(live, 'in flight')
+  // Aged, but NOT this vault's name: sweeping these is exactly the issue-01
+  // class of bug (the cleaner deleting files it does not own).
+  const strangers = ['other.txt', 'vault-backup.json.999999.tmp', 'vault.json.999999.bak']
+  for (const name of strangers) {
+    const stranger = join(dir, name)
+    writeFileSync(stranger, 'not mine')
+    utimesSync(stranger, old, old)
+  }
+  utimesSync(live, Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000))
+
+  assert.strictEqual(vault.save(record({ token: 'dt-second' })), true)
+  assert.ok(existsSync(live), 'a fresh matching temp belongs to a live writer, not to the sweep')
+  for (const name of strangers) {
+    assert.ok(existsSync(join(dir, name)), `${name} is not this vault's file to delete`)
+  }
 })

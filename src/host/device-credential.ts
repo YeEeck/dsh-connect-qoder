@@ -35,7 +35,7 @@ export const REFRESH_FAILURE_TTL_MS = 60 * 1000
 /**
  * What the panel should say about this source.
  *
- * Deliberately five states rather than two. "You have not signed in on this
+ * Deliberately six states rather than two. "You have not signed in on this
  * machine" and "your credential file will not parse" send the user to different
  * places, so collapsing them into one "not signed in" is the failure this
  * repo's first red line is about: a silent, wrong explanation.
@@ -49,6 +49,12 @@ export type DeviceCredentialStatus =
   | { state: 'expired' }
   /** The service refused to renew, or the renewal could not be reached. */
   | { state: 'refresh-failed'; reason: string }
+  /**
+   * The renewal succeeded but the file refused it: this process holds a good
+   * token that the disk does not. The session keeps running — but it dies at
+   * the next restart, and a panel that said `ok` would be lying about that.
+   */
+  | { state: 'save-failed'; reason: string }
   /** A vault file exists but cannot be used; the file is the problem, not the sign-in. */
   | { state: 'unreadable'; reason: string }
 
@@ -61,6 +67,15 @@ export type DeviceCredentialStatus =
  * to see.
  */
 export const DEVICE_APP_NAME = 'device-login'
+
+/**
+ * The reason a `save-failed` state reports.
+ *
+ * Stable text, because the panel renders it verbatim as the note's detail —
+ * like every other reason in this module, changing it is a copy change, not a
+ * refactor.
+ */
+export const DEVICE_SAVE_FAILED_REASON = 'the renewed credential could not be written to its file'
 
 export interface DeviceCredentialDeps {
   /** The plugin's region id: `qoder-cn` or `qoder`. */
@@ -145,6 +160,15 @@ export class DeviceCredentialSource {
   /** When a renewal was last refused/failed, and what the service said. */
   private refusedAt: number | undefined
   private refusedReason = ''
+  /**
+   * The last record this process renewed but could not write to disk.
+   *
+   * Exists for `save-failed`: the disk copy is already spent, so without this
+   * every cache miss after the failed write would re-post the refresh — a
+   * request storm over a storage problem. Cleared when a write lands, when the
+   * disk shows bytes at least as new, or when a sign-out deletes the file.
+   */
+  private memRecord: VaultRecord | undefined
 
   constructor({ region, vault, fetchImpl, now = () => Date.now(), logger }: DeviceCredentialDeps) {
     this.region = region
@@ -203,7 +227,12 @@ export class DeviceCredentialSource {
   async forget(): Promise<boolean> {
     this.retry()
     const cleared = await this.vault.clear()
-    if (cleared) this.last = { state: 'none' }
+    if (cleared) {
+      // The in-memory copy of a rotation the disk refused goes with the file:
+      // a signed-out machine must have nothing left to serve.
+      this.memRecord = undefined
+      this.last = { state: 'none' }
+    }
     return cleared
   }
 
@@ -220,6 +249,10 @@ export class DeviceCredentialSource {
   async load(): Promise<LoadedCredential | undefined> {
     const read = this.vault.readResult()
     if (read.kind === 'absent') {
+      // A file deleted outside this process — sign-out, or a human with a
+      // shell — retires the memory copy too: this region has no credential,
+      // and one hidden in a private field is not the user's to keep serving.
+      this.memRecord = undefined
       this.last = { state: 'none' }
       return undefined
     }
@@ -238,6 +271,23 @@ export class DeviceCredentialSource {
 
     const record = read.record
     const now = this.now()
+
+    // An in-memory copy shadows only the STALE disk record. The moment the
+    // file carries bytes at least as new as ours — a re-login landed, or a
+    // write finally succeeded — the file is the truth and this process lets
+    // go of its private copy.
+    if (this.memRecord !== undefined && Number(record.savedAt) >= Number(this.memRecord.savedAt)) {
+      this.memRecord = undefined
+    }
+    if (this.memRecord !== undefined && Number(this.memRecord.expiresAt) > now) {
+      // Renewed but unwritable: served from memory, and NOT worth another
+      // refresh POST — re-asking on every cache miss over a storage problem is
+      // the storm this copy exists to prevent. The state says what is true:
+      // usable now, gone at the next restart.
+      this.last = { state: 'save-failed', reason: DEVICE_SAVE_FAILED_REASON }
+      return credentialOf(this.memRecord, this.region, now)
+    }
+
     if (Number(record.expiresAt) > now) {
       this.last = { state: 'ok' }
       return credentialOf(record, this.region, now)
@@ -283,18 +333,66 @@ export class DeviceCredentialSource {
     // response does not carry, and the request would then be refused with
     // "Signature invalid" -- measured on both regions, see the module header.
     const rotated = outcome.payload
-    const saved = await this.vault.update(() => recordOf(rotated, record.machineID, this.now()))
-    if (!saved) {
-      // The credential in hand is good right now, so this is not a request
-      // failure -- but it will be renewed again on the next expiry, and the
-      // user should be able to find out why nothing is being remembered.
-      this.logger?.warn?.(
-        'dsh-connect-qoder: renewed a device credential but could not store it; it will be renewed again',
-      )
-    }
+    const rotatedRecord = recordOf(rotated, record.machineID, this.now())
+    let displaced = false
+    let superseded: VaultRecord | undefined
+    const saved = await this.vault.update((current) => {
+      if (current === null) {
+        // A sign-out landed while this renewal was on the wire. The chain
+        // serialises writers that go through it — this one read its record
+        // from outside it — so the guard has to be here: writing the rotated
+        // record back would resurrect the credential the user just deleted.
+        // The deletion wins.
+        displaced = true
+        return null
+      }
+      if (current.token !== record.token) {
+        // The file now holds a different sign-in than the one this rotation
+        // was computed from (a re-login inside the refresh window). Our copy
+        // is built from bytes no longer on disk; leave theirs there.
+        superseded = current
+        return current
+      }
+      return rotatedRecord
+    })
     this.refusedAt = undefined
     this.refusedReason = ''
+    if (displaced) {
+      // Signed out mid-renewal: the file is gone, so the panel must not claim
+      // a credential that exists only in this field. Declining the request is
+      // the sign-out being honoured; serving it would be the resurrection's
+      // last gasp.
+      this.memRecord = undefined
+      this.last = { state: 'none' }
+      return undefined
+    }
+    if (superseded !== undefined) {
+      this.memRecord = undefined
+      if (Number(superseded.expiresAt) > now) {
+        this.last = { state: 'ok' }
+        return credentialOf(superseded, this.region, now)
+      }
+      // Their copy has lapsed too. The next load renews from bytes that
+      // actually exist; this request declines rather than serve a rotation
+      // computed from a record that no longer does, and no status is claimed
+      // for a rotation this load did not keep.
+      return undefined
+    }
+    if (!saved) {
+      // The renewal in hand is good right now, so this is not a request
+      // failure — but the disk does not hold it. Keep it in memory (the next
+      // expiry must not storm the refresh endpoint over a storage problem),
+      // and say through the panel what is true: this session dies at the
+      // next restart. `ok` would be a lie until a write lands.
+      this.memRecord = rotatedRecord
+      this.logger?.warn?.(
+        'dsh-connect-qoder: renewed a device credential but could not store it; it is held in memory only and will not survive a restart',
+      )
+      this.last = { state: 'save-failed', reason: DEVICE_SAVE_FAILED_REASON }
+      return credentialOf(rotatedRecord, this.region, now)
+    }
+    this.memRecord = undefined
     this.last = { state: 'ok' }
-    return credentialOf(recordOf(rotated, record.machineID, this.now()), this.region, now)
+    return credentialOf(rotatedRecord, this.region, now)
   }
 }

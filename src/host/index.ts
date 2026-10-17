@@ -1236,6 +1236,10 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
     if (report.releasedRoutes > 0) {
       ctx.logger.debug?.(`dsh-connect-qoder: released ${report.releasedRoutes} card route registration(s)`)
     }
+    // In-flight device sign-in attempts are memory only, but leaving them
+    // means a disposed fiber still holds two live timers and a verifier per
+    // attempt for five minutes. Clear the table when the routes die.
+    loginFlow.clear()
   })
 
   // Publish the settings surface. Without this the namespace a provider

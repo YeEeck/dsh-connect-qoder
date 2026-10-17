@@ -23,6 +23,7 @@ import { join } from 'node:path'
 import { CredentialVault, VAULT_FORMAT_VERSION } from '../src/host/credential-vault.ts'
 import {
   DEVICE_APP_NAME,
+  DEVICE_SAVE_FAILED_REASON,
   DeviceCredentialSource,
   REFRESH_FAILURE_TTL_MS,
 } from '../src/host/device-credential.ts'
@@ -288,7 +289,7 @@ test('a vault file from another version reads as unreadable, and is not quaranti
   assert.strictEqual(source.status.state, 'unreadable')
 })
 
-test('a rotation that cannot be stored is still served, and complains', async () => {
+test('a rotation that cannot be stored is served, says save-failed, and stops storming', async () => {
   const warnings = []
   const network = stubbingFetch()
   // A vault whose read works and whose write does not: the real case is a full
@@ -308,15 +309,67 @@ test('a rotation that cannot be stored is still served, and complains', async ()
   })
 
   // The credential in hand is good for this request, so refusing to serve it
-  // would be wrong -- but the user must be able to find out why nothing is
-  // being remembered.
+  // would be wrong -- but `ok` would claim a disk copy that does not exist.
+  // The panel must be able to say "a restart will not survive this".
   const credential = await source.load()
   assert.ok(credential !== undefined, 'a storage failure must not break the request it can still serve')
   assert.strictEqual(credential.token, 'dt-rotated')
   assert.strictEqual(credential.userID, 'uid-abc')
-  assert.deepStrictEqual(source.status, { state: 'ok' })
+  assert.deepStrictEqual(source.status, { state: 'save-failed', reason: DEVICE_SAVE_FAILED_REASON })
   assert.strictEqual(warnings.length, 1)
   assert.match(warnings[0], /could not store/)
+
+  // The disk copy never moved: it is still the lapsed `dt-stale`. Without the
+  // in-memory survivor, this second load would POST a fresh renewal on top of
+  // one that just succeeded -- one more request per expiry, forever, over a
+  // storage problem the service knows nothing about.
+  const again = await source.load()
+  assert.strictEqual(network.calls.length, 1, 'a save failure must not storm the refresh endpoint')
+  assert.strictEqual(again?.token, 'dt-rotated')
+  assert.strictEqual(again?.userID, 'uid-abc')
+  assert.deepStrictEqual(source.status, { state: 'save-failed', reason: DEVICE_SAVE_FAILED_REASON })
+})
+
+test('a sign-out that lands during a renewal is not resurrected by it', async () => {
+  // The whole point of the `displaced` guard: the renewal read its record
+  // from OUTSIDE the vault chain, so the chain's serialisation does not
+  // protect this window on its own. `forget()` runs mid-flight; the rotation
+  // that resolves afterwards must delete-wins, not write the user away from.
+  const dir = tempDir()
+  const path = join(dir, '.qoder-auth.qoder-cn.json')
+  const vault = new CredentialVault({ path, now: () => NOW })
+  await vault.save(liveRecord({ expiresAt: NOW - HOUR, token: 'dt-stale' }))
+
+  let release = () => {}
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+  const network = { calls: 0 }
+  const fetchImpl = async (url, init) => {
+    network.calls += 1
+    await gate
+    return new Response(JSON.stringify(ROTATED_BODY), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  const source = new DeviceCredentialSource({
+    region: 'qoder-cn',
+    vault,
+    fetchImpl,
+    now: () => NOW,
+  })
+
+  const inflight = source.load()
+  // Let the renewal reach the (gated) fetch before signing out.
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.strictEqual(network.calls, 1)
+  assert.strictEqual(await source.forget(), true)
+
+  release()
+  assert.strictEqual(await inflight, undefined, 'the sign-out must be honoured, not served the rotation')
+  assert.deepStrictEqual(source.status, { state: 'none' })
+  assert.ok(!existsSync(path), 'the renewal must not write the deleted file back')
 })
 
 test('a throwing network is reported, never thrown out of load', async () => {

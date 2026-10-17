@@ -56,11 +56,19 @@
  *
  * @module dsh-connect-qoder/credential-vault
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 
 /** On-disk format this reader accepts; other versions read as absent. */
 export const VAULT_FORMAT_VERSION = 1
+
+/**
+ * How long one of a writer's `.tmp` leftovers must have sat untouched before a
+ * save treats it as crash debris rather than an in-flight write. Far above any
+ * real write (the rename follows the write in microseconds), far below a crash
+ * nobody is cleaning up after.
+ */
+const STALE_TEMP_MS = 60_000
 
 /**
  * One stored device-login credential.
@@ -273,6 +281,7 @@ export class CredentialVault {
    */
   save(record: VaultRecord): boolean {
     const tmp = `${this.path}.${process.pid}.tmp`
+    this.sweepStaleTemps()
     try {
       mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
       writeFileSync(
@@ -289,10 +298,51 @@ export class CredentialVault {
       try {
         if (existsSync(tmp)) unlinkSync(tmp)
       } catch {
-        // A leftover temp file is inert; the next write overwrites it.
+        // This name is overwritten by the next write from this process; a
+        // crash between the write and the rename is reclaimed by
+        // sweepStaleTemps once the leftover goes stale.
       }
       this.logger?.warn?.(`dsh-connect-qoder: could not save credential file ${this.path}`, error)
       return false
+    }
+  }
+
+  /**
+   * Clear temp files from interrupted writes.
+   *
+   * The catch above can only clean up when this process still gets to run it:
+   * a kill between the write and the rename leaves the token in cleartext next
+   * to the vault with nothing to reclaim it. Sweeping at the start of every
+   * save bounds that window. The candidate set is deliberately narrow — this
+   * vault's own directory, names starting with this vault's own basename plus
+   * a dot and ending in `.tmp`, older than STALE_TEMP_MS, never including the
+   * name currently being written — so a live writer's temp, this process or
+   * another machine profile, is never yanked out from under it, and no name
+   * this vault could not have written is ever a candidate. unlink does not
+   * follow links: a planted symlink goes, its target anywhere else does not.
+   * Every removal is best-effort: a temp that will not die today is retried
+   * on the next save, never a save failure.
+   */
+  private sweepStaleTemps(): void {
+    const dir = dirname(this.path)
+    const prefix = `${basename(this.path)}.`
+    const own = `${prefix}${process.pid}.tmp`
+    const now = this.now()
+    let names: string[]
+    try {
+      names = readdirSync(dir)
+    } catch {
+      return // no directory yet: nothing to sweep
+    }
+    for (const name of names) {
+      if (!name.startsWith(prefix) || !name.endsWith('.tmp') || name === own) continue
+      const path = join(dir, name)
+      try {
+        if (now - statSync(path).mtimeMs < STALE_TEMP_MS) continue
+        unlinkSync(path)
+      } catch {
+        // Unreadable or unwilling: the next save tries again.
+      }
     }
   }
 

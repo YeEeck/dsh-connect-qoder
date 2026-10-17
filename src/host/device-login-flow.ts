@@ -9,7 +9,8 @@
  * if the panel was closed or DSH restarted.
  *
  * So the session lives here, in memory, keyed by region, and the card polls it
- * once a second. Nothing about the pending session is written to disk: a
+ * every two seconds (`POLL_MS` in `src/client/device-login-panel.tsx`).
+ * Nothing about the pending session is written to disk: a
  * half-finished sign-in is not worth surviving a restart, and the verifier is a
  * secret that does not need a persistence story. An attempt that is never
  * finished ages out instead.
