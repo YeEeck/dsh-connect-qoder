@@ -298,6 +298,23 @@ export function RegionUsage({ t, entry, campaignsOpen, onCampaignsToggle }: Regi
 					{t(campaignsNotice, campaignsNotice === "usage.promotionsUnavailable" ? { reason: entry.campaignsError ?? "" } : undefined)}
 				</p>
 			) : null}
+			{/* 本地请求计数器（仅本地口径）：上游不给每日上限，只报「用完了」，
+			    所以这是本客户端经本插件自计的对话轮数，与魔搭社区兄弟插件同款本地口径。
+			    查不到（count 为 undefined）画 `—`，不冒充 `0`；撞到每日限流时附
+			    「今日额度疑似用尽（本地统计，仅供参考）」注——诚实标注这是本地推断。 */}
+			<div className="dsm-qoder-usage-sep" />
+			{entry.requestsToday !== undefined ? (
+				<p className="dsm-qoder-usage-local">
+					{t("usage.requestsToday", { count: entry.requestsToday })}
+					{entry.requestsExhausted === true ? (
+						<span className="dsm-qoder-usage-local-note">{t("usage.requestsExhausted")}</span>
+					) : null}
+				</p>
+			) : (
+				<p className="dsm-qoder-usage-local dsm-qoder-usage-local-unavailable">
+					{t("usage.requestsUnavailable")}
+				</p>
+			)}
 		</div>
 	);
 }

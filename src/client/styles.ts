@@ -166,6 +166,11 @@ const QODER_CARD_CSS = [
 ".dsm-qoder-usage-promo{margin:0;font-size:11px;line-height:1.6;color:var(--dsw-alias-label-secondary,#61666b)}",
 	".dsm-qoder-usage-promo a{color:inherit}",
 	".dsm-qoder-usage-sep{height:1px;background:var(--dsw-alias-border-l2,#36373b);margin:0}",
+	// 本地请求计数器行：与上方 Credits 配额块视觉上区分开（这是本地口径、非上游
+	// 商务额度），用 tertiary 灰 + 小字号；撞限流注用 warn 色，与胶囊保持一致。
+	".dsm-qoder-usage-local{margin:2px 0 0;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;font-size:11px;line-height:1.6;color:var(--dsw-alias-label-tertiary,#999)}",
+	".dsm-qoder-usage-local-note{color:var(--dsw-alias-state-warn-primary,#f79009)}",
+	".dsm-qoder-usage-local-unavailable{font-style:italic}",
 	".dsm-qoder-usage-spacer{flex:1}",
 	// Model row: a picker-visibility checkbox on the left, the name and its
 	// rate in the middle, the image choice on the right.

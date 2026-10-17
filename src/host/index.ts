@@ -60,6 +60,7 @@ import { publishRegions as publishRegionSet } from './publish-regions.ts'
 import { __dshQoderUmidState, exchangePat, fetchModels, fetchUsage } from './upstream.ts'
 import type { UsageSnapshot } from './upstream.ts'
 import { isProtocolShapeChangedError } from './errors.ts'
+import { RequestCounter } from './request-counter.ts'
 import {
   modelsHandler,
   saveHandler,
@@ -756,6 +757,7 @@ async function startRegion(
   ctx: HostContext,
   enabledIdsFor: (regionId: string) => string[],
   device: DeviceCredentialSource | undefined,
+  requestCounter: RequestCounter,
 ): Promise<{ region: Region; runtime: RegionRuntime; shim: ShimHandle } | undefined> {
   const runtime = new RegionRuntime(region, ctx, device)
 
@@ -796,6 +798,7 @@ async function startRegion(
     // stale; the next resolveCredential re-reads the app's store.
     invalidateCredential: () => runtime.invalidateCredential(),
     logger: ctx.logger,
+    requestCounter,
   })
   try {
     await shim.ready
@@ -995,8 +998,15 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
    * cannot witness a concurrent start. See the guard there.
    */
   const pendingStarts = new Set<string>()
+  // 本地请求计数器：按 region + 上海本地日分文件，落在 $DSH_HOME。每次对话轮
+  // 由 shim 调 bump，今日读数由 usage 路由随 region 下发。计数失败只降级、不
+  // 阻塞对话；越界防护在模块内（region/日期白名单），绝不写目录外。
+  const globalRequestCounter = new RequestCounter({
+    basePath: (filename) => qoderCatalogPath(filename),
+    logger: ctx.logger,
+  })
   for (const region of REGIONS) {
-    const entry = await startRegion(region, ctx, enabledIdsFor, deviceSources.get(region.id))
+    const entry = await startRegion(region, ctx, enabledIdsFor, deviceSources.get(region.id), globalRequestCounter)
     if (entry !== undefined) started.push(entry)
   }
   if (started.length === 0) {
@@ -1382,6 +1392,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
         // Same seam the activation warn reads, so the card's explanation and
         // the log line can never disagree about why the round is missing.
         umidState: __dshQoderUmidState,
+        requestCounter: globalRequestCounter,
       }),
     }], routeReleases, ctx.logger)
   })
@@ -1436,7 +1447,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
       pendingStarts.add(region.id)
       let entry: Awaited<ReturnType<typeof startRegion>>
       try {
-        entry = await startRegion(region, ctx, enabledIdsFor, deviceSources.get(region.id))
+        entry = await startRegion(region, ctx, enabledIdsFor, deviceSources.get(region.id), globalRequestCounter)
       } finally {
         // Cleared on both paths, so a failed start does not wedge the region
         // out of every future reload — that would trade a leak for a region

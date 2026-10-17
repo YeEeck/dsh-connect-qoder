@@ -79,7 +79,14 @@ export const zhUsage = {
 	"pill.modelLabel": "当前模型",
 	"pill.offpeakActive": "错峰折扣生效 · 费率 {rate}",
 	"pill.offpeakIdle": "错峰窗口 {window} · 未生效",
-	"pill.offpeakRemaining": "剩余 {time}"
+	"pill.offpeakRemaining": "剩余 {time}",
+	// 本地请求计数器（本客户端经本插件发往上游的每日对话轮数）。上游不给每日上限，
+	// 只报「用完了」，所以这是本地自计——与魔搭社区兄弟插件同款本地口径。桌面端与
+	// Web 端各记各的；官方总量以 Qoder 为准。`requestsToday` 不可用（count 为 null）
+	// 画 `—`，不冒充 `0`。撞到每日限流时附 `requestsExhausted` 注（仅本地推断，不保证）。
+	"usage.requestsToday": "今日经本客户端请求 {count} 次",
+	"usage.requestsUnavailable": "今日本地请求数暂不可用",
+	"usage.requestsExhausted": "今日额度疑似已用尽（本地统计，仅供参考）"
 };
 /** English — usage panel copy. */
 export const enUsage = {
@@ -131,5 +138,12 @@ export const enUsage = {
 	"pill.modelLabel": "Current model",
 	"pill.offpeakActive": "Off-peak active · rate {rate}",
 	"pill.offpeakIdle": "Off-peak window {window} · inactive",
-	"pill.offpeakRemaining": "{time} remaining"
+	"pill.offpeakRemaining": "{time} remaining",
+	// See the zh note: local request counter, self-counted (upstream only says
+	// "used up", never the limit), same local-only口径 as the ModelScope sibling
+	// plugin. Desktop and Web count separately. When unavailable, show an
+	// unavailable line rather than a fake 0.
+	"usage.requestsToday": "Requested {count} times via this client today",
+	"usage.requestsUnavailable": "Local request count unavailable today",
+	"usage.requestsExhausted": "Daily allowance may be used up (local estimate, for reference)"
 };

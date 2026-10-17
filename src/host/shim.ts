@@ -65,6 +65,15 @@ export interface ShimOptions {
   logger?: PluginLogger
   /** Injected so a test can force a queue rejection without the real gateway. */
   runChat?: RunChat
+  /**
+   * 本地请求计数器。每次对话轮（调 `runChat` 之前）在此 +1——重试是同一轮内部
+   * 的事，不重复计；撞到每日限流时调 `markExhausted` 标记本地估计。挂 `undefined`
+   * 时静默跳过（不阻塞对话），由宿主决定是否启用。
+   */
+  requestCounter?: {
+    bump(region: string): { count: number | null; day: string | null }
+    markExhausted(region: string): void
+  }
 }
 
 /** The live shim handle a region's runtime holds. */
@@ -245,6 +254,7 @@ export function createQoderShim(options: ShimOptions): ShimHandle {
     // on demand — and a 503 that carried no `Retry-After` was exactly the kind
     // of regression that would ship unnoticed.
     runChat = streamChat,
+    requestCounter,
   } = options
   const SHARED_SECRET = randomBytes(32).toString('base64url')
 
@@ -394,6 +404,10 @@ export function createQoderShim(options: ShimOptions): ShimHandle {
     let iterator: ChatStream
     let first: IteratorResult<UpstreamChunk>
     try {
+      // 本地口径：每次对话轮在真正发往上游前 +1。重试是同一轮内部的事，计数只算
+      // 一发；计数器缺失（宿主未启用）则静默跳过，不阻塞对话链路（红线 1：计数
+      // 失败不得把对话也拖垮）。
+      requestCounter?.bump(region.id)
       iterator = runChat(region, credential, request, controller.signal)
       // Pull the first chunk before committing to a status code, so an auth or
       // quota failure surfaces as an HTTP error rather than a broken stream.
@@ -429,6 +443,9 @@ export function createQoderShim(options: ShimOptions): ShimHandle {
       // delay on something that must not be retried is what produced the
       // original symptom ("重试延迟：7350 毫秒" on a request no retry could fix).
       if (thrownFlag(error, 'dailyLimit') === true) {
+        // 本地口径：撞到每日限流，把今日标记为「额度疑似用尽」。这是本插件的本地推断
+        // （上游只报「用完了」），卡片会诚实标注「仅供参考」。计数器缺失时静默跳过。
+        requestCounter?.markExhausted(region.id)
         writeError(res, 429, 'daily_limit_exceeded', describeThrown(error))
         return
       }

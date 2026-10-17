@@ -98,6 +98,17 @@ export interface CardUsageRegion {
 	 */
 	unavailableReason?: string
 	checkin?: CardCheckin
+	/**
+	 * 本地口径：今日经本客户端发出的对话轮数，由本插件本地自计（上游不给上限，
+	 * 只报「用完了」）。不可用为 `undefined`——客户端画 `—` 而非冒充 `0`
+	 * （与 `composer-usage-pill.tsx` 头文件 `0` vs `—` 的裁定一致）。
+	 */
+	requestsToday?: number
+	/**
+	 * 本地推断：今日是否撞到每日限流（shim 收到 `daily_limit_exceeded` 时标记）。
+	 * 这是本插件的本地估计，非上游官方状态；true 时卡片诚实标注「仅供参考」。
+	 */
+	requestsExhausted?: boolean
 	[key: string]: unknown
 }
 

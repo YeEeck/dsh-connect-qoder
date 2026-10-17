@@ -493,6 +493,24 @@ function ActiveUsagePill({ t, region, modelKey }: ActiveUsagePillProps) {
 						</div>
 					) : null}
 
+					{/* 本地请求计数器（仅本地口径）：上游不给每日上限，只报「用完了」，
+					    这是本客户端经本插件自计的对话轮数。查不到画 `—` 不冒充 `0`；撞到
+					    每日限流时附「今日额度疑似用尽（本地统计，仅供参考）」注。 */}
+					{usage?.requestsToday !== undefined ? (
+						<div style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "11px", color: "var(--dsw-alias-label-tertiary, #999)" }}>
+							<span>{t("usage.requestsToday", { count: usage.requestsToday })}</span>
+							{usage.requestsExhausted === true ? (
+								<span style={{ color: "var(--dsw-alias-state-warn-primary, #f79009)" }}>
+									{t("usage.requestsExhausted")}
+								</span>
+							) : null}
+						</div>
+					) : (
+						<div style={{ fontSize: "11px", color: "var(--dsw-alias-label-tertiary, #999)" }}>
+							{t("usage.requestsUnavailable")}
+						</div>
+					)}
+
 					{checkin !== undefined && checkin.active === true ? (
 						<div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
 							{checkin.todayCheckedIn === true ? (

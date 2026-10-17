@@ -202,6 +202,16 @@ export interface UsageDeps {
    * field; when absent the response simply omits the hint.
    */
   umidState?: () => { available: boolean; reason?: string }
+  /**
+   * 本地请求计数器（可选）。挂上时把「今日经本客户端发出的对话轮数」随每个
+   * region 下发（`requestsToday`），以及「今日额度疑似用尽」标记
+   * （`requestsExhausted`，本地推断、仅供参考）。缺失则不下发这些字段——旧宿主
+   * / 未启用时卡片照常渲染，只是没有本地计数行。
+   */
+  requestCounter?: {
+    read(region: string): { count: number | null; day: string | null }
+    readExhausted(region: string): boolean
+  }
 }
 
 /**
@@ -231,7 +241,20 @@ export async function usageHandler(
       }
       try {
         const usage = await runtime.readUsage(force)
-        return usage === undefined ? { ...base, available: false } : { ...base, available: true, ...usage }
+        // 本地口径：今日经本客户端发出的对话轮数 + 是否本地判定额度疑似用尽。
+        // 计数不可用（count 为 null）时不下发 `requestsToday`——客户端把「查不到」
+        // 画成 `—` 而非冒充 `0`（与 `composer-usage-pill.tsx` 头文件 `0` vs `—`
+        // 的裁定一致）。`requestsExhausted` 仅在为 true 时下发，避免无谓的字段噪声。
+        const requestsToday = deps.requestCounter?.read(runtime.region.id)
+        const requestsExhausted = deps.requestCounter?.readExhausted(runtime.region.id) === true
+        const requestsField: Record<string, unknown> = {}
+        if (requestsToday !== undefined && requestsToday.count !== null) {
+          requestsField.requestsToday = requestsToday.count
+        }
+        if (requestsExhausted) requestsField.requestsExhausted = true
+        return usage === undefined
+          ? { ...base, available: false, ...requestsField }
+          : { ...base, available: true, ...usage, ...requestsField }
       } catch (error) {
         deps.logger.warn?.(
           `dsh-connect-qoder: ${runtime.region.displayName} usage read failed`,
