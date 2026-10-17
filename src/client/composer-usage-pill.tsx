@@ -62,7 +62,7 @@
  */
 import * as react from "react"
 import { formatCountdown, formatTokenCount, usageUnavailableKey } from "./card-model.ts"
-import type { CardModelRow, CardUsageRegion, TranslateFn } from "./card-model.ts"
+import type { CardModelRow, CardQuota, CardUsageRegion, TranslateFn } from "./card-model.ts"
 import {
 	isQoderRegion,
 	selectedRegionOf,
@@ -274,6 +274,30 @@ function ActiveUsagePill({ t, region, modelKey }: ActiveUsagePillProps) {
 		}
 	}, [load, region]);
 
+	// 紧凑额度行：标签 + 内联进度条 + 剩余数（单行，用于个人资源包和专属资源包）。
+	const compactQuotaRow = (label: string, q: CardQuota | null | undefined) => {
+		if (!usableTotal(q)) return null;
+		const qTier = tierOfQuota(q);
+		// 与主额度同源的比例计算：优先上游 percentage，缺失用 used/total 反推。
+		const pRaw = num(q!.percentage);
+		const totalN = num(q!.total);
+		const usedN = num(q!.used);
+		const p = pRaw !== null ? pRaw : (totalN !== null && totalN > 0 && usedN !== null ? Math.min(1, Math.max(0, usedN / totalN)) : null);
+		return (
+			<div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "11px" }}>
+				<span style={{ flex: "0 0 auto", color: "var(--dsw-alias-label-secondary, #61666b)" }}>{label}</span>
+				<div style={{ flex: "1 1 auto", height: "4px", borderRadius: "999px", background: "var(--dsw-alias-bg-layer-2, #2a2b31)", overflow: "hidden" }}>
+					{p !== null ? (
+						<div style={{ height: "100%", width: `${Math.round(p * 100)}%`, borderRadius: "999px", background: TIER_DOT[qTier], transition: "width .3s ease" }} />
+					) : null}
+				</div>
+				<span style={{ flex: "0 0 auto", fontWeight: "600", color: TIER_INK[qTier], fontVariantNumeric: "tabular-nums" }}>
+					{formatCredits(remainingOf(q))} {t("usage.credits")}
+				</span>
+			</div>
+		);
+	};
+
 	return (
 		<span
 			className="dsm-qoder-composer-pill"
@@ -475,20 +499,16 @@ function ActiveUsagePill({ t, region, modelKey }: ActiveUsagePillProps) {
 						</div>
 					)}
 
-					{Array.isArray(usage?.dedicatedPackages) && usage.dedicatedPackages.length > 0 ? (
-						<div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-							<div style={{ fontSize: "11px", color: "var(--dsw-alias-label-secondary, #61666b)" }}>
-								{t("usage.dedicatedPackage")}
-							</div>
-							{usage.dedicatedPackages.map((item, index) => (
-								<div key={index} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "8px", fontSize: "12px", color: "var(--dsw-alias-label-primary, #e6e6e6)" }}>
-									<span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-										{`${t("usage.remaining")} ${formatCredits(remainingOf(item))}`}
-									</span>
-									<span style={{ fontSize: "11px", color: "var(--dsw-alias-label-tertiary, #999)", whiteSpace: "nowrap" }}>
-										{usableTotal(item) ? `${formatCredits(num(item.total))} ${t("usage.credits")}` : ""}
-									</span>
-								</div>
+					{/* 个人资源包（当套餐 Credits 为主额度时作为次级额度显示）。 */}
+					{usableTotal(usage?.userQuota) && usableTotal(usage?.addOnQuota) ? (
+						compactQuotaRow(t("usage.resourcePackage"), usage!.addOnQuota)
+					) : null}
+
+					{/* 专属资源包：每条画进度条，与插件页卡片同源。 */}
+					{Array.isArray(usage?.dedicatedPackages) && usage.dedicatedPackages.some((item) => usableTotal(item)) ? (
+						<div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+							{usage.dedicatedPackages.map((item) => (
+								compactQuotaRow(t("usage.dedicatedPackage"), item)
 							))}
 						</div>
 					) : null}
