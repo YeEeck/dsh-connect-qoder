@@ -39,3 +39,4 @@ gh issue create --repo eghrhegpe/dsh-connect-qoder --label P0 --title "$(head -1
 | [19-lib-committed-github-install.md](19-lib-committed-github-install.md) | **P2 已决策** | `github:` 源安装缺 `lib/` 静默失效 → `lib/` 改回受版本管理 + CI 新鲜度门禁（pnpm 11 allowBuilds 审批流证据链） |
 | [20-llm-handoff-detached.md](20-llm-handoff-detached.md) | ~~P0~~ **已修** | `llm` 方法以裸引用交出、`this` 丢失 → provider 注册失败短路 activate，七条卡片路由全 404（`src` 已修、`lib/` 过期未重建；接线改箭头包裹 + `this:` 类型守卫 + `host-handoff-binding.test.js` 产物级守门；失败不再回退、改由 always-mounted `/status` 报告） |
 | [21-device-login-credential-source.md](21-device-login-credential-source.md) | P2 | 设备登录作第三个凭据来源：两区闭环已实测（登录/目录/刷新均成立），缺的是接进 host + 自有 vault；含刷新信封少 `user_id` 的坑与 RMW 竞态教训；**改「三条事实」第 2 条需用户同意** |
+| [22-upstream-split.md](22-upstream-split.md) | P2 | 2,335 行的 upstream.ts 拆成 11 个叶模块 + ~50 行门面：12 测试 + 5 probe + 3 importer 一行不改的拆分蓝图；顺带核销死导出 fetchCampaigns、双 Retry-After 解析器、readUmidInfo 重复实现、fetchUsage 吞错四处 |
