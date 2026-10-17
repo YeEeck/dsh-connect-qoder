@@ -220,6 +220,7 @@ export interface UsageDeps {
    */
   tokenCounter?: {
     read(region: string): { total: number | null; cached: number | null; day: string | null }
+    readHistory(region: string, days?: number): { day: string; total: number; cached: number }[]
   }
 }
 
@@ -278,6 +279,11 @@ export async function usageHandler(
           requestsField.tokensToday = tokens.total ?? 0
           if (tokens.cached !== null && tokens.cached > 0) {
             requestsField.tokensCachedToday = tokens.cached
+          }
+          // 多日历史：过去 7 天每天一个记录，供客户端渲染柱状图。
+          const history = tokenCounter.readHistory(runtime.region.id, 7)
+          if (history.length > 0) {
+            requestsField.tokensHistory = history
           }
         }
         return usage === undefined

@@ -63,6 +63,7 @@
 import * as react from "react"
 import { formatCountdown, formatTokenCount, usageUnavailableKey } from "./card-model.ts"
 import type { CardModelRow, CardQuota, CardUsageRegion, TranslateFn } from "./card-model.ts"
+import { TokenHistoryChart } from "./token-history-chart.tsx"
 import {
 	isQoderRegion,
 	selectedRegionOf,
@@ -539,6 +540,9 @@ function ActiveUsagePill({ t, region, modelKey }: ActiveUsagePillProps) {
 							</span>
 						) : null}
 					</div>
+					{usage?.tokensHistory && usage.tokensHistory.length > 0 ? (
+						<TokenHistoryChart history={usage.tokensHistory} t={t} />
+					) : null}
 
 					{checkin !== undefined && checkin.active === true ? (
 						<div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>

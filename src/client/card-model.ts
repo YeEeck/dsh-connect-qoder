@@ -125,6 +125,11 @@ export interface CardUsageRegion {
 	 * 仅 `>0` 时下发，作为 `tokensToday` 的补充注。
 	 */
 	tokensCachedToday?: number
+	/**
+	 * 本地口径：过去 7 天每日 token 消耗历史，按 day 升序排列。供客户端渲染
+	 * 柱状图、计算周总量与日均。
+	 */
+	tokensHistory?: { day: string; total: number; cached: number }[]
 	[key: string]: unknown
 }
 

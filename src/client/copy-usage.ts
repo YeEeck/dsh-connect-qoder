@@ -90,7 +90,13 @@ export const zhUsage = {
 	// 本地 token 消耗累加器（上游每轮明确下发的 total_tokens / cached_tokens，本地
 	// 聚合）。与请求计数同行显示（· 分隔），所以去掉重复的「今日经本客户端」前缀。
 	"usage.tokensToday": "消耗 {tokens} tokens",
-	"usage.tokensCachedToday": "（其中缓存命中 {cached}）"
+	"usage.tokensCachedToday": "（其中缓存命中 {cached}）",
+	"usage.tokensHistoryTitle": "Token 用量（7 天）",
+	"usage.tokensWeeklyTotal": "周总 {total}",
+	"usage.tokensDailyAvg": "日均 {avg}",
+	"usage.tokensTrendUp": "↑ 涨 {pct}%",
+	"usage.tokensTrendDown": "↓ 跌 {pct}%",
+	"usage.tokensTrendFlat": "— 持平"
 };
 /** English — usage panel copy. */
 export const enUsage = {
@@ -155,5 +161,11 @@ export const enUsage = {
 	// count with a " · " separator, so the "via this client today" prefix is
 	// shared.
 	"usage.tokensToday": "spent {tokens} tokens",
-	"usage.tokensCachedToday": "(including {cached} cached)"
+	"usage.tokensCachedToday": "(including {cached} cached)",
+	"usage.tokensHistoryTitle": "Token usage (7 days)",
+	"usage.tokensWeeklyTotal": "Weekly {total}",
+	"usage.tokensDailyAvg": "Avg {avg}",
+	"usage.tokensTrendUp": "↑ +{pct}%",
+	"usage.tokensTrendDown": "↓ −{pct}%",
+	"usage.tokensTrendFlat": "— flat"
 };

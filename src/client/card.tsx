@@ -8,6 +8,7 @@ import type { SettingsScope } from "./settings-write.ts"
 // because its editable state already lives in `controller.ts`.
 import { QoderUsagePanel } from "./usage-panel.tsx"
 import { QoderAccountPanel } from "./account-panel.tsx"
+import { TokenHistoryChart } from "./token-history-chart.tsx"
 // The editable-state machine. `imageModeOf`, `enabledIdsFor`, `IMAGE_MODES` and
 // the sentinel are imported rather than re-declared, so the rules the JSX reads
 // and the rules the tests assert are literally the same functions.
@@ -317,6 +318,9 @@ export function RegionUsage({ t, entry, campaignsOpen, onCampaignsToggle }: Regi
 					<span className="dsm-qoder-usage-local-note">{t("usage.tokensCachedToday", { cached: formatTokenCount(entry.tokensCachedToday) })}</span>
 				) : null}
 			</p>
+			{entry.tokensHistory && entry.tokensHistory.length > 0 ? (
+				<TokenHistoryChart history={entry.tokensHistory} t={t} />
+			) : null}
 		</div>
 	);
 }

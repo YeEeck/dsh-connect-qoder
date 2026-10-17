@@ -51,6 +51,16 @@ export interface TokenCountSnapshot {
   day: string | null
 }
 
+/** 一天的历史记录（多日统计用）。 */
+export interface TokenDayRecord {
+  /** 本地日历日（YYYY-MM-DD）。 */
+  day: string
+  /** 当日经本客户端累计消耗的 token 总数。 */
+  total: number
+  /** 当日经本客户端累计命中的缓存 token 数。 */
+  cached: number
+}
+
 /** 构造选项：路径前缀 + 注入时钟 + 日志。 */
 export interface TokenCounterOptions {
   /** 生成文件名前缀的函数（注入 `qoderCatalogPath`，永远落在 `$DSH_HOME` 内）。 */
@@ -138,6 +148,44 @@ export class TokenCounter {
     } catch {
       return { total: null, cached: null, day }
     }
+  }
+
+  /**
+   * 读取过去 N 天的 token 消耗历史（多日统计用）。
+   *
+   * 从 `now` 向前逐天扫描本地日历日文件，跳过不存在的日期与损坏文件。
+   * 返回值按 day 升序排列（最早在前），客户端可据此渲染柱状图或趋势线。
+   *
+   * @param region - region id。
+   * @param days - 回溯天数，默认 7；上限由 `keepDays` 隐式决定。
+   * @returns 历史记录数组（可能为空）。
+   */
+  readHistory(region: string, days: number = 7): TokenDayRecord[] {
+    const safeRegion = sanitizeComponent(region)
+    if (safeRegion === null) return []
+    const now = this.now()
+    const records: TokenDayRecord[] = []
+    const scannedDays = Math.min(days, this.keepDays)
+    for (let i = 0; i < scannedDays; i++) {
+      const day = localDayKey(now - i * DAY_MS)
+      if (day === null) continue
+      const path = this.basePath(`.qoder-token-count.${safeRegion}.${day}.json`)
+      if (!existsSync(path)) continue
+      try {
+        const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown
+        const record = parsed as { version?: unknown; total?: unknown; cached?: unknown }
+        if (record?.version !== TOKEN_FORMAT_VERSION) continue
+        const total = Number(record.total)
+        const cached = Number(record.cached)
+        if (!Number.isFinite(total) || total < 0) continue
+        const cachedValue = Number.isFinite(cached) && cached >= 0 ? Math.floor(cached) : 0
+        records.push({ day, total: Math.floor(total), cached: cachedValue })
+      } catch {
+        // 损坏文件跳过，不影响其它天。
+      }
+    }
+    // 按 day 升序排列（i 越大越早，所以反转）。
+    return records.reverse()
   }
 
   /**
