@@ -344,6 +344,26 @@ export function formatContextWindowForUi(tokens: unknown): string {
 }
 
 /**
+ * A short label for a raw daily token count: 15441 → "15.4k", 1500000 → "1.5m".
+ * Uses the same K/M style as `formatContextWindowForUi` but keeps one decimal
+ * for precision (a daily total, not a model spec). Below 10 000 the comma
+ * separator stays — 1 500 is more legible than 1.5k.
+ */
+export function formatTokenCount(n: unknown): string {
+	const v = Math.max(0, Math.floor(Number(n) || 0));
+	if (v >= 1_000_000) return `${abbr(v / 1_000_000)}m`;
+	if (v >= 10_000) return `${abbr(v / 1_000)}k`;
+	return v.toLocaleString("en-US");
+}
+
+/** Truncate one decimal without round-up: 999.999 → "999.9", 15.0 → "15". */
+function abbr(x: number): string {
+	const int = Math.floor(x);
+	const dec = Math.floor((x - int) * 10);
+	return dec === 0 ? String(int) : `${int}.${dec}`;
+}
+
+/**
  * The window label for one model row.
  *
  * The host already computes this — `contextWindowLabel` on every row it serves

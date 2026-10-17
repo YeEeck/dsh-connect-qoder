@@ -28,6 +28,7 @@ import {
   rateLabelOf,
   formatCountdown,
   formatContextWindowForUi,
+  formatTokenCount,
   rateAt,
   describeThrown,
   providerRegistrationFailure,
@@ -102,6 +103,33 @@ test('formatContextWindowForUi shows a small window in full', () => {
 test('formatContextWindowForUi renders nothing for an unusable token count', () => {
   for (const n of [0, -1, Number.NaN, undefined]) {
     assert.equal(formatContextWindowForUi(n), '', `tokens=${String(n)} must yield ""`)
+  }
+})
+
+// --- formatTokenCount -------------------------------------------------------
+
+test('formatTokenCount keeps a comma separator below 10k', () => {
+  assert.equal(formatTokenCount(0), '0')
+  assert.equal(formatTokenCount(999), '999')
+  assert.equal(formatTokenCount(1500), '1,500')
+  assert.equal(formatTokenCount(9999), '9,999')
+})
+
+test('formatTokenCount abbreviates to k at 10k and above', () => {
+  assert.equal(formatTokenCount(10000), '10k')
+  assert.equal(formatTokenCount(15441), '15.4k')
+  assert.equal(formatTokenCount(999999), '999.9k')
+})
+
+test('formatTokenCount abbreviates to m at 1m and above', () => {
+  assert.equal(formatTokenCount(1000000), '1m')
+  assert.equal(formatTokenCount(1500000), '1.5m')
+  assert.equal(formatTokenCount(12345678), '12.3m')
+})
+
+test('formatTokenCount degrades to 0 for an unusable value', () => {
+  for (const n of [-1, Number.NaN, undefined, null]) {
+    assert.equal(formatTokenCount(n), '0', `n=${String(n)} must yield "0"`)
   }
 })
 

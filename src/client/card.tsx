@@ -30,6 +30,7 @@ import {
 	offPeakState,
 	formatCountdown,
 	formatContextWindowForUi,
+	formatTokenCount,
 	windowLabelOf,
 	rateAt,
 	refreshNoticeKey,
@@ -307,13 +308,13 @@ export function RegionUsage({ t, entry, campaignsOpen, onCampaignsToggle }: Regi
 					<span className="dsm-qoder-usage-local-unavailable">{t("usage.requestsUnavailable")}</span>
 				) : t("usage.requestsToday", { count: entry.requestsToday ?? 0 })}
 				{entry.tokensToday !== undefined ? (
-					<span> · {t("usage.tokensToday", { tokens: entry.tokensToday })}</span>
+					<span> · {t("usage.tokensToday", { tokens: formatTokenCount(entry.tokensToday) })}</span>
 				) : null}
 				{entry.requestsExhausted === true ? (
 					<span className="dsm-qoder-usage-local-note">{t("usage.requestsExhausted")}</span>
 				) : null}
 				{entry.tokensCachedToday !== undefined && entry.tokensCachedToday > 0 ? (
-					<span className="dsm-qoder-usage-local-note">{t("usage.tokensCachedToday", { cached: entry.tokensCachedToday })}</span>
+					<span className="dsm-qoder-usage-local-note">{t("usage.tokensCachedToday", { cached: formatTokenCount(entry.tokensCachedToday) })}</span>
 				) : null}
 			</p>
 		</div>

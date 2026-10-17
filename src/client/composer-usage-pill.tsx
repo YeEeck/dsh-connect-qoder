@@ -61,7 +61,7 @@
  * 只做渲染与 hook。
  */
 import * as react from "react"
-import { formatCountdown, usageUnavailableKey } from "./card-model.ts"
+import { formatCountdown, formatTokenCount, usageUnavailableKey } from "./card-model.ts"
 import type { CardModelRow, CardUsageRegion, TranslateFn } from "./card-model.ts"
 import {
 	isQoderRegion,
@@ -499,14 +499,14 @@ function ActiveUsagePill({ t, region, modelKey }: ActiveUsagePillProps) {
 							<span style={{ color: "var(--dsw-alias-label-tertiary, #999)" }}>
 								{t("usage.requestsUnavailable")}
 								{usage?.tokensToday !== undefined ? (
-									<><span> · </span>{t("usage.tokensToday", { tokens: usage.tokensToday })}</>
+									<><span> · </span>{t("usage.tokensToday", { tokens: formatTokenCount(usage.tokensToday) })}</>
 								) : null}
 							</span>
 						) : (
 							<span>
 								{t("usage.requestsToday", { count: usage?.requestsToday ?? 0 })}
 								{usage?.tokensToday !== undefined ? (
-									<><span> · </span>{t("usage.tokensToday", { tokens: usage.tokensToday })}</>
+									<><span> · </span>{t("usage.tokensToday", { tokens: formatTokenCount(usage.tokensToday) })}</>
 								) : null}
 								{usage?.requestsExhausted === true ? (
 									<><span> · </span><span style={{ color: "var(--dsw-alias-state-warn-primary, #f79009)" }}>{t("usage.requestsExhausted")}</span></>
@@ -515,7 +515,7 @@ function ActiveUsagePill({ t, region, modelKey }: ActiveUsagePillProps) {
 						)}
 						{usage?.tokensCachedToday !== undefined && usage.tokensCachedToday > 0 ? (
 							<span style={{ color: "var(--dsw-alias-state-success-primary, #12b76a)" }}>
-								{t("usage.tokensCachedToday", { cached: usage.tokensCachedToday })}
+								{t("usage.tokensCachedToday", { cached: formatTokenCount(usage.tokensCachedToday) })}
 							</span>
 						) : null}
 					</div>
