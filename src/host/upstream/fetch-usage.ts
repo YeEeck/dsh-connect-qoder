@@ -18,7 +18,7 @@ import { readJson, readCampaigns } from './api-calls.ts'
 import { windowIsOpen } from '../offpeak.ts'
 import { toEpochMs } from '../time.ts'
 import { checkinStateFrom } from '../claim.ts'
-import { describeThrown } from '../errors.ts'
+import { describeThrown, isProtocolShapeChangedError, ProtocolShapeChangedError } from '../errors.ts'
 import type { QoderCredential, Region } from '../domain.ts'
 
 /** One quota bucket as the usage panel renders it. */
@@ -133,6 +133,85 @@ function normalizeDedicatedPackage(value: unknown): DedicatedPackage | undefined
 }
 
 /**
+ * The fields whose presence proves the body is still a usage document.
+ *
+ * Both spellings of each key are accepted: the plain route answers snake_case,
+ * the presentation route has been seen with camelCase, and the panel has always
+ * read either. This is a triage list, not a schema — a field the upstream adds
+ * is invisible here and must stay that way; what it rules out is the OTHER
+ * reading, a body that parsed as JSON but is no longer about usage at all.
+ */
+const USAGE_FIELDS: readonly string[] = [
+  'user_quota',
+  'userQuota',
+  'add_on_quota',
+  'addOnQuota',
+  'dedicated_resource_packages',
+  'dedicatedResourcePackages',
+  'is_quota_exceeded',
+  'isQuotaExceeded',
+  'user_type',
+  'userType',
+  'expires_at',
+  'expiresAt',
+  'upgrade_url',
+  'upgradeUrl',
+  'display_mode',
+  'displayMode',
+]
+
+/**
+ * Narrow a usage payload to the record the snapshot fields are read from.
+ *
+ * The two routes answer the same body differently — `usagePresentationUrl`
+ * wraps it under `qoderUsage`, `usageUrl` returns it directly — so the unwrap
+ * has to happen somewhere. It used to happen by assumption: `qoderUsage ??
+ * data ?? payload`, then one `typeof === 'object'` test, and anything else
+ * became `undefined`, which the card rendered as "usage unavailable". After the
+ * clone's private protocol changes (it has no version negotiation) a renamed
+ * envelope therefore read as an account with nothing to show, and nothing told
+ * the user the plugin needs updating. That is the silent-failure shape red line
+ * 1 forbids, and the same triage the model list and chat already report.
+ *
+ * Three deliberate non-drift cases, because a false "update the plugin" is its
+ * own incident:
+ *
+ * - an empty object stays "no data" — it carries no evidence either way;
+ * - unknown fields alongside a known one are fine — the upstream may add;
+ * - the `usage` body is read from `qoderUsage` OR `data` OR the top level, so
+ *   either route's layout is accepted.
+ *
+ * @param payload - the parsed 200 body.
+ * @returns the envelope (for `displayMode`) and the usage record.
+ * @throws {ProtocolShapeChangedError} when the body is not a usage document.
+ */
+export function readUsageShape(payload: unknown): {
+  envelope: Record<string, unknown>
+  record: Record<string, unknown>
+} {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new ProtocolShapeChangedError(
+      `top level is ${payload === null ? 'null' : Array.isArray(payload) ? 'an array' : typeof payload}, not a usage envelope`,
+    )
+  }
+  const envelope = payload as Record<string, unknown>
+  const usage = envelope.qoderUsage ?? envelope.data ?? payload
+  if (usage === null || typeof usage !== 'object' || Array.isArray(usage)) {
+    throw new ProtocolShapeChangedError(
+      `usage body is ${usage === null ? 'null' : Array.isArray(usage) ? 'an array' : typeof usage}, not an object`,
+    )
+  }
+  const record = usage as Record<string, unknown>
+  const keys = Object.keys(record)
+  // Nothing to misread: "no usage" stays the honest empty answer.
+  if (keys.length === 0) return { envelope, record }
+  if (!keys.some((key) => USAGE_FIELDS.includes(key))) {
+    throw new ProtocolShapeChangedError(`no known usage field; keys present: ${keys.slice(0, 12).join(', ')}`)
+  }
+  return { envelope, record }
+}
+
+/**
  * The account's usage, shaped the way the IDE's panel presents it.
  *
  * Fields the plugin does not itself merge into a card are typed `unknown`
@@ -162,6 +241,15 @@ export interface UsageSnapshot {
    * the other's answers normally.
    */
   campaignsError?: string
+  /**
+   * Whether the campaigns read failed specifically as a protocol-shape change.
+   *
+   * The card cannot tell a transport failure ("the offers endpoint is down")
+   * from the upstream having renamed its envelope — but the remedy differs:
+   * one heals on its own, the other needs a plugin update. The flag says which
+   * one this is; `campaignsError` still carries the host's own words.
+   */
+  campaignsShapeChanged?: boolean
   checkin?: unknown
   isQuotaExceeded?: boolean
   source?: string
@@ -321,14 +409,12 @@ export async function fetchUsage(
   // The presentation route wraps the same body under `qoderUsage`; the plain
   // route returns it directly. Both spellings of each field are accepted.
   //
-  // Read through one record, so the unwrap is checked rather than assumed: a
-  // response that is neither object (a bare string, an array) answers the raw
-  // payload and falls through the object test below to `undefined`, which is
-  // the same "no usage to report" outcome the `?.` chain produced.
-  const envelope = payload === null || typeof payload !== 'object' ? {} : (payload as Record<string, unknown>)
-  const usage = envelope.qoderUsage ?? envelope.data ?? payload
-  if (usage === null || typeof usage !== 'object') return undefined
-  const record = usage as Record<string, unknown>
+  // The unwrap is TRIAGED rather than assumed: a body that is not a usage
+  // document any more (a bare string, an array, a renamed envelope) throws
+  // `ProtocolShapeChangedError`, which the usage route names in its answer so
+  // the card can say "the plugin needs updating" instead of "no usage". An
+  // empty object carries no evidence and still answers "no usage".
+  const { envelope, record } = readUsageShape(payload)
 
   const userQuota = normalizeQuotaBucket(record.user_quota ?? record.userQuota)
   const addOnQuota = normalizeQuotaBucket(record.add_on_quota ?? record.addOnQuota)
@@ -351,6 +437,7 @@ export async function fetchUsage(
   let campaigns: ReturnType<typeof projectCampaignRows> = []
   let checkin: ReturnType<typeof checkinStateFrom> | undefined
   let campaignsError: string | undefined
+  let campaignsShapeChanged = false
   try {
     const raw = await readCampaigns(region, credential, signal)
     campaigns = projectCampaignRows(raw)
@@ -361,6 +448,9 @@ export async function fetchUsage(
     // outlives the request.
     if (signal?.aborted) throw error
     campaignsError = describeThrown(error)
+    // A shape change is a different remedy from a transport failure, so it is
+    // flagged rather than left for the card to infer from the message text.
+    campaignsShapeChanged = isProtocolShapeChangedError(error)
   }
 
   const expiresAt = toEpochMs(record.expires_at ?? record.expiresAt)
@@ -380,6 +470,7 @@ export async function fetchUsage(
     dedicatedPackages,
     campaigns,
     ...(campaignsError !== undefined ? { campaignsError } : {}),
+    ...(campaignsShapeChanged ? { campaignsShapeChanged: true } : {}),
     ...(checkin !== undefined ? { checkin } : {}),
     isQuotaExceeded: isQuotaExceeded === true,
     source,

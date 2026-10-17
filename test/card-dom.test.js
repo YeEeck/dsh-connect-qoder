@@ -389,6 +389,49 @@ test('a failed campaigns read is named on the region it belongs to', async () =>
   )
 })
 
+test('an unreadable-by-shape usage block points at a plugin update, not the generic "cannot read"', async () => {
+  // A renamed upstream envelope cannot be waited out or signed past: the only
+  // remedy is updating the plugin. The generic "读不到用量" would offer a retry
+  // the user cannot succeed at, which is the failure mode issue 10 exists for.
+  const { container } = await mount({
+    usageRegions: [{ region: 'qoder-cn', available: false, unavailableReason: 'protocol-shape-changed' }],
+  })
+  const copy = text(container)
+  assert.match(copy, /插件|plugin/i, `the drift copy must name the plugin; got: ${copy.slice(0, 500)}`)
+  assert.doesNotMatch(copy, /暂时读不到用量|usage is unavailable/i, 'the generic failure copy must not render instead')
+})
+
+test('an ordinary read failure keeps the generic copy and does not blame the plugin version', async () => {
+  const { container } = await mount({
+    usageRegions: [{ region: 'qoder-cn', available: false, unavailableReason: 'read-failed' }],
+  })
+  assert.doesNotMatch(text(container), /插件|plugin/i, 'a transport blip must not be reported as a stale plugin')
+})
+
+test('a campaigns shape change is named as an update, not echoed as a raw host diagnostic', async () => {
+  // The campaigns failure used to be printed verbatim ("Qoder campaigns failed:
+  // …"). That is right for a broken endpoint (the reason is actionable) but
+  // wrong for a shape change: the fix is a plugin update, so the raw rejection
+  // text would send the user chasing a network problem that is not there.
+  const { container } = await mount({
+    usageRegions: [
+      {
+        region: 'qoder-cn',
+        available: true,
+        userQuota: { used: 25, total: 100, remaining: 75, percentage: 0.25, unit: 'credits' },
+        campaigns: [],
+        campaignsError: 'Qoder campaigns failed: no known campaigns field',
+        campaignsShapeChanged: true,
+      },
+    ],
+  })
+  const note = [...container.querySelectorAll('p')].find(
+    (n) => /活动|offer/i.test(text(n)) && /插件|plugin/i.test(text(n)),
+  )
+  assert.ok(note !== null, `the drift note must be visible; the panel said: ${text(container).slice(0, 500)}`)
+  assert.doesNotMatch(text(note), /no known campaigns field/, 'the raw host diagnostic is not user copy')
+})
+
 test('a rendered campaign wins over the campaigns-error note', async () => {
   // The note explains an ABSENT list. If a campaign is present there is nothing
   // to explain, and printing both would contradict the row right above it.

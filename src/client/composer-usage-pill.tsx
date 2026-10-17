@@ -61,7 +61,7 @@
  * 只做渲染与 hook。
  */
 import * as react from "react"
-import { formatCountdown } from "./card-model.ts"
+import { formatCountdown, usageUnavailableKey } from "./card-model.ts"
 import type { CardModelRow, CardUsageRegion, TranslateFn } from "./card-model.ts"
 import {
 	isQoderRegion,
@@ -404,9 +404,11 @@ function ActiveUsagePill({ t, region, modelKey }: ActiveUsagePillProps) {
 						</div>
 					) : (
 						// 未完成首次读 ≠ 读不到：前者只是还没答案（loading），后者是
-						// 真查过却没有——两种状态说两句话，不把未加载画成失败。
+						// 真查过却没有——两种状态说两句话，不把未加载画成失败。第三种
+						// 是协议漂移：宿主说明了原因时用与卡片同一套判断，避免胶囊说
+						// 「读不到」而实际是「该更新插件了」。
 						<div style={{ fontSize: "11px", color: "var(--dsw-alias-label-tertiary, #999)" }}>
-							{loadedOnce ? t("pill.unavailable") : t("pill.loading")}
+							{loadedOnce ? t(usageUnavailableKey(usage)) : t("pill.loading")}
 						</div>
 					)}
 

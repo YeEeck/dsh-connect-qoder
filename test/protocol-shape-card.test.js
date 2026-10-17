@@ -150,6 +150,25 @@ test('a malformed failures field cannot crash the card', () => {
   }
 })
 
+test('the card copy for an unreadable usage/account answer points at a plugin update', () => {
+  // The same contract as the roster stamp, for the OTHER three endpoints that
+  // can now report a shape change (usage / campaigns / account confirm): the
+  // user must be sent to "update the plugin", never to a login, because the
+  // credential is not the thing that broke.
+  for (const key of ['usage.protocolChanged', 'usage.promotionsProtocolChanged', 'account.confirmProtocolChanged']) {
+    const strings = [...BUNDLE.matchAll(new RegExp(`"${key.replace(/\./g, '\\.')}":\\s*"([^"]*)"`, 'g'))].map((m) => m[1])
+    assert.ok(strings.length >= 2, `expected a zh and an en string for ${key}, found ${strings.length}`)
+    for (const text of strings) {
+      assert.match(text, /插件|plugin/i, `${key} copy does not mention the plugin: ${text}`)
+      assert.doesNotMatch(
+        text,
+        /请(先)?重新登录。$|Please (re)?sign in\.?$/,
+        `${key} copy must not END by telling the user to sign in: ${text}`,
+      )
+    }
+  }
+})
+
 test('the card copy for a protocol change points at a plugin update, not a login', () => {
   // The wording is part of the contract, so it is asserted as text: the strings
   // ship in the bundle, and a rewording that sends the user to re-authenticate

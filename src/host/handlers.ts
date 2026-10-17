@@ -30,7 +30,7 @@ import { buildModelRowsPayload, projectModelRow } from './catalog-entry.ts'
 import type { RateHelpers } from './catalog-entry.ts'
 import { saveFieldOutcome } from './settings-save.ts'
 import type { SettingsService } from './settings-save.ts'
-import { classifyUpstreamError, describeThrown, providerRegistrationState } from './errors.ts'
+import { classifyUpstreamError, describeThrown, isProtocolShapeChangedError, providerRegistrationState } from './errors.ts'
 import type { DeviceLoginFlow } from './device-login-flow.ts'
 import type { DeviceCredentialStatus } from './device-credential.ts'
 import {
@@ -237,7 +237,15 @@ export async function usageHandler(
           `dsh-connect-qoder: ${runtime.region.displayName} usage read failed`,
           error,
         )
-        return { ...base, available: false }
+        // The card can only offer the right remedy if it knows which failure
+        // this is: a transport blip heals on its own, a renamed upstream
+        // envelope needs a plugin update. Everything else stays the generic
+        // "could not read" the card already renders.
+        return {
+          ...base,
+          available: false,
+          unavailableReason: isProtocolShapeChangedError(error) ? 'protocol-shape-changed' : 'read-failed',
+        }
       }
     }),
   )
@@ -622,6 +630,19 @@ export async function confirmHandler(
       identity: { name: info.name, email: info.email },
     })
   } catch (error) {
+    // A shape change is not the user's sign-in going bad: re-signing in cannot
+    // fix a response the plugin no longer understands, and calling it a
+    // sign-in-expired would send them through a login loop. It is reported as
+    // its own verdict so the card says "update the plugin" instead.
+    if (isProtocolShapeChangedError(error)) {
+      return sendJson(res, 200, {
+        region: region.id,
+        available: true,
+        confirmed: false,
+        kind: 'protocol-shape-changed',
+        detail: describeThrown(error).slice(0, 300),
+      })
+    }
     // Classify the way the shim does: a sign-in rejection is the one answer
     // that changes what the user should do (re-sign in, then re-read), so it is
     // named; everything else is a plain "could not confirm" with the transport

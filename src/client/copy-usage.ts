@@ -35,6 +35,11 @@ export const zhUsage = {
 	// 促销行读失败时的可见降级：配额数字照旧显示，但「今天没有活动」与
 	// 「活动没读出来」不再长得一样（红线 1）。{reason} 是宿主原话。
 	"usage.promotionsUnavailable": "活动信息暂不可用：{reason}",
+	// 协议漂移（docs/issues/10 的残留缺口）：上游 200 的正文不再是本插件认识的信封。
+	// 这不是「稍后再试」能好的——只有更新插件能修，所以不能借用「读不到用量」的
+	// 措辞让用户反复重试。「重新登录也没有用」是刻意写明的：账号是好的，是形状变了。
+	"usage.protocolChanged": "Qoder 返回了本插件不认识的格式——请更新插件（重新登录没有用）",
+	"usage.promotionsProtocolChanged": "活动接口返回了本插件不认识的格式——请更新插件（重新登录没有用）",
 	"usage.viewDetails": "查看详情",
 	"usage.credits": "Credits",
 	// The daily check-in. Wording follows dsh-connect-workbuddy's own
@@ -100,6 +105,10 @@ export const enUsage = {
 	"usage.promoCollapse": "Hide offers",
 	// See the zh note: the reason is the host's, and it is the whole message.
 	"usage.promotionsUnavailable": "Offers unavailable: {reason}",
+	// See the zh note: a shape change cannot be retried into working, so this
+	// copy points at a plugin update instead of borrowing the retry wording.
+	"usage.protocolChanged": "Qoder replied in a shape this plugin does not recognise — update the plugin (signing in again will not help)",
+	"usage.promotionsProtocolChanged": "The offers endpoint replied in a shape this plugin does not recognise — update the plugin (signing in again will not help)",
 	"usage.viewDetails": "View details",
 	"usage.credits": "Credits",
 	"usage.checkin": "Daily check-in",

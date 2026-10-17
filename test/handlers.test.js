@@ -42,6 +42,7 @@ import {
   statusHandler,
 } from '../src/host/handlers.ts'
 import { REGIONS } from '../src/host/credentials.ts'
+import { ProtocolShapeChangedError } from '../src/host/errors.ts'
 
 const CN = REGIONS.find((r) => r.id === 'qoder-cn')
 assert.ok(CN !== undefined, 'REGIONS lost the CN edition')
@@ -264,6 +265,37 @@ test('usage: a failing region is reported unavailable, the panel still answers 2
   })
   assert.equal(out.status, 200, 'one dead sign-in must not fail the whole panel')
   assert.equal(lastJson({ bodies }).regions[0].available, false)
+})
+
+test('usage: a shape-change failure is named so the card points at a plugin update', async () => {
+  // A renamed upstream envelope is not "try again later": the only remedy is
+  // updating the plugin. The route names the reason; the card maps it to that
+  // copy instead of the generic "usage unavailable".
+  const req = fakeReq({ url: '/plugins/dsh-connect-qoder/usage' })
+  const { res, out, bodies } = fakeRes(req)
+  await usageHandler(req, res, {
+    started: [{
+      region: CN,
+      runtime: stubRuntime({ readUsage: async () => { throw new ProtocolShapeChangedError('no known usage field') } }),
+    }],
+    logger: quiet,
+  })
+  assert.equal(out.status, 200)
+  const body = lastJson({ bodies }).regions[0]
+  assert.equal(body.available, false)
+  assert.equal(body.unavailableReason, 'protocol-shape-changed')
+})
+
+test('usage: an ordinary failure is NOT named as a shape change', async () => {
+  const req = fakeReq({ url: '/plugins/dsh-connect-qoder/usage' })
+  const { res, out, bodies } = fakeRes(req)
+  await usageHandler(req, res, {
+    started: [{ region: CN, runtime: stubRuntime({ readUsage: async () => { throw new Error('ETIMEDOUT') } }) }],
+    logger: quiet,
+  })
+  const body = lastJson({ bodies }).regions[0]
+  assert.equal(body.available, false)
+  assert.equal(body.unavailableReason, 'read-failed', 'a transport blip must not be blamed on the plugin version')
 })
 
 test('usage: an unavailable machine identity is reported so the card can explain itself', async () => {
@@ -608,6 +640,28 @@ test('confirm: a sign-in rejection names itself and invalidates the cached crede
   assert.equal(body.confirmed, false)
   assert.equal(body.kind, 'sign-in-expired', 'a dead sign-in must be named, not blurred into "unavailable"')
   assert.equal(runtime.invalidated, true, 'the re-read after a re-sign-in must pick up the fresh store')
+})
+
+test('confirm: a protocol-shape change is named, and does not invalidate the credential', async () => {
+  // Re-signing in cannot fix a response the plugin no longer understands, so
+  // this must NOT be reported as sign-in-expired (that would send the user
+  // through a login loop) and must NOT drop the cached credential.
+  const runtime = stubRuntime({ credential: { token: 't' } })
+  const req = fakeReq({ method: 'POST', url: '/plugins/dsh-connect-qoder/account/confirm' })
+  const { res, out, bodies } = fakeRes(req)
+  const pending = confirmHandler(req, res, {
+    regions: REGIONS,
+    started: [{ region: CN, runtime }],
+    confirmUserInfo: async () => { throw new ProtocolShapeChangedError('no identity field') },
+  })
+  post(req, { region: 'qoder-cn' })
+  await pending
+  const body = lastJson({ bodies })
+  assert.equal(out.status, 200)
+  assert.equal(body.available, true, 'the credential exists; only the answer is unreadable')
+  assert.equal(body.confirmed, false)
+  assert.equal(body.kind, 'protocol-shape-changed')
+  assert.equal(runtime.invalidated, false, 'a shape change is not the credential going bad')
 })
 
 test('confirm: any other failure is "unavailable", not "sign in again"', async () => {

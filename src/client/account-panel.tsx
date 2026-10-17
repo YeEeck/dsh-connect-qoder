@@ -441,6 +441,11 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 										{t("account.confirmExpired")}
 									</p>
 								) : null}
+								{activeResult?.kind === "protocol-shape-changed" ? (
+									<p className="dsm-qoder-account-note dsm-qoder-account-note-error">
+										{t("account.confirmProtocolChanged")}
+									</p>
+								) : null}
 								{activeResult?.kind === "unavailable" ? (
 									<p className="dsm-qoder-account-note dsm-qoder-account-note-error">
 										{t("account.confirmFailed", { detail: activeResult.detail ?? "" })}

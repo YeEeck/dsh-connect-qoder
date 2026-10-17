@@ -38,6 +38,43 @@ export async function readJson(response: Response, context: string): Promise<unk
 }
 
 /**
+ * Narrow a campaigns payload to the envelope {@link projectCampaignRows} reads.
+ *
+ * The endpoint is supplementary, but "no offers today" and "the offers envelope
+ * was renamed" used to be indistinguishable: the panel simply rendered nothing
+ * and the check-in card vanished, with no hint the plugin was out of step. The
+ * clone's private protocol has no version negotiation, so this is the failure
+ * that reaches users first after an upstream release.
+ *
+ * Deliberate non-drift cases: an empty object (nothing to misread) and a
+ * missing `campaigns` value (null/undefined) both stay "no campaigns".
+ *
+ * @param payload - the parsed 200 body.
+ * @returns the campaigns record.
+ * @throws {ProtocolShapeChangedError} when the body is not a campaigns document.
+ */
+export function readCampaignsShape(payload: unknown): Record<string, unknown> {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new ProtocolShapeChangedError(
+      `campaigns top level is ${payload === null ? 'null' : Array.isArray(payload) ? 'an array' : typeof payload}, not a campaigns envelope`,
+    )
+  }
+  const record = payload as Record<string, unknown>
+  const keys = Object.keys(record)
+  // A campaigns document may omit the `campaigns` ARRAY when nothing is
+  // running — the banner/claimable envelope fields are still there. So the
+  // known-envelope set accepts either, and a body with none of them is drift.
+  const KNOWN_ENVELOPE_FIELDS = ['campaigns', 'uid', 'showCampaign', 'claimable']
+  if (keys.length > 0 && !keys.some((key) => KNOWN_ENVELOPE_FIELDS.includes(key))) {
+    throw new ProtocolShapeChangedError(`no known campaigns field; keys present: ${keys.slice(0, 12).join(', ')}`)
+  }
+  if (record.campaigns !== null && record.campaigns !== undefined && !Array.isArray(record.campaigns)) {
+    throw new ProtocolShapeChangedError(`\`campaigns\` is ${typeof record.campaigns}, not an array`)
+  }
+  return record
+}
+
+/**
  * Read the raw campaigns payload once.
  *
  * Split from the old `fetchCampaigns` (deleted in cleanup #1: it had no
@@ -65,7 +102,7 @@ export async function readCampaigns(
     signal,
   })
   if (!response.ok) throw new Error(`Qoder campaigns failed: HTTP ${response.status}`)
-  return readJson(response, 'Qoder campaigns')
+  return readCampaignsShape(await readJson(response, 'Qoder campaigns'))
 }
 
 /**
@@ -344,6 +381,38 @@ export async function exchangePat(
 }
 
 /**
+ * Narrow a userinfo body to the record the identity fields are read from.
+ *
+ * Two envelopes occur (the identity sits under `data` or at the top level), and
+ * the card's 在线校验 turns this call into "your sign-in is valid" — so a body
+ * that is no longer the profile document must not be reported as a valid
+ * sign-in with an empty name. An empty object still answers `{}` (no identity
+ * to show, which the card renders as a plain confirm), but a non-empty body
+ * carrying no identity field at all is drift.
+ *
+ * @param data - the parsed 200 body.
+ * @returns the identity record.
+ * @throws {ProtocolShapeChangedError} when the body is not a profile document.
+ */
+export function readUserInfoShape(data: unknown): Record<string, unknown> {
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+    throw new ProtocolShapeChangedError(
+      `userinfo top level is ${data === null ? 'null' : Array.isArray(data) ? 'an array' : typeof data}, not a userinfo envelope`,
+    )
+  }
+  const envelope = data as Record<string, unknown>
+  const inner = envelope.data
+  const body = inner === null || typeof inner !== 'object' ? envelope : (inner as Record<string, unknown>)
+  const keys = Object.keys(body)
+  if (keys.length === 0) return body
+  const IDENTITY_FIELDS = ['id', 'user_id', 'name', 'nickname', 'email']
+  if (!keys.some((key) => IDENTITY_FIELDS.includes(key))) {
+    throw new ProtocolShapeChangedError(`no identity field; keys present: ${keys.slice(0, 12).join(', ')}`)
+  }
+  return body
+}
+
+/**
  * Fetch the signed-in account's profile.
  *
  * The request goes through `openApiHeaders` like every other OpenAPI call, so
@@ -376,13 +445,10 @@ export async function fetchUserInfo(
   }
   const data = await readJson(response, 'Qoder userinfo')
   // Two envelopes occur: the identity sits either under `data` or at the top
-  // level. Both hops are narrowed, so a body that is neither (a bare string, a
-  // number) answers `{}` and the fields below read as empty rather than
-  // throwing — the same "no identity" outcome the `??` chain produced, but
-  // checked instead of assumed.
-  const envelope = data === null || typeof data !== 'object' ? {} : (data as Record<string, unknown>)
-  const inner = envelope.data
-  const body = inner === null || typeof inner !== 'object' ? envelope : (inner as Record<string, unknown>)
+  // level. The narrowing is triaged (see `readUserInfoShape`) rather than
+  // assumed, so a renamed envelope surfaces as a shape change instead of an
+  // empty-but-"valid" sign-in.
+  const body = readUserInfoShape(data)
   return {
     userID: String(body.id ?? body.user_id ?? ''),
     name: String(body.name ?? body.nickname ?? ''),

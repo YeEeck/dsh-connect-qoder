@@ -82,6 +82,21 @@ export interface CardUsageRegion {
 	 * machine-identity hint.
 	 */
 	campaignsError?: string
+	/**
+	 * Whether the campaigns half failed as a protocol-shape change rather than
+	 * a transport failure. The remedy differs — one heals on its own, the other
+	 * needs a plugin update — so the card says which, instead of printing the
+	 * host's raw sentence for both.
+	 */
+	campaignsShapeChanged?: boolean
+	/**
+	 * Why the region's usage read failed, when the host names it.
+	 *
+	 * `protocol-shape-changed` means the upstream answer no longer has the
+	 * shape this plugin reads; `read-failed` (or a missing field, from a host
+	 * older than this) degrades to the generic copy.
+	 */
+	unavailableReason?: string
 	checkin?: CardCheckin
 	[key: string]: unknown
 }
@@ -389,6 +404,32 @@ export function refreshNoticeKey(value: unknown): string | null {
 	if (failures.some((f) => (f as { reason?: string } | null | undefined)?.reason === "protocol-shape-changed")) return "protocol-shape-changed";
 	if (failures.some((f) => (f as { reason?: string } | null | undefined)?.reason === "persist")) return "persist";
 	return "transient";
+}
+
+/**
+ * The copy key for a region whose usage the host could not read.
+ *
+ * A protocol-shape change is NOT "try again later": the upstream answer no
+ * longer has the shape this plugin reads, and only an update fixes it. Reusing
+ * the generic "unavailable" wording would leave the user retrying a read that
+ * cannot succeed — the silent failure this triage exists to end, and the same
+ * split `refreshNoticeKey` already makes for the model list. A host older than
+ * the `unavailableReason` field degrades to the old copy.
+ */
+export function usageUnavailableKey(entry: CardUsageRegion | null | undefined): string {
+	return entry?.unavailableReason === "protocol-shape-changed" ? "usage.protocolChanged" : "usage.unavailable";
+}
+
+/**
+ * The copy key for the offers line, when the campaigns read failed.
+ *
+ * Same split as {@link usageUnavailableKey}: a shape change needs the update
+ * wording, a transport failure keeps the host's own reason. `null` means there
+ * is nothing to say (no failure, or a rendered campaign wins over the note).
+ */
+export function campaignsNoticeKey(entry: CardUsageRegion | null | undefined): string | null {
+	if (entry?.campaignsShapeChanged === true) return "usage.promotionsProtocolChanged";
+	return typeof entry?.campaignsError === "string" && entry.campaignsError !== "" ? "usage.promotionsUnavailable" : null;
 }
 
 /**

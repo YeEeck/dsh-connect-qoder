@@ -55,9 +55,18 @@ chat 端点已分诊（`streamChat` 的 content-type + 不可读帧判定，`tes
 false`），shim 按 502 + 完整消息回给 agent，「插件需要更新」不再静默。守门在
 `test/chat-protocol-drift.test.js`。
 
-**仍未分诊的上游端点**：`fetchUsage` / `readCampaigns` / `fetchUserInfo` 各自只取
-自己那几个字段，形状变化对它们仍表现为"字段读不到"而非漂移告警；chat 端点已
-完成分诊（见上），这三个端点的分诊是剩余项。
+**上游端点形状分诊已全部落地（2026-10-17，issue 10 残留收尾）**：`fetchUsage` /
+`readCampaigns` / `fetchUserInfo` 三个端点补了信封形状分诊——`readUsageShape` /
+`readCampaignsShape` / `readUserInfoShape`（`src/host/upstream/fetch-usage.ts` /
+`api-calls.ts`）在 200 应答「顶层不是对象 / 包装层换了名字 / 非空正文里一个已知字段
+都没有」时抛 `ProtocolShapeChangedError`；`{}` 这类空正文仍按「无可展示数据」处理，
+不误报。`/usage` 路由回 `unavailableReason: 'protocol-shape-changed'`（普通失败是
+`read-failed`），`/account/confirm` 回 `kind: 'protocol-shape-changed'` 且**不**清凭据
+（重新登录治不了形状变化）；campaigns 半边在快照上带 `campaignsShapeChanged`，配额
+不受牵连。卡片对应文案统一指向「更新插件（重新登录没有用）」，守门在
+`test/usage-campaigns-error.test.js`、`test/handlers.test.js`、`test/card-dom.test.js`、
+`test/protocol-shape-card.test.js`。仍欠的是 issue 10 的周期性心跳探测（仍不单做：模型
+目录每 30 分钟刷新一次，每轮都在做形状分诊，已有等价的证据面）。
 
 **凭据 sweep 的身份守卫（issue 01）**：`sweepStaleOscryptDirs` 现在要求
 `lstat` 判真目录 + `.dsh-oscrypt` 标记文件 + `key.b64` 恰好解出 32 字节，

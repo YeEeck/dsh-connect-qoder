@@ -6,6 +6,10 @@ export const zhAccount = {
 	"account.confirmed": "在线校验通过：登录有效",
 	"account.confirmExpired": "在线校验发现登录已过期——在 Qoder 客户端里重新登录后点「重新读取登录状态」",
 	"account.confirmFailed": "在线校验失败：{detail}",
+	// 协议漂移不是登录坏了：上游 200 的正文换了形状，重新登录修不了它。与 usage
+	// 的 protocolChanged 同一套判断（host handlers 的 confirm 路由会单独报这个
+	// kind），措辞必须指向「更新插件」，不能落进「在线校验失败」让用户白登录。
+	"account.confirmProtocolChanged": "在线校验收到本插件不认识的接口格式——请更新插件（重新登录没有用）",
 	"account.state.ok": "正常",
 	"account.state.expired": "已过期",
 	"account.state.needs-app": "读不到",
@@ -86,6 +90,8 @@ export const enAccount = {
 	"account.download": "The Qoder client is missing — install {edition} from the Download section, then sign in",
 	"account.downloadLink": "Download {edition}",
 	"account.confirmExpired": "Confirmed: sign-in expired — sign in again in the Qoder client, then re-read",
+	// See the zh note: this is a shape change, not a lapsed sign-in.
+	"account.confirmProtocolChanged": "Confirmation hit an unrecognised API shape — update the plugin (signing in again will not help)",
 	"account.error": "Could not read the account states",
 	"account.offer": "Offer this edition",
 	"account.offerTitle": "Turning this off hides the edition's models from DSH's model picker; the sign-in, usage and model settings are kept, and turning it back on restores them.",

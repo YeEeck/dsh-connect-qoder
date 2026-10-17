@@ -33,6 +33,8 @@ import {
 	windowLabelOf,
 	rateAt,
 	refreshNoticeKey,
+	usageUnavailableKey,
+	campaignsNoticeKey,
 	providerRegistrationFailure,
 	describeThrown,
 } from "./card-model.ts"
@@ -195,13 +197,16 @@ export function RegionUsage({ t, entry, campaignsOpen, onCampaignsToggle }: Regi
 	if (entry.available !== true) {
 		return (
 			<div className="dsm-qoder-usage-block">
-				<p className="dsm-qoder-state">{t("usage.unavailable")}</p>
+				<p className="dsm-qoder-state">{t(usageUnavailableKey(entry))}</p>
 			</div>
 		);
 	}
 	const packages = Array.isArray(entry.dedicatedPackages) ? entry.dedicatedPackages : [];
 	const campaigns = Array.isArray(entry.campaigns) ? entry.campaigns : [];
 	const hasAny = entry.userQuota !== undefined || entry.addOnQuota !== undefined || packages.length > 0;
+	// The offers note is decided once: a rendered campaign always wins, and a
+	// shape change gets the update wording instead of the host's raw reason.
+	const campaignsNotice = campaigns.length === 0 ? campaignsNoticeKey(entry) : null;
 	return (
 		<div className="dsm-qoder-usage-block">
 			{!hasAny ? <p className="dsm-qoder-state">{t("usage.empty")}</p> : null}
@@ -285,11 +290,12 @@ export function RegionUsage({ t, entry, campaignsOpen, onCampaignsToggle }: Regi
 			)}
 			{/* The campaigns read failed. The quota above is real and stays, but a
 			    missing promo line must not read as "this account has no offers":
-			    the host sends the reason and it is printed here. Gated on an
-			    empty list so a rendered campaign always wins over the note. */}
-			{campaigns.length === 0 && typeof entry.campaignsError === "string" && entry.campaignsError !== "" ? (
+			    the host sends the reason and it is printed here. A shape change
+			    gets the "update the plugin" wording instead — re-reading cannot
+			    fix it — which is why the note is gated on `campaignsNotice`. */}
+			{campaignsNotice !== null ? (
 				<p className="dsm-qoder-account-note dsm-qoder-account-note-error">
-					{t("usage.promotionsUnavailable", { reason: entry.campaignsError })}
+					{t(campaignsNotice, campaignsNotice === "usage.promotionsUnavailable" ? { reason: entry.campaignsError ?? "" } : undefined)}
 				</p>
 			) : null}
 		</div>

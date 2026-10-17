@@ -274,6 +274,14 @@ Qoder 目录存在但 `Local State` 解不开时（正是账号面板要解释�
 - [ ] 新用例：`darwin` 分支有明确断言（当前是落进 linux 分支）；
 - [ ] 卡片在 `protocol-shape-changed` 时给出的下一步动作 ≠ "重新登录"。
 
+**进展（2026-10-17）**：形状分诊已覆盖 chat + `fetchUsage` / `readCampaigns` / `fetchUserInfo`
+四个面（判定与验收证据见 [issue 10](issues/10-protocol-drift-probe.md)；`darwin` 探测结论在
+`probe/machineos-probe.mjs`，证明网关不按 `MACHINE_OS` 分流，故不做"平台填错"检测）。
+上面三条验收标准的**实质**已由 `test/chat-protocol-drift.test.js`、
+`test/usage-campaigns-error.test.js`、`test/handlers.test.js`、`test/card-dom.test.js`、
+`test/protocol-shape-card.test.js` 覆盖；立项时的"启动 + 每 6 小时心跳探测"**不单做**——
+模型目录每 30 分钟刷新一次，每轮都在跑分诊，已有等价证据面。
+
 ---
 
 ## 5. P2 详情（技术债）

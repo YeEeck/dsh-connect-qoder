@@ -27,7 +27,7 @@ gh issue create --repo eghrhegpe/dsh-connect-qoder --label P0 --title "$(head -1
 | [07-credential-read-blocks-event-loop.md](07-credential-read-blocks-event-loop.md) | ~~P1~~ **已修**（异步化已做：`runUnwrap` + `execFile`，29 ms vs 490 ms 实测） | 账号路由同步起 PowerShell（上限 30 s） |
 | [08-keycache-staleness.md](08-keycache-staleness.md) | ~~P1~~ **已修** | `keyCache` 无失效路径 → 重装后永久 needs-app |
 | [09-card-mirrors-host-logic.md](09-card-mirrors-host-logic.md) | ~~P1~~ **已修**（错峰为必要重复，已有产物级门禁） | 卡片自算错峰价/窗口标签，与宿主分歧 |
-| [10-protocol-drift-probe.md](10-protocol-drift-probe.md) | ~~P1~~ **已修**（分诊落地；6 小时周期探测仍未做） | 上游协议漂移与"没登录"不可区分 |
+| [10-protocol-drift-probe.md](10-protocol-drift-probe.md) | ~~P1~~ **已修**（chat + usage/campaigns/userinfo 分诊全部落地；6 小时周期探测按"目录刷新已等价"不单做） | 上游协议漂移与"没登录"不可区分 |
 | [11-coverage-denominator.md](11-coverage-denominator.md) | ~~P2~~ **大部分已修**（module mocks 实测不可行，改走抽纯模块；`handlers.ts` 与 `publish-regions.ts` 两轮已进分母） | 44.7% 的 lib 代码不在覆盖率分母里 |
 | [12-small-fixes-batch.md](12-small-fixes-batch.md) | ~~P2~~ **大部分已修** | 12 处小时级小口子：0.5.0 关 3，后续批次关 8（405/HEAD、Origin 带端口、no-store、`readJsonBodyOr400`、死码、lastSaveError 读取端、reload 形状、0 区域启动）；仅剩 `__hide-all__` 收拢为命名常量 `HIDE_ALL_MODELS` 但仍以哨兵形式存在 |
 | [13-lifecycle-dispose.md](13-lifecycle-dispose.md) | ~~P2~~ **已修**（宿主语义无法确认，按两种都对的方式处理） | dispose 两条尾巴（在途刷新、路由未注销） |
