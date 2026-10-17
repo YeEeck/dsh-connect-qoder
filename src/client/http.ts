@@ -27,19 +27,24 @@
 /**
  * The reason to report for a refused response.
  *
- * The host answers refusals in two shapes and both must reach the reader:
+ * The host answers refusals in three shapes and all must reach the reader:
  * route-level gates write `{ error: "origin-not-trusted" }` (a bare string),
- * while `writeError` writes `{ error: { message, type, code } }`. Reading only
- * the first would turn every `writeError` refusal — including "the credential
- * file could not be removed, so it is still in use" — into a bare `HTTP 500`,
- * which says a request failed but not what to do about it. That is the
- * silent-failure shape issue 06 was about, one layer down.
+ * the device-login handlers write `{ error: "sign-out-failed", detail: "…" }`
+ * (a machine code plus a human sentence), and `writeError` writes
+ * `{ error: { message, type, code } }`. Reading only the first would turn
+ * every `writeError` refusal — including "the credential file could not be
+ * removed, so it is still in use" — into a bare `HTTP 500`, and dropping the
+ * `detail` of the second is the same accident again: the code alone names the
+ * failure without saying what happened. That is the silent-failure shape
+ * issue 06 was about, one layer down.
  *
  * A shape neither branch recognises still yields the status code; naming the
  * failure is the floor, never a fabricated reason.
  */
 function failureMessage(value: unknown, status: number): string {
 	const error = (value as { error?: unknown } | undefined)?.error;
+	const detail = (value as { detail?: unknown } | undefined)?.detail;
+	if (typeof error === "string" && error !== "" && typeof detail === "string" && detail !== "") return `${error}: ${detail}`;
 	if (typeof error === "string" && error !== "") return error;
 	const message = (error as { message?: unknown } | undefined | null)?.message;
 	if (typeof message === "string" && message !== "") return message;

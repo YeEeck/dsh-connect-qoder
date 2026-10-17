@@ -210,7 +210,7 @@ function apply(ctx: ClientContext) {
 	registerCard("settings.plugin.item", "qoder");
 	// 对话框用量胶囊（composer-usage-pill.tsx）：输入框工具栏 `conversation.input.right`
 	// 座席。`useProjection` 是 renderer 物化注入的 session 作用域标准 prop（严格必需，
-	// 见 test/composer-slot-gate.test.js），这里的 inject 只补本插件字典 `t`。注册失败
+	// 见 test/composer-pill.test.js），这里的 inject 只补本插件字典 `t`。注册失败
 	// 照卡片同款降级：console.error 后继续，不 throw 进 loader —— host provider 与
 	// Plugins 页卡片都不受影响，只是对话框旁不出现胶囊。
 	try {

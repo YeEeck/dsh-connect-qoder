@@ -315,3 +315,99 @@ test('a selected model outside the roster draws no off-peak block (no guessing)'
     unmount()
   }
 })
+
+test('a failed check-in shows a red failure with the route\'s detail, and frees the button', async () => {
+  // 签到 POST 失败的红色 `pill.checkinFailed` 路径此前零测试（审核 P2-3）。
+  // 桩带 {error, detail}：detail 必须穿透到面板（审核 P2-1 在签到侧的同款防线），
+  // 用户看到的是「为什么失败」，不是一个裸错误码。
+  const stub = async (url, options) => {
+    const path = String(url)
+    if (path.includes('/plugins/dsh-connect-qoder/checkin')) {
+      return { ok: false, status: 500, json: async () => ({ error: 'checkin-failed', detail: '服务端开小差了' }) }
+    }
+    if (path.includes('/plugins/dsh-connect-qoder/usage')) return jsonResponse(USAGE_BODY)
+    if (path.includes('/plugins/dsh-connect-qoder/models')) return jsonResponse(MODELS_BODY)
+    return jsonResponse({})
+  }
+  const { slots, window: w, registered, scope } = await loadCardBundle({ fetchImpl: stub })
+  const card = composerSlotOf(slots)
+  const { container, unmount, react } = await renderCards({
+    card,
+    registered,
+    scope,
+    window: w,
+    props: { useProjection: () => ({ next: { provider: 'qoder-cn' } }) },
+  })
+  try {
+    await react.act(async () => {
+      container.querySelector('button').dispatchEvent(new w.MouseEvent('click', { bubbles: true }))
+    })
+    const panel = container.querySelector('[role="dialog"]')
+    const claimButton = [...panel.querySelectorAll('button')].find((b) =>
+      (b.textContent ?? '').includes('签到领'))
+    assert.ok(claimButton, 'expected a check-in claim button')
+    await react.act(async () => {
+      claimButton.dispatchEvent(new w.MouseEvent('click', { bubbles: true }))
+    })
+    for (let i = 0; i < 5; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    const text = panel.textContent ?? ''
+    assert.match(text, /签到失败/)
+    assert.match(text, /服务端开小差了/, 'the route detail must reach the panel')
+    assert.ok(!claimButton.disabled, 'a failed claim must not leave the button busy forever')
+  } finally {
+    unmount()
+  }
+})
+
+test('a failed re-read keeps the old number but marks it possibly stale', async () => {
+  // 红线 1 的读数侧（审核 P2-4）：刷新失败时保留上次数值，但必须说得出这是旧数。
+  // 第一次 GET /usage 成功，签到后的重读失败——面板仍显示 1,034，同时出现过期标注。
+  let usageCalls = 0
+  const stub = async (url) => {
+    const path = String(url)
+    if (path.includes('/plugins/dsh-connect-qoder/checkin')) return jsonResponse({ amount: 100 })
+    if (path.includes('/plugins/dsh-connect-qoder/usage')) {
+      usageCalls += 1
+      if (usageCalls > 1) {
+        return { ok: false, status: 503, json: async () => ({ error: 'usage-unavailable', detail: '上游没应答' }) }
+      }
+      return jsonResponse(USAGE_BODY)
+    }
+    if (path.includes('/plugins/dsh-connect-qoder/models')) return jsonResponse(MODELS_BODY)
+    return jsonResponse({})
+  }
+  const { slots, window: w, registered, scope } = await loadCardBundle({ fetchImpl: stub })
+  const card = composerSlotOf(slots)
+  const { container, unmount, react } = await renderCards({
+    card,
+    registered,
+    scope,
+    window: w,
+    props: { useProjection: () => ({ next: { provider: 'qoder-cn' } }) },
+  })
+  try {
+    await react.act(async () => {
+      container.querySelector('button').dispatchEvent(new w.MouseEvent('click', { bubbles: true }))
+    })
+    const panel = container.querySelector('[role="dialog"]')
+    assert.ok((panel.textContent ?? '').includes('1,034'))
+    assert.ok(!/过期/.test(panel.textContent ?? ''), 'a fresh read must not be labelled stale')
+
+    const claimButton = [...panel.querySelectorAll('button')].find((b) =>
+      (b.textContent ?? '').includes('签到领'))
+    await react.act(async () => {
+      claimButton.dispatchEvent(new w.MouseEvent('click', { bubbles: true }))
+    })
+    for (let i = 0; i < 5; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    const text = panel.textContent ?? ''
+    assert.ok(usageCalls > 1, 'the claim path must have triggered the re-read')
+    assert.match(text, /1,034/, 'the failed re-read must not blank or zero the last good number')
+    assert.match(text, /数据可能已过期/)
+  } finally {
+    unmount()
+  }
+})

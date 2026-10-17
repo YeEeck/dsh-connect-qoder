@@ -123,6 +123,9 @@ function ActiveUsagePill({ t, region, modelKey }: ActiveUsagePillProps) {
 	const [usage, setUsage] = react.useState<CardUsageRegion | null>(null);
 	// 首次读之前不算「查到 0」，是「还没查」——胶囊给 `—` 而非 `0`。
 	const [loadedOnce, setLoadedOnce] = react.useState(false);
+	// 最近一次读取失败了，屏幕上的数字是冻结的旧值。与卡片面板「上次更新（刷新
+	// 失败）」同一道防线：保留旧值是对的，冒充它仍是当刻事实不是。
+	const [stale, setStale] = react.useState(false);
 	// 名册（错峰折扣挂在模型上）。读失败保留上次：读不到就无从判断错峰，但
 	// 也不该把已读到的模型清掉。
 	const [models, setModels] = react.useState<CardModelRow[]>([]);
@@ -152,10 +155,13 @@ function ActiveUsagePill({ t, region, modelKey }: ActiveUsagePillProps) {
 			const regions = Array.isArray(value.regions) ? (value.regions as CardUsageRegion[]) : [];
 			setUsage(regions.find((entry) => entry.region === region) ?? null);
 			setLoadedOnce(true);
+			setStale(false);
 		} catch {
-			// 读不到不是「额度没了」：保留上次数值，面板照常用。不抛、不显示错误条。
+			// 读不到不是「额度没了」：保留上次数值，面板照常用。不抛、不显示错误条
+			// ——但要说得出这是旧数。
 			if (!isCurrent() || !mounted.current) return;
 			setLoadedOnce(true);
+			setStale(true);
 		}
 	}, [region]);
 
@@ -166,8 +172,10 @@ function ActiveUsagePill({ t, region, modelKey }: ActiveUsagePillProps) {
 			const value = await getJson<{ models?: unknown }>(QODER_MODELS_PATH);
 			if (modelGeneration.current !== mine || !mounted.current) return;
 			setModels(Array.isArray(value.models) ? (value.models as CardModelRow[]) : []);
-		} catch {
+		} catch (error) {
 			// 名册读不到 → 无从判断错峰，面板不画错峰块；不抛、不清掉已读到的名册。
+			// 用户无需看见这份安静，维护者不能——留一条控制台线索。
+			console.warn("dsh-connect-qoder: composer pill could not read the model list", error);
 		}
 	}, []);
 
@@ -339,6 +347,11 @@ function ActiveUsagePill({ t, region, modelKey }: ActiveUsagePillProps) {
 							{exhausted ? t("usage.exceeded") : t("pill.balance")}
 						</span>
 					</div>
+					{stale && usage !== null ? (
+						<div style={{ fontSize: "11px", color: "var(--dsw-alias-state-warn-primary, #d97706)" }}>
+							{t("pill.stale")}
+						</div>
+					) : null}
 
 					{/* 错峰折扣：只画当前选中模型的窗口状态（见上方 `offPeak` 注释）。
 					    `promotion` 缺失不画块；有窗口但未生效画「未生效」，不假装在打折。 */}

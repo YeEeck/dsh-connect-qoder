@@ -141,7 +141,7 @@ export interface CardAccountEntry {
 
 /** One region's plugin-owned credential, as the account route reports it. */
 export interface CardDeviceEntry {
-	/** `none` | `ok` | `expired` | `refresh-failed` | `unreadable`. */
+	/** `none` | `ok` | `expired` | `refresh-failed` | `save-failed` | `unreadable`. */
 	state?: string
 	/** Why, when the state is one the user has to act on. */
 	reason?: string
@@ -449,6 +449,11 @@ export function deviceLoginNotice(
 			return { key: "device.state.expired", kind: "error" };
 		case "refresh-failed":
 			return { key: "device.renewFailed", kind: "error", detail: reason };
+		case "save-failed":
+			// Renewed in hand, refused by the disk: the session works NOW and
+			// dies at the next restart — a different sentence from both "ok"
+			// and "renewal refused", and it must not be smoothed into either.
+			return { key: "device.saveFailed", kind: "error", detail: reason };
 		case "unreadable":
 			return { key: "device.unreadable", kind: "error", detail: reason };
 		default:
@@ -465,7 +470,14 @@ export function deviceLoginNotice(
  * token on disk that they can see and cannot remove.
  */
 export function deviceLoginHasToken(device: CardDeviceEntry | undefined): boolean {
-	return device?.state === "ok" || device?.state === "expired" || device?.state === "refresh-failed";
+	return (
+		device?.state === "ok" ||
+		device?.state === "expired" ||
+		device?.state === "refresh-failed" ||
+		// The file on disk is stale but present: signing out of it is exactly
+		// what the user can still do about a credential that will not survive.
+		device?.state === "save-failed"
+	);
 }
 
 /**
