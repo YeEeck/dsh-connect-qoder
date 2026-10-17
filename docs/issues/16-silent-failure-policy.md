@@ -30,6 +30,16 @@
 
 ## 验收标准
 
-- [ ] 新用例：对凭据层与目录层各注入一次失败，断言上报条数 ≥ 1
-- [ ] `CONTRIBUTING` 或 `docs/PLAN.md` 里写明这条评审规则，并在 PR 模板里加一项勾选
-- [ ] 后续新增的静默分支在评审中被明确标注（可 grep `catch {}` 与 `return undefined` 抽查）
+- [x] 新用例：对凭据层与目录层各注入一次失败，断言上报条数 ≥ 1
+- [x] `CONTRIBUTING` 或 `docs/PLAN.md` 里写明这条评审规则，并在 PR 模板里加一项勾选
+- [x] 后续新增的静默分支在评审中被明确标注（可 grep `catch {}` 与 `return undefined` 抽查）
+
+## 实现（2026-10-17）
+
+- **可执行门禁**：新增 `test/failure-reporting.test.js`，两处失败注入各断言上报通道 ≥ 1 条：
+  - 凭据层：`qoder-oscrypt-*` 目录带本插件 marker 但夹带陌生文件时，sweep 必须拒绝清理
+    并经 `setCredentialDiagnosticSink` 上报（该分支此前是"清掉且零上报"）；
+  - 目录层：`CatalogStore` 的原子写失败（目标路径是目录，`EISDIR`）必须经 `logger.warn` 上报。
+- **评审规则落纸**：`docs/PLAN.md` 新增 P2-5 小节（表 + 详情），写明"新失败分支必须留下调用方
+  可感知的信号"及其边界（普通探测不算失败）；`.github/pull_request_template.md` 新建并加两项
+  勾选（失败路径检查 + `lib/` 同提交）。
