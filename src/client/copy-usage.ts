@@ -88,9 +88,8 @@ export const zhUsage = {
 	"usage.requestsUnavailable": "本地请求计数未接入",
 	"usage.requestsExhausted": "今日额度疑似已用尽（本地统计，仅供参考）",
 	// 本地 token 消耗累加器（上游每轮明确下发的 total_tokens / cached_tokens，本地
-	// 聚合）。与请求计数同源（本客户端口径，桌面端与 Web 端各记各的），但数据来自
-	// 上游每轮下发的 usage 帧，不是本地估算——所以不需要「仅供参考」的注。
-	"usage.tokensToday": "今日经本客户端消耗 {tokens} tokens",
+	// 聚合）。与请求计数同行显示（· 分隔），所以去掉重复的「今日经本客户端」前缀。
+	"usage.tokensToday": "消耗 {tokens} tokens",
 	"usage.tokensCachedToday": "（其中缓存命中 {cached}）"
 };
 /** English — usage panel copy. */
@@ -152,8 +151,9 @@ export const enUsage = {
 	"usage.requestsUnavailable": "Local request count not wired in",
 	"usage.requestsExhausted": "Daily allowance may be used up (local estimate, for reference)",
 	// Local token-consumption accumulator (upstream's per-turn total_tokens /
-	// cached_tokens, aggregated locally). Same client-local scope as the request
-	// count, but sourced from the upstream's own usage frame — not an estimate.
-	"usage.tokensToday": "Spent {tokens} tokens via this client today",
+	// cached_tokens, aggregated locally). Displayed inline after the request
+	// count with a " · " separator, so the "via this client today" prefix is
+	// shared.
+	"usage.tokensToday": "spent {tokens} tokens",
 	"usage.tokensCachedToday": "(including {cached} cached)"
 };

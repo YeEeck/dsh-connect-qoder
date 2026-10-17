@@ -493,37 +493,32 @@ function ActiveUsagePill({ t, region, modelKey }: ActiveUsagePillProps) {
 						</div>
 					) : null}
 
-					{/* 本地请求计数器（仅本地口径）：上游不给每日上限，只报「用完了」，
-					    这是本客户端经本插件自计的对话轮数。两种状态说两句话：没接入
-					    （requestsUnavailable）说「未接入」，接上了说「今日 N 次」（0 也是真值，
-					    不冒充查不到）；撞到每日限流时附「今日额度疑似用尽（本地统计，仅供参考）」注。 */}
-					{usage?.requestsUnavailable === true ? (
-						<div style={{ fontSize: "11px", color: "var(--dsw-alias-label-tertiary, #999)" }}>
-							{t("usage.requestsUnavailable")}
-						</div>
-					) : (
-						<div style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "11px", color: "var(--dsw-alias-label-tertiary, #999)" }}>
-							<span>{t("usage.requestsToday", { count: usage?.requestsToday ?? 0 })}</span>
-							{usage?.requestsExhausted === true ? (
-								<span style={{ color: "var(--dsw-alias-state-warn-primary, #f79009)" }}>
-									{t("usage.requestsExhausted")}
-								</span>
-							) : null}
-						</div>
-					)}
-
-					{/* 本地 token 消耗累加器：上游每轮明确下发的 total_tokens /
-					    cached_tokens，本地聚合。计数器未接入时不渲染。 */}
-					{usage?.tokensToday !== undefined ? (
-						<div style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "11px", color: "var(--dsw-alias-label-tertiary, #999)" }}>
-							<span>{t("usage.tokensToday", { tokens: usage.tokensToday })}</span>
-							{usage.tokensCachedToday !== undefined && usage.tokensCachedToday > 0 ? (
-								<span style={{ color: "var(--dsw-alias-state-success-primary, #12b76a)" }}>
-									{t("usage.tokensCachedToday", { cached: usage.tokensCachedToday })}
-								</span>
-							) : null}
-						</div>
-					) : null}
+					{/* 本地口径：请求计数 + token 消耗，同行显示（· 分隔）。 */}
+					<div style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "11px", color: "var(--dsw-alias-label-tertiary, #999)" }}>
+						{usage?.requestsUnavailable === true ? (
+							<span style={{ color: "var(--dsw-alias-label-tertiary, #999)" }}>
+								{t("usage.requestsUnavailable")}
+								{usage?.tokensToday !== undefined ? (
+									<><span> · </span>{t("usage.tokensToday", { tokens: usage.tokensToday })}</>
+								) : null}
+							</span>
+						) : (
+							<span>
+								{t("usage.requestsToday", { count: usage?.requestsToday ?? 0 })}
+								{usage?.tokensToday !== undefined ? (
+									<><span> · </span>{t("usage.tokensToday", { tokens: usage.tokensToday })}</>
+								) : null}
+								{usage?.requestsExhausted === true ? (
+									<><span> · </span><span style={{ color: "var(--dsw-alias-state-warn-primary, #f79009)" }}>{t("usage.requestsExhausted")}</span></>
+								) : null}
+							</span>
+						)}
+						{usage?.tokensCachedToday !== undefined && usage.tokensCachedToday > 0 ? (
+							<span style={{ color: "var(--dsw-alias-state-success-primary, #12b76a)" }}>
+								{t("usage.tokensCachedToday", { cached: usage.tokensCachedToday })}
+							</span>
+						) : null}
+					</div>
 
 					{checkin !== undefined && checkin.active === true ? (
 						<div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>

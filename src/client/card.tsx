@@ -298,35 +298,24 @@ export function RegionUsage({ t, entry, campaignsOpen, onCampaignsToggle }: Regi
 					{t(campaignsNotice, campaignsNotice === "usage.promotionsUnavailable" ? { reason: entry.campaignsError ?? "" } : undefined)}
 				</p>
 			) : null}
-			{/* 本地请求计数器（仅本地口径）：上游不给每日上限，只报「用完了」，
-			    所以这是本客户端经本插件自计的对话轮数，与魔搭社区兄弟插件同款本地口径。
-			    两种状态要说两句话：计数器没接入（requestsUnavailable）说「未接入」，
-			    接上了但今天还没发（requestsToday === 0）说「今日 0 次」——后者是有数据，
-			    不冒充「查不到」。撞到每日限流时附「今日额度疑似已用尽（本地统计，仅供参考）」注。 */}
+			{/* 本地口径：请求计数 + token 消耗，同行显示（· 分隔）。上游不给每日上限
+			    （请求计数是本地自计），但 token 数来自上游每轮明确下发的 usage 帧
+			    （不是本地估算）。两数据源独立——各自不可用时只显示另一个。 */}
 			<div className="dsm-qoder-usage-sep" />
-			{entry.requestsUnavailable === true ? (
-				<p className="dsm-qoder-usage-local dsm-qoder-usage-local-unavailable">
-					{t("usage.requestsUnavailable")}
-				</p>
-			) : (
-				<p className="dsm-qoder-usage-local">
-					{t("usage.requestsToday", { count: entry.requestsToday ?? 0 })}
-					{entry.requestsExhausted === true ? (
-						<span className="dsm-qoder-usage-local-note">{t("usage.requestsExhausted")}</span>
-					) : null}
-				</p>
-			)}
-			{/* 本地 token 消耗累加器：上游每轮对话明确下发 total_tokens / cached_tokens，
-			    本地聚合。与请求计数同源（本客户端口径），但数据来自上游 usage 帧，
-			    不是本地估算——所以不需要「仅供参考」的注。计数器未接入时不渲染。 */}
-			{entry.tokensToday !== undefined ? (
-				<p className="dsm-qoder-usage-local">
-					{t("usage.tokensToday", { tokens: entry.tokensToday })}
-					{entry.tokensCachedToday !== undefined && entry.tokensCachedToday > 0 ? (
-						<span className="dsm-qoder-usage-local-note">{t("usage.tokensCachedToday", { cached: entry.tokensCachedToday })}</span>
-					) : null}
-				</p>
-			) : null}
+			<p className="dsm-qoder-usage-local">
+				{entry.requestsUnavailable === true ? (
+					<span className="dsm-qoder-usage-local-unavailable">{t("usage.requestsUnavailable")}</span>
+				) : t("usage.requestsToday", { count: entry.requestsToday ?? 0 })}
+				{entry.tokensToday !== undefined ? (
+					<span> · {t("usage.tokensToday", { tokens: entry.tokensToday })}</span>
+				) : null}
+				{entry.requestsExhausted === true ? (
+					<span className="dsm-qoder-usage-local-note">{t("usage.requestsExhausted")}</span>
+				) : null}
+				{entry.tokensCachedToday !== undefined && entry.tokensCachedToday > 0 ? (
+					<span className="dsm-qoder-usage-local-note">{t("usage.tokensCachedToday", { cached: entry.tokensCachedToday })}</span>
+				) : null}
+			</p>
 		</div>
 	);
 }
