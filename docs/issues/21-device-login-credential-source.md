@@ -57,7 +57,7 @@
 
 ## vault 形状（照抄参考实现的、已被事故验证过的部分）
 
-**路径**：`$DSH_HOME/qoder-auth.{region}.json`，按 region 隔离——对得上「三条事实」第 1 条
+**路径**：`$DSH_HOME/.qoder-auth.{region}.json`，按 region 隔离——对得上「三条事实」第 1 条
 （双 region 是两根平行的线，切 tab 不得影响另一侧）。本仓库已有先例：`~/.dsh/.qoder-catalog.qoder-cn.json`
 与 `~/.dsh/.qoder-catalog.qoder.json` 就是本插件写进 `DSH_HOME` 的自有 JSON。
 
@@ -94,7 +94,7 @@
 
 全部已落地。每条的落点：
 
-- [x] vault 落盘：`$DSH_HOME/qoder-auth.{region}.json`，`0o600` + temp/rename，两区互不干扰
+- [x] vault 落盘：`$DSH_HOME/.qoder-auth.{region}.json`，`0o600` + temp/rename，两区互不干扰
       —— `src/host/credential-vault.ts`；路径由 `index.ts` 的 `deviceSourceFor(region, ctx)` 按
       `region.id` 拼出，一个 region 一个文件、一个共享实例（两个实例就是两个失败窗口）
 - [x] 写并发：并发 RMW 后磁盘状态等于串行结果（照上面两个场景写成测试，先让它红）

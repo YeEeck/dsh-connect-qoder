@@ -31,6 +31,15 @@ chat 端点已分诊（`streamChat` 的 content-type + 不可读帧判定，`tes
 `umidRootsFor` 的写死版本路径改为运行时枚举（`test/umid-roots.test.js` 守门），
 并新增「签到降级用户可见性」残留项（host warn 已落地，卡片半边欠着）。
 
+**本轮（2026-10-17，设备登录修复轮）**：`credential-vault` 的串行 RMW 链只约束**同进程**
+的写者。跨进程（web 与 desktop 两个 profile 同时激活本插件、同一 `DSH_HOME` 下的同一个
+`.qoder-auth.<region>.json`）没有文件锁：两边的读-改-写可以交错，各自刷新出的令牌会互相
+覆盖最后一个赢。0600 原子写保证**文件永远是完整可解析的**，不保证**语义不打架**；
+链外刷新的「登出优先」「不覆盖他人记录」守卫（`displaced`/`superseded`）只看得见本进程
+链内的对手。登记为缺口不是因为漏了测试，而是这条路径要先有一个双宿主 harness 才谈得上
+端到端验证；单进程侧的所有分支（复活被拒、他人记录保留、save-failed 内存续命、陈旧 .tmp
+回收）本轮已由 `test/device-credential.test.js` 与 `test/credential-vault.test.js` 新用例守住。
+
 **本轮新增的两处镜像**（跟着 issue 04/05/10 一起进来，是刻意接受而非遗漏）：
 `test/model-route.test.js` 直接 import `buildModelRowsPayload`，断言的是**真实的**实现，
 不是副本；`test/protocol-shape-card.test.js` 则从**产物文本里提取** `refreshNoticeKey` 并执行，
