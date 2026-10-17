@@ -50,7 +50,7 @@ const DAY_MS = 24 * 60 * 60 * 1000
  * @param value - 待校验的分量。
  * @returns 安全分量，或 `null`。
  */
-function sanitizeComponent(value: string): string | null {
+export function sanitizeComponent(value: string): string | null {
   return /^[A-Za-z0-9_-]+$/.test(value) ? value : null
 }
 

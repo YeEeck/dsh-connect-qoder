@@ -74,6 +74,14 @@ export interface ShimOptions {
     bump(region: string): { count: number | null; day: string | null }
     markExhausted(region: string): void
   }
+  /**
+   * 本地 token 消耗累加器。shim 抓到上游 usage 帧（`chunk.usage` 里的
+   * `total_tokens` / `cached_tokens`）时在此累加——这是上游**每轮都明确下发**的
+   * 真实 token 数，本地只是聚合，不编造。挂 `undefined` 时静默跳过。
+   */
+  tokenCounter?: {
+    addUsage(region: string, usage: unknown): { total: number | null; cached: number | null; day: string | null }
+  }
 }
 
 /** The live shim handle a region's runtime holds. */
@@ -255,6 +263,7 @@ export function createQoderShim(options: ShimOptions): ShimHandle {
     // of regression that would ship unnoticed.
     runChat = streamChat,
     requestCounter,
+    tokenCounter,
   } = options
   const SHARED_SECRET = randomBytes(32).toString('base64url')
 
@@ -463,7 +472,12 @@ export function createQoderShim(options: ShimOptions): ShimHandle {
       let usage: unknown
       for (let step = first; !step.done; step = await iterator.next()) {
         // The usage frame carries no choice, so it is collected separately.
-        if (step.value?.usage !== undefined && step.value.usage !== null) usage = step.value.usage
+        if (step.value?.usage !== undefined && step.value.usage !== null) {
+          usage = step.value.usage
+          // 本地口径：上游每轮明确下发的 token 数，聚合进今日文件（不编造）。
+          // 帧无效 / 计数器缺失时静默跳过，不阻塞对话（红线 1）。
+          tokenCounter?.addUsage(region.id, step.value.usage)
+        }
         absorb(step.value, content, toolCalls, (f) => { finish = f })
       }
       const message: Record<string, unknown> = { role: 'assistant', content: content.join('') }
@@ -505,6 +519,9 @@ export function createQoderShim(options: ShimOptions): ShimHandle {
         // reported no tokens. Qoder's usage block also carries `credits` and
         // `prompt_tokens_details.cached_tokens`, which pi-ai understands.
         if (chunk?.usage !== undefined && chunk.usage !== null) {
+          // 本地口径：上游每轮明确下发的 token 数，聚合进今日文件（不编造）。
+          // 帧无效 / 计数器缺失时静默跳过，不阻塞对话（红线 1）。
+          tokenCounter?.addUsage(region.id, chunk.usage)
           writeSse(res, {
             id,
             object: 'chat.completion.chunk',

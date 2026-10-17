@@ -256,6 +256,7 @@ dsh plugin --profile web add <本仓库路径>
 | `src/host/credential-cache.ts` | 凭据缓存与「登录失效后重读」规则，以及 env-PAT 兑换的 429 节流闸门（平台自述窗口优先、否则指数退避；401/403 停泊，仅「重读登录」释放；无 peer 依赖） |
 | `src/host/throttle-store.ts` | 兑换节流闸门的磁盘持久化（只存未过期的 rate-limit 窗口、parked 停泊与令牌一律不落盘，原子写，无 peer 依赖） |
 | `src/host/request-counter.ts` | 本地「今日经本客户端请求次数」计数：上游只报「用完了」不给每日上限，故只能本地自计（每次对话轮 +1，重试不重复计）。按 region + 上海本地日分文件、零点翻页、原子写（`temp/rename`）、越界 region 分量拒绝写盘、`gc` 只删本插件命名且早于保留期的旧日文件；撞 `daily_limit_exceeded` 时置 `dailyLimitHit` 不丢计数（无 peer 依赖） |
+| `src/host/token-counter.ts` | 本地「今日经本客户端消耗的 token 数」累加器：shim 每抓到一个上游 usage 帧（`total_tokens` / `cached_tokens`，上游每轮明确下发）就累加进本插件文件（`.qoder-token-count.<region>.<day>.json`）。与请求计数器同源同套路（按 region + 上海本地日分文件、零点翻页、原子写、越界防护、`gc` 只删本插件旧文件），但数据来自上游而非本地估算——聚合的是上游已经公开的真实 token 数，不画比例条（无每日上限口径）；`tokensFromUsage` 对坏帧返回 `null` 宁可不加也不加错 |
 | `src/host/credential-vault.ts` | 插件自有凭据文件的读写（设备登录换来的可刷新令牌）：`0600` + `temp/rename` 原子写、损坏文件**隔离留存**而非被后来者覆盖、读-改-写整体串行（并发的刷新不会把刚登出的凭据写回来，无 peer 依赖） |
 | `src/host/device-login.ts` | 设备登录的协议层（两个 region 各自的端点、`client_id`、PKCE 与轮询/刷新请求）：404 与「还没审批」的空信封都读作未授权而非失败；**刷新应答不是凭据**——实测只有六个字段、把访问令牌叫 `device_token` 且**不带 `user_id`**，必须叠加回被刷新的那一份，否则签名带上空 uid 会被网关回 403 `Signature invalid`（无 peer 依赖） |
 | `src/host/device-credential.ts` | 把 vault 里那份令牌变成可签名的凭据、并在过期时轮换：**五档状态**（`none` / `ok` / `expired` / `refresh-failed` / `unreadable`）而非两档——「本机没登录过」与「文件读不出来」指向不同下一步；刷新被拒后有 60s 窗口（否则每轮对话都会重试一条已被吊销的刷新令牌）；刷新成功但落盘失败仍照常出借凭据、只 warn；**从不抛**（抛出去就等于把登录问题变成 provider 坏掉）（无 peer 依赖） |

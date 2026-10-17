@@ -114,6 +114,17 @@ export interface CardUsageRegion {
 	 * 这是本插件的本地估计，非上游官方状态；true 时卡片诚实标注「仅供参考」。
 	 */
 	requestsExhausted?: boolean
+	/**
+	 * 本地口径：今日经本客户端累计消耗的 token 总数——上游每轮对话明确下发的
+	 * `total_tokens` 之和，本地聚合。总是数字（`0` 表示今日还没消耗过）；当计数器
+	 * 未接入（旧宿主）时为 `undefined`，此时不渲染这一行。
+	 */
+	tokensToday?: number
+	/**
+	 * 本地口径：今日经本客户端累计命中的缓存 token 数（上游 `cached_tokens` 之和）。
+	 * 仅 `>0` 时下发，作为 `tokensToday` 的补充注。
+	 */
+	tokensCachedToday?: number
 	[key: string]: unknown
 }
 

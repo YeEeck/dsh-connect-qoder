@@ -212,6 +212,15 @@ export interface UsageDeps {
     read(region: string): { count: number | null; day: string | null }
     readExhausted(region: string): boolean
   }
+  /**
+   * 本地 token 消耗累加器（可选）。挂上时把「今日经本客户端累计消耗的 token 数」
+   * 随每个 region 下发（`tokensToday`）；缺失则不下发该字段。token 数是上游每轮
+   * 明确下发的真实数据，本地聚合即可，与 `requestCounter`（上游不给每日上限、纯
+   * 本地自计）的定位不同——此处不画比例条是因为本地口径不跨终端，非因为数据缺失。
+   */
+  tokenCounter?: {
+    read(region: string): { total: number | null; cached: number | null; day: string | null }
+  }
 }
 
 /**
@@ -258,6 +267,17 @@ export async function usageHandler(
           requestsField.requestsToday = snapshot.count ?? 0
           if (counter.readExhausted(runtime.region.id) === true) {
             requestsField.requestsExhausted = true
+          }
+        }
+        // 本地口径：今日经本客户端累计消耗的 token 数——这是上游每轮明确下发的真实
+        // 数据，本地只是聚合。计数器没挂上（旧宿主 / 未启用）才不发这个字段；挂上了
+        // 今天还没消耗就发 `tokensToday: 0`（有数据、只是 0），不冒充「查不到」。
+        const tokenCounter = deps.tokenCounter
+        if (tokenCounter !== undefined) {
+          const tokens = tokenCounter.read(runtime.region.id)
+          requestsField.tokensToday = tokens.total ?? 0
+          if (tokens.cached !== null && tokens.cached > 0) {
+            requestsField.tokensCachedToday = tokens.cached
           }
         }
         return usage === undefined

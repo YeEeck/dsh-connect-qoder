@@ -316,6 +316,17 @@ export function RegionUsage({ t, entry, campaignsOpen, onCampaignsToggle }: Regi
 					) : null}
 				</p>
 			)}
+			{/* 本地 token 消耗累加器：上游每轮对话明确下发 total_tokens / cached_tokens，
+			    本地聚合。与请求计数同源（本客户端口径），但数据来自上游 usage 帧，
+			    不是本地估算——所以不需要「仅供参考」的注。计数器未接入时不渲染。 */}
+			{entry.tokensToday !== undefined ? (
+				<p className="dsm-qoder-usage-local">
+					{t("usage.tokensToday", { tokens: entry.tokensToday })}
+					{entry.tokensCachedToday !== undefined && entry.tokensCachedToday > 0 ? (
+						<span className="dsm-qoder-usage-local-note">{t("usage.tokensCachedToday", { cached: entry.tokensCachedToday })}</span>
+					) : null}
+				</p>
+			) : null}
 		</div>
 	);
 }

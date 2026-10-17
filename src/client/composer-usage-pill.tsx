@@ -512,6 +512,19 @@ function ActiveUsagePill({ t, region, modelKey }: ActiveUsagePillProps) {
 						</div>
 					)}
 
+					{/* 本地 token 消耗累加器：上游每轮明确下发的 total_tokens /
+					    cached_tokens，本地聚合。计数器未接入时不渲染。 */}
+					{usage?.tokensToday !== undefined ? (
+						<div style={{ display: "flex", flexDirection: "column", gap: "2px", fontSize: "11px", color: "var(--dsw-alias-label-tertiary, #999)" }}>
+							<span>{t("usage.tokensToday", { tokens: usage.tokensToday })}</span>
+							{usage.tokensCachedToday !== undefined && usage.tokensCachedToday > 0 ? (
+								<span style={{ color: "var(--dsw-alias-state-success-primary, #12b76a)" }}>
+									{t("usage.tokensCachedToday", { cached: usage.tokensCachedToday })}
+								</span>
+							) : null}
+						</div>
+					) : null}
+
 					{checkin !== undefined && checkin.active === true ? (
 						<div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
 							{checkin.todayCheckedIn === true ? (
