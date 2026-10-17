@@ -242,16 +242,24 @@ export async function usageHandler(
       try {
         const usage = await runtime.readUsage(force)
         // 本地口径：今日经本客户端发出的对话轮数 + 是否本地判定额度疑似用尽。
-        // 计数不可用（count 为 null）时不下发 `requestsToday`——客户端把「查不到」
-        // 画成 `—` 而非冒充 `0`（与 `composer-usage-pill.tsx` 头文件 `0` vs `—`
-        // 的裁定一致）。`requestsExhausted` 仅在为 true 时下发，避免无谓的字段噪声。
-        const requestsToday = deps.requestCounter?.read(runtime.region.id)
-        const requestsExhausted = deps.requestCounter?.readExhausted(runtime.region.id) === true
+        // 区分两种「查不到」，否则客户端只能蒙：
+        //  - `requestCounter` 没挂上（旧宿主 / 未启用）→ 下发 `requestsUnavailable: true`，
+        //    客户端说「本地计数未接入」（真的没接上）。
+        //  - 挂着但今日还没发出过请求（count 为 null、文件尚不存在）→ 下发
+        //    `requestsToday: 0`，客户端说「今日 0 次」（有数据、只是还没有）。
+        // 既不冒充 0 也不得把「尚未请求」画成「未接入」。`requestsExhausted` 仅在为
+        // true 时下发，避免无谓的字段噪声。
+        const counter = deps.requestCounter
         const requestsField: Record<string, unknown> = {}
-        if (requestsToday !== undefined && requestsToday.count !== null) {
-          requestsField.requestsToday = requestsToday.count
+        if (counter === undefined) {
+          requestsField.requestsUnavailable = true
+        } else {
+          const snapshot = counter.read(runtime.region.id)
+          requestsField.requestsToday = snapshot.count ?? 0
+          if (counter.readExhausted(runtime.region.id) === true) {
+            requestsField.requestsExhausted = true
+          }
         }
-        if (requestsExhausted) requestsField.requestsExhausted = true
         return usage === undefined
           ? { ...base, available: false, ...requestsField }
           : { ...base, available: true, ...usage, ...requestsField }

@@ -85,7 +85,7 @@ export const zhUsage = {
 	// Web 端各记各的；官方总量以 Qoder 为准。`requestsToday` 不可用（count 为 null）
 	// 画 `—`，不冒充 `0`。撞到每日限流时附 `requestsExhausted` 注（仅本地推断，不保证）。
 	"usage.requestsToday": "今日经本客户端请求 {count} 次",
-	"usage.requestsUnavailable": "今日本地请求数暂不可用",
+	"usage.requestsUnavailable": "本地请求计数未接入",
 	"usage.requestsExhausted": "今日额度疑似已用尽（本地统计，仅供参考）"
 };
 /** English — usage panel copy. */
@@ -144,6 +144,6 @@ export const enUsage = {
 	// plugin. Desktop and Web count separately. When unavailable, show an
 	// unavailable line rather than a fake 0.
 	"usage.requestsToday": "Requested {count} times via this client today",
-	"usage.requestsUnavailable": "Local request count unavailable today",
+	"usage.requestsUnavailable": "Local request count not wired in",
 	"usage.requestsExhausted": "Daily allowance may be used up (local estimate, for reference)"
 };

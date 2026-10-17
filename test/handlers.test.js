@@ -356,6 +356,54 @@ test('usage: a host that sends no umid seam gets the field omitted, not faked', 
   assert.equal(lastJson({ bodies }).checkin, undefined)
 })
 
+test('usage: a wired counter with no requests today reports 0, not unavailable', async () => {
+  // The counter is mounted (so the feature is connected) but the client has not
+  // sent a request yet today — the file does not exist, read() returns count
+  // null. That is "0 today", NOT "not wired": the card must say "0 次", never
+  // "未接入". This is the ambiguity the user hit: the two used to share one line.
+  const req = fakeReq({ url: '/plugins/dsh-connect-qoder/usage' })
+  const { res, out, bodies } = fakeRes(req)
+  await usageHandler(req, res, {
+    started: [{ region: CN, runtime: stubRuntime({ readUsage: async () => ({ available: true }) }) }],
+    logger: quiet,
+    requestCounter: { read: () => ({ count: null, day: null }), readExhausted: () => false },
+  })
+  assert.equal(out.status, 200)
+  const body = lastJson({ bodies }).regions[0]
+  assert.equal(body.requestsToday, 0, 'wired but empty is 0, not omitted')
+  assert.equal(body.requestsUnavailable, undefined, 'wired must not claim it is not wired')
+})
+
+test('usage: an unwired counter reports requestsUnavailable, not a fake 0', async () => {
+  // The host did not mount requestCounter (older host, or the seam is off). That
+  // is genuinely "not connected"; the card must say "未接入" rather than invent
+  // a 0 that would hide the fact nothing is counting.
+  const req = fakeReq({ url: '/plugins/dsh-connect-qoder/usage' })
+  const { res, out, bodies } = fakeRes(req)
+  await usageHandler(req, res, {
+    started: [{ region: CN, runtime: stubRuntime({ readUsage: async () => ({ available: true }) }) }],
+    logger: quiet,
+  })
+  assert.equal(out.status, 200)
+  const body = lastJson({ bodies }).regions[0]
+  assert.equal(body.requestsUnavailable, true, 'no counter mounted → explicitly not wired')
+  assert.equal(body.requestsToday, undefined, 'do not fake a count when nothing is counting')
+})
+
+test('usage: a wired counter carries the daily-limit hint when set', async () => {
+  const req = fakeReq({ url: '/plugins/dsh-connect-qoder/usage' })
+  const { res, out, bodies } = fakeRes(req)
+  await usageHandler(req, res, {
+    started: [{ region: CN, runtime: stubRuntime({ readUsage: async () => ({ available: true }) }) }],
+    logger: quiet,
+    requestCounter: { read: () => ({ count: 7, day: '2026-10-18' }), readExhausted: () => true },
+  })
+  assert.equal(out.status, 200)
+  const body = lastJson({ bodies }).regions[0]
+  assert.equal(body.requestsToday, 7)
+  assert.equal(body.requestsExhausted, true, 'local estimate of a hit daily limit travels with the count')
+})
+
 // ---------------------------------------------------------------------------
 // /checkin + the claim orchestration
 // ---------------------------------------------------------------------------

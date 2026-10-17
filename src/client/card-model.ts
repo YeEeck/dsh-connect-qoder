@@ -100,10 +100,15 @@ export interface CardUsageRegion {
 	checkin?: CardCheckin
 	/**
 	 * 本地口径：今日经本客户端发出的对话轮数，由本插件本地自计（上游不给上限，
-	 * 只报「用完了」）。不可用为 `undefined`——客户端画 `—` 而非冒充 `0`
-	 * （与 `composer-usage-pill.tsx` 头文件 `0` vs `—` 的裁定一致）。
+	 * 只报「用完了」）。总是数字（`0` 表示今日还没发过请求）；当计数器根本没接入
+	 * 时为 `undefined`——此时 `requestsUnavailable` 为 `true`。
 	 */
 	requestsToday?: number
+	/**
+	 * 本地计数未接入：宿主未挂载 `requestCounter`（旧宿主 / 未启用）。与
+	 * `requestsToday === 0` 区分——后者是有数据只是今天还没发，前者是真的没接上。
+	 */
+	requestsUnavailable?: boolean
 	/**
 	 * 本地推断：今日是否撞到每日限流（shim 收到 `daily_limit_exceeded` 时标记）。
 	 * 这是本插件的本地估计，非上游官方状态；true 时卡片诚实标注「仅供参考」。
