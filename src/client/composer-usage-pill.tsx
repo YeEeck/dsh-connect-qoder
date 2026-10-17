@@ -236,6 +236,15 @@ function ActiveUsagePill({ t, region, modelKey }: ActiveUsagePillProps) {
 	const display = remaining === null ? "—" : formatCredits(remaining);
 	const prefix = regionPrefixOf(region);
 	const exhausted = tier === "exhausted";
+	// 主额度单桶的已用比例：优先取宿主算好的 `percentage`，缺失时用 used/total
+	// 反推。这是「单个桶」自己的比例，不是把几条额度加总成总额——后者是本插件
+	// 明确不做的（见本文件头），这里与 Plugins 页卡片的 `QuotaBlock` 同源。
+	const totalNum = num(quota?.total);
+	const usedNum = num(quota?.used);
+	const pctRaw = num(quota?.percentage);
+	const pct = pctRaw !== null ? pctRaw : (totalNum !== null && totalNum > 0 && usedNum !== null ? Math.min(1, Math.max(0, usedNum / totalNum)) : null);
+	const pctText = pct === null ? "—" : `${Math.round(pct * 100)}%`;
+	const pctColor = TIER_DOT[tier];
 	const checkin = usage?.checkin;
 	// 错峰折扣是模型级事实，必须精确匹配当前选中模型才画；匹配不上（名册没这
 	// 条、`projection.model` 不是 id 也不是显示名）就什么都不说，不猜。
@@ -313,6 +322,35 @@ function ActiveUsagePill({ t, region, modelKey }: ActiveUsagePillProps) {
 					{`${prefix} · ${display}`}
 				</span>
 			</button>
+			{/* 折叠态进度条：胶囊主额度是「单个桶」，已用比例取宿主算好的
+			    `percentage`，缺失用 used/total 反推。2px 细条贴底贯穿胶囊，让
+			    「还剩多少」一眼可见，贴近插件页卡片与 sensenova 套餐卡的形态。
+			    比例查不到时不画填充，只留轨道——`—` 与「0」不等价，绝不冒充。 */}
+			<div
+				aria-hidden="true"
+				style={{
+					position: "absolute",
+					left: "0",
+					right: "0",
+					bottom: "0",
+					height: "2px",
+					borderRadius: "999px",
+					background: "var(--dsw-alias-bg-layer-2, #2a2b31)",
+					overflow: "hidden"
+				}}
+			>
+				{pct !== null ? (
+					<div
+						style={{
+							height: "100%",
+							width: `${Math.round(pct * 100)}%`,
+							borderRadius: "999px",
+							background: pctColor,
+							transition: "width .3s ease"
+						}}
+					/>
+				) : null}
+			</div>
 			{open ? (
 				<div
 					id={POPOVER_ID}
@@ -391,9 +429,34 @@ function ActiveUsagePill({ t, region, modelKey }: ActiveUsagePillProps) {
 
 					{known && quota !== undefined ? (
 						<div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-							<div style={{ fontSize: "11px", color: "var(--dsw-alias-label-secondary, #61666b)" }}>
-								{t("usage.planCredits")}
+							<div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "8px" }}>
+								<span style={{ fontSize: "11px", color: "var(--dsw-alias-label-secondary, #61666b)" }}>
+									{t("usage.planCredits")}
+								</span>
+								<span style={{ fontSize: "16px", fontWeight: "600", color: pctColor, fontVariantNumeric: "tabular-nums" }}>
+									{pctText}
+								</span>
 							</div>
+							{pct !== null ? (
+								<div
+									role="progressbar"
+									aria-label={`${t("usage.planCredits")} ${pctText}`}
+									aria-valuenow={Math.round(pct * 100)}
+									aria-valuemin={0}
+									aria-valuemax={100}
+									style={{ height: "6px", borderRadius: "999px", background: "var(--dsw-alias-bg-layer-2, #2a2b31)", overflow: "hidden" }}
+								>
+									<div
+										style={{
+											height: "100%",
+											width: `${Math.round(pct * 100)}%`,
+											borderRadius: "999px",
+											background: pctColor,
+											transition: "width .3s ease"
+										}}
+									/>
+								</div>
+							) : null}
 							<div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "8px", fontSize: "12px", color: "var(--dsw-alias-label-secondary, #61666b)" }}>
 								<span>{`${t("usage.used")} ${formatCredits(num(quota.used))}`}</span>
 								<span>
