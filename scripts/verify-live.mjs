@@ -123,7 +123,7 @@ async function main() {
     if (credential === undefined) continue
     try {
       const usage = await fetchUsage(region, credential)
-      console.log(`  ${region.displayName}: 读取到用量（字段见 src/host/upstream.ts 的 fetchUsage）`)
+      console.log(`  ${region.displayName}: 读取到用量（字段见 src/host/upstream/fetch-usage.ts 的 fetchUsage）`)
       console.log(`    ${JSON.stringify(summarizeUsage(usage)).slice(0, 240)}`)
     } catch (error) {
       fail(`${region.displayName} 用量: ${errorMessage(error)}`)

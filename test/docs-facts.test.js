@@ -34,6 +34,25 @@ import { dirname, join } from 'node:path'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
+/**
+ * Every file under `src/<area>/`, including nested directories, as
+ * `<area>/<relative path>` strings. `src/host/upstream.ts` was split into
+ * `src/host/upstream/*.ts` (docs/issues/22), so a flat `readdirSync` would
+ * both miss the leaves and hand `readFileSync` a directory.
+ */
+function sourceFiles(area) {
+  const out = []
+  const walk = (rel) => {
+    for (const entry of readdirSync(join(root, 'src', area, rel), { withFileTypes: true })) {
+      const next = rel === '' ? entry.name : `${rel}/${entry.name}`
+      if (entry.isDirectory()) walk(next)
+      else out.push(`src/${area}/${next}`)
+    }
+  }
+  walk('')
+  return out
+}
+
 /** Live files: the ones whose statements are promises about THIS checkout. */
 const LIVE_FILES = [
   'README.md',
@@ -44,8 +63,8 @@ const LIVE_FILES = [
   // (It is still worth guarding: the `git-ignored` wording the four files below
   // used to carry is now factually wrong, and CI's freshness gate does not read
   // prose.)
-  ...readdirSync(join(root, 'src', 'host')).map((f) => `src/host/${f}`),
-  ...readdirSync(join(root, 'src', 'client')).map((f) => `src/client/${f}`),
+  ...sourceFiles('host'),
+  ...sourceFiles('client'),
   ...readdirSync(join(root, 'scripts')).map((f) => `scripts/${f}`),
   ...readdirSync(join(root, 'test'))
     .filter((f) => f.endsWith('.test.js') && f !== 'docs-facts.test.js')

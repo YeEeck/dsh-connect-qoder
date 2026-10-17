@@ -63,7 +63,7 @@
 | P1-1 | 体感 | 账号路由同步起 PowerShell（上限 30 s）阻塞事件循环 | [credentials.ts](../src/host/credentials.ts) | M | — |
 | P1-2 | 功能 | `keyCache` 无失效路径 → 重装后永久 needs-app | [credentials.ts](../src/host/credentials.ts) | S | — |
 | P1-3 | 误导 | 卡片自算错峰价/窗口标签，与宿主分歧 | [client.js:622-693](../lib/client.js#L622-L693) | M | P0-3① |
-| P1-4 | 品类 | 上游协议漂移与"没登录"不可区分 | [upstream.ts](../src/host/upstream.ts) | M | — |
+| P1-4 | 品类 | 上游协议漂移与"没登录"不可区分 | [upstream/](../src/host/upstream/) | M | — |
 | P2-1 | 债 | 44.7% 的 lib 代码不在覆盖率分母里 | 见 §5 | L | — |
 | P2-2 | 债 | 12 处小时级小口子（含注释与代码相反） | 见 §5 | S | — |
 | P2-3 | 债 | dispose 两条尾巴（在途刷新、路由未注销） | [index.js:738-754](../lib/index.js#L738-L754) | M | 需先确认宿主语义 |
@@ -263,7 +263,7 @@ Qoder 目录存在但 `Local State` 解不开时（正是账号面板要解释�
 `session_type 'qodercli'`、`Cosy-Data-Policy: disagree`），没有版本协商、没有契约。
 上游一次更新就可能让所有请求变成 403 / `10605`，而插件自带的两分钟队列预算会把它当"排队"慢慢等——
 用户看到的是漫长等待而不是错误。平台假设也无人验证：`MACHINE_OS` 在 darwin 上回落成 `x86_64_linux`
-（[upstream.ts](../src/host/upstream.ts)），全套件零引用。
+（[upstream/client-constants.ts](../src/host/upstream/client-constants.ts)），全套件零引用。
 
 **修法**：启动 + 每 6 小时做一次廉价探测（复用 catalog 请求），把结果分成三档并在账号状态里表达：
 `ok` / `sign-in-expired` / **`protocol-shape-changed`（新档）**；后者的日志与卡片文案明确指向
@@ -410,7 +410,8 @@ card 正则推导已改为精确候选（`|| /qoder/i.test(...)` 那种子串匹
 
   - 协议：复用用量面板已经在读的 `GET /sash/api/v1/me/campaigns`，挑 `actionType === "CLAIM_BENEFIT"`
     且 `claimStatus === "CLAIMABLE"` 的当轮；领取走 `POST .../campaigns/{campaignId}/claim`。
-    （`fetchCampaigns` 的旧只读副本只抽促销文案，新逻辑在 `src/host/claim.ts` + `src/host/upstream.ts` 的 `claimCampaign`。）
+    （旧 `fetchCampaigns` 的只读副本只抽促销文案、已于 2026-10-17 删除，见 `docs/issues/22` 整改 #1；
+    新逻辑在 `src/host/claim.ts` + `src/host/upstream/api-calls.ts` 的 `claimCampaign`。）
   - 两个过滤器缺一不可：同一账号下还有 `VIEW_DETAILS` 活动同样带 `claimStatus:"CLAIMED"` 却无 benefit；
     顶层 `claimable` 在「已领」与「没活动」时都是 `false`，且 `c.claimable` 字段根本不存在。判据以真实返回
     （`test/claim.test.js`，2026-09-27 双区实测）锁死。

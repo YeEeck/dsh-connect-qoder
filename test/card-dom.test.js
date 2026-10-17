@@ -359,6 +359,58 @@ test('a healthy machine identity shows no such note', async () => {
   assert.equal([...container.querySelectorAll('p')].find((n) => /no matching version root/.test(text(n))), undefined)
 })
 
+// The campaigns read failing used to be swallowed host-side, which made "the
+// endpoint is down" and "this account has no offers" render identically. The
+// host now sends the reason with the region's usage block; the card must print
+// it, or the host-side fix would still be invisible to the user (red line 1).
+test('a failed campaigns read is named on the region it belongs to', async () => {
+  const { container } = await mount({
+    usageRegions: [
+      {
+        region: 'qoder-cn',
+        available: true,
+        userQuota: { used: 25, total: 100, remaining: 75, percentage: 0.25, unit: 'credits' },
+        campaigns: [],
+        campaignsError: 'Qoder campaigns failed: HTTP 500',
+      },
+    ],
+  })
+
+  // The quota is the reason the panel exists, so it must survive the failure.
+  assert.ok(
+    container.querySelector('.dsm-qoder-bar') !== null,
+    'the quota bar must still render when only the campaigns half failed',
+  )
+  const note = [...container.querySelectorAll('p')].find((n) => /HTTP 500/.test(text(n)))
+  assert.ok(note !== null, `the reason must be visible; the panel said: ${text(container).slice(0, 500)}`)
+  assert.ok(
+    /活动|offer/i.test(text(note)),
+    `the note must read as an offers explanation; got ${text(note)}`,
+  )
+})
+
+test('a rendered campaign wins over the campaigns-error note', async () => {
+  // The note explains an ABSENT list. If a campaign is present there is nothing
+  // to explain, and printing both would contradict the row right above it.
+  const { container } = await mount({
+    usageRegions: [
+      {
+        region: 'qoder-cn',
+        available: true,
+        userQuota: { used: 25, total: 100, remaining: 75, percentage: 0.25, unit: 'credits' },
+        campaigns: [{ key: 'a', title: '每天领 100 Credits' }],
+        campaignsError: 'Qoder campaigns failed: HTTP 500',
+      },
+    ],
+  })
+  assert.equal(
+    [...container.querySelectorAll('p')].find((n) => /HTTP 500/.test(text(n))),
+    undefined,
+    'a present campaign list must not be contradicted by a failure note',
+  )
+  assert.equal(container.querySelectorAll('.dsm-qoder-usage-promo').length, 1, 'the campaign must print')
+})
+
 test('a live check-in card wins over the machine-identity note', async () => {
   // If a round IS running, the card is the answer; the note would contradict it
   // and is exactly the kind of permanent warning the previous test guards.

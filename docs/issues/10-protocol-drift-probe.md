@@ -13,15 +13,15 @@
 
 ## 证据
 
-- `src/host/upstream.ts`（RSA 公钥、COSY 版本、客户端类型等协议常量）
-- `src/host/upstream.ts` 的 `MACHINE_OS`（darwin 分支缺失）
-- `src/host/upstream.ts`（队列等待预算——正是把"形状变化"吞成"排队"的地方）
+- `src/host/upstream/crypto.ts`（RSA 公钥）与 `src/host/upstream/client-constants.ts`（COSY 版本、客户端类型等协议常量）
+- `src/host/upstream/client-constants.ts` 的 `MACHINE_OS`（darwin 分支缺失）
+- `src/host/upstream/retry.ts`（队列等待预算——正是把"形状变化"吞成"排队"的地方）
 - `grep MACHINE_OS test/` → 0 命中
 
 > 行号已移除：旧引用写的是 `lib/upstream.js:160-167` 之类，那是**打包产物**的行号。
-> `lib/` 现在只有 `index.js`/`client.js` 两个文件，子模块的行号不再对应任何东西
-> （实测 `MACHINE_OS` 现在在 `src/host/upstream.ts:167`，与旧行号只是巧合接近）。
+> `lib/` 现在只有 `index.js`/`client.js` 两个文件，子模块的行号不再对应任何东西。
 > 按**符号名**查比按行号查可靠。
+> 2026-10-17 追加：上面三个文件原本都在 `src/host/upstream.ts` 里，拆分见 `docs/issues/22`。
 
 ## 修法
 
@@ -42,7 +42,7 @@
 "请求失败时什么都不说"，而这已由刷新失败标志覆盖。要不要额外保留一条独立心跳（用于上游长期静默
 不可达时也留痕）留待以后。
 
-**判别式写在 [`../../src/host/upstream.ts`](../../src/host/upstream.ts) 的 `readModelCatalogShape`**，
+**判别式写在 [`../../src/host/upstream/api-calls.ts`](../../src/host/upstream/api-calls.ts) 的 `readModelCatalogShape`**（拆分前在 `src/host/upstream.ts`，见 `docs/issues/22`），
 界线取自 [`../../probe/model-shape.mjs`](../../probe/model-shape.mjs) 的**实测**（两端真实账号）：
 
 | 收到 | 判定 | 理由（实测事实） |

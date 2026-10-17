@@ -283,6 +283,15 @@ export function RegionUsage({ t, entry, campaignsOpen, onCampaignsToggle }: Regi
 					) : null}
 				</react.Fragment>
 			)}
+			{/* The campaigns read failed. The quota above is real and stays, but a
+			    missing promo line must not read as "this account has no offers":
+			    the host sends the reason and it is printed here. Gated on an
+			    empty list so a rendered campaign always wins over the note. */}
+			{campaigns.length === 0 && typeof entry.campaignsError === "string" && entry.campaignsError !== "" ? (
+				<p className="dsm-qoder-account-note dsm-qoder-account-note-error">
+					{t("usage.promotionsUnavailable", { reason: entry.campaignsError })}
+				</p>
+			) : null}
 		</div>
 	);
 }

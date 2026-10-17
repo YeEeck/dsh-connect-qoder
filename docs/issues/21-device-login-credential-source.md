@@ -32,8 +32,9 @@
 **踩到的坑：刷新响应是另一个信封。** 它与 poll 不同——只有 6 个字段
 （`created_at, device_token, expires_at, refresh_token, refresh_token_expires_at, token_type`），
 访问令牌叫 **`device_token`** 而不是 `token`，而且**没有 `user_id`**。
-`authHeaders()` 把 uid 用在两处（`src/host/upstream.ts:279` 加密进签名 info 块、
-`src/host/upstream.ts:328` 明文发成 `Cosy-User` 头），所以拿刷新响应**替换**原凭据会签出空 uid →
+`authHeaders()` 把 uid 用在两处（`src/host/upstream/cosy-sign.ts:31` 加密进签名 info 块、
+`src/host/upstream/cosy-sign.ts:80` 明文发成 `Cosy-User` 头；拆分前是 `src/host/upstream.ts:279` / `:328`，
+见 `docs/issues/22`），所以拿刷新响应**替换**原凭据会签出空 uid →
 两区逐字相同地回 `403 {"code":"101","message":"Signature invalid"}`（`7b15f37` 引入，`121805c` 修：
 改成叠加，只覆盖非空字段）。**接进 host 时这个坑会原样复现。**
 
@@ -135,7 +136,9 @@
    但实载只有不可读的 2.87 MB `pack.js` + `qoder-auth-wasm.wasm`。本仓库把 `lib/` 当受版本
    管理的产物、用 `verify:bundle` 做字节级比对；抄它等于把这份可审计性换掉。
 5. **292 KB WASM 与登录无关**，它服务于加密推理。而本插件早已用原生 JS 解决加密推理
-   （`src/host/upstream.ts:247` `aesEncryptCBCBase64`、`:287` RSA 包 AES key、`:257` `signaturePath`），
+   （`src/host/upstream/crypto.ts:108` `aesEncryptCBCBase64`、`src/host/upstream/cosy-sign.ts:40`
+   RSA 包 AES key、`src/host/upstream/sign.ts:13` `signaturePath`；拆分前的行号是
+   `upstream.ts:247` / `:287` / `:257`，见 `docs/issues/22`），
    所以不需要它也**不应该**引入它。
 
 ## 相关提交

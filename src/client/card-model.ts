@@ -72,6 +72,16 @@ export interface CardUsageRegion {
 	addOnQuota?: CardQuota
 	dedicatedPackages?: CardQuota[]
 	campaigns?: CardCampaign[]
+	/**
+	 * Why the campaign list is missing, when the host says the read failed.
+	 *
+	 * Campaigns are supplementary, so the quota bars above still render — but
+	 * "no offers today" and "the offers could not be read" used to look
+	 * identical, which is the silent-failure shape (red line 1). The host now
+	 * sends the reason and this card prints it, like `checkin` does for the
+	 * machine-identity hint.
+	 */
+	campaignsError?: string
 	checkin?: CardCheckin
 	[key: string]: unknown
 }

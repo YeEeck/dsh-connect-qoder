@@ -36,7 +36,7 @@
 
 | 文档出处 | 文档内容 | 插件代码佐证 |
 | --- | --- | --- |
-| `Qwen 系列模型特惠折扣.md` / `Qwen3.8-Flash 限时免费使用.md` | 特定模型（如 Qwen3.8-Max）的专属折扣/免费额度 | `src/host/upstream.ts:781-782` 注释："`Qwen3.8-Max 免费额度 1402 / 2000 次` — a package bound to a set of models"；`normalizeDedicatedPackage` 处理"绑定到具体模型而非整个账号"的资源包 |
+| `Qwen 系列模型特惠折扣.md` / `Qwen3.8-Flash 限时免费使用.md` | 特定模型（如 Qwen3.8-Max）的专属折扣/免费额度 | `src/host/upstream/fetch-usage.ts:90` 注释："`Qwen3.8-Max 免费额度 1402 / 2000 次` — a package bound to a set of models"；`normalizeDedicatedPackage` 处理"绑定到具体模型而非整个账号"的资源包（拆分前在 `src/host/upstream.ts:781-782`，见 `docs/issues/22`） |
 
 **结论**：文档里的"某模型限时免费 / 专属折扣"在产品侧表现为 per-model 资源包，插件正是按这种包结构去归一化用量面板。
 
@@ -44,7 +44,7 @@
 
 | 文档出处 | 文档内容 | 插件代码佐证 |
 | --- | --- | --- |
-| `Credits.md` | Credits 是计量单位、Plan / Add-on 分类、扣减优先级、失败不扣费 | `src/host/upstream.ts` `normalizeBucket`（`unit` 默认 `'credits'`、优先消耗最早到期）、`src/client/copy-usage.ts` `usage.planCredits` / `usage.credits` |
+| `Credits.md` | Credits 是计量单位、Plan / Add-on 分类、扣减优先级、失败不扣费 | `src/host/upstream/fetch-usage.ts` 的 `normalizeQuotaBucket` / `quotaAmountsOf`（`unit` 默认 `'credits'`、优先消耗最早到期）、`src/client/copy-usage.ts` `usage.planCredits` / `usage.credits`（拆分前在 `src/host/upstream.ts`，见 `docs/issues/22`） |
 | `计费说明.md` | Qoder CN 全家桶跨产品共享 Credits | `src/host/credentials.ts:193-194` 把 `Qoder CN / QoderWork CN` 等归到同一 `displayName: 'Qoder CN'` 区域；`README.md:133` 账号状态按区域收敛 |
 
 **结论**：文档对 Credits 的定义、分类、共享范围，与插件"按 region/catalog 归一化用量"的实现口径一致。

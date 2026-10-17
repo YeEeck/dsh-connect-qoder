@@ -236,7 +236,18 @@ dsh plugin --profile web add <本仓库路径>
 | 文件 | 作用 |
 | --- | --- |
 | `src/host/credentials.ts` | 从 Qoder 应用读取并解密登录凭据（密钥缓存与 `Local State` 绑定、失败窗口 60 s、只读缓存的变体、**不阻塞的异步解包**） |
-| `src/host/upstream.ts` | COSY 签名、请求体编码、目录与对话流 |
+| `src/host/upstream.ts` | 上游层的**门面**（26 行）：逐名 re-export `src/host/upstream/` 下的 11 个叶模块，让 20 个下游 importer 一行不动（2026-10-17 拆分，`docs/issues/22`） |
+| `src/host/upstream/crypto.ts` | RSA 公钥、置换字母表与 `Encode=1` 请求体编码（`CUSTOM_ALPHABET` / `encodeBody`）；协议事实原文注释在此文件头 |
+| `src/host/upstream/client-constants.ts` | `COSY_VERSION` / `CLIENT_TYPE` / `MACHINE_TYPE` / `DATA_POLICY` / `LOGIN_VERSION` / `MACHINE_OS` |
+| `src/host/upstream/sign.ts` | `signaturePath`（签名路径，剥掉 gateway 路由掉的 `/algo` 前缀） |
+| `src/host/upstream/cosy-sign.ts` | `authHeaders`：COSY 签名头组装（AES 加密签名 info 块、RSA 包 AES key、MD5 over payload/key/ts/body/path） |
+| `src/host/upstream/headers.ts` | `openApiHeaders` 与 umid 机器身份头（Windows 定位 `runtime-info.exe`；读不到时显式降级，`__dshQoderUmidState` 报原因） |
+| `src/host/upstream/endpoints.ts` | 各 API 端点 URL 构造（目录/对话/兑换/账号/用量/签到） |
+| `src/host/upstream/retry.ts` | 重试与队列等待预算（`QUEUE_WAIT_*`、`queueWaitFor`，含两分钟预算的 rationale） |
+| `src/host/upstream/sse.ts` | 双层包裹 SSE 解码与对话流（`streamChat`，含重试循环与 `Retry-After` 处理） |
+| `src/host/upstream/fetch-usage.ts` | 用量快照（`fetchUsage` / `UsageSnapshot` / `normalizeQuotaBucket` / `normalizeDedicatedPackage` / `normalizePromotion`）；促销读失败时**具名降级**而非静默（`campaignsError`） |
+| `src/host/upstream/api-calls.ts` | 各调用的编排与 JSON 读取（`readJson` / `readCampaigns` / `claimCampaign` / `fetchModels` / `readModelCatalogShape` / `exchangePat` / `fetchUserInfo`） |
+| `src/host/upstream/messages.ts` | DSH ↔ Qoder 的消息与工具描述转换（`toQoderMessages` / `toQoderTools`） |
 | `src/host/shim.ts` | 面向 pi-ai 的 OpenAI 兼容回环端点 |
 | `src/host/adapter.ts` | pi-ai provider 与 `PiAiAdapter` profile（被关的 provider 以零模型组呈现，由 DSH 自行隐藏） |
 | `src/host/catalog-entry.ts` | 目录条目的归一化、模型过滤（含按区域开关）与卡片行投影（无 peer 依赖） |

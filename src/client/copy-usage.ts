@@ -32,6 +32,9 @@ export const zhUsage = {
 	// also drop the signal that there ARE offers on this account.
 	"usage.promoCount": "限时特惠 · {count} 个活动",
 	"usage.promoCollapse": "收起活动",
+	// 促销行读失败时的可见降级：配额数字照旧显示，但「今天没有活动」与
+	// 「活动没读出来」不再长得一样（红线 1）。{reason} 是宿主原话。
+	"usage.promotionsUnavailable": "活动信息暂不可用：{reason}",
 	"usage.viewDetails": "查看详情",
 	"usage.credits": "Credits",
 	// The daily check-in. Wording follows dsh-connect-workbuddy's own
@@ -95,6 +98,8 @@ export const enUsage = {
 	"usage.promotion": "Limited offer",
 	"usage.promoCount": "Limited offer · {count} offers",
 	"usage.promoCollapse": "Hide offers",
+	// See the zh note: the reason is the host's, and it is the whole message.
+	"usage.promotionsUnavailable": "Offers unavailable: {reason}",
 	"usage.viewDetails": "View details",
 	"usage.credits": "Credits",
 	"usage.checkin": "Daily check-in",

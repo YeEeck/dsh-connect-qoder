@@ -1,6 +1,7 @@
 /**
  * Unit tests for the umid machine-identity block's effect on
- * `openApiHeaders` in `src/host/upstream.ts`.
+ * `openApiHeaders` in `src/host/upstream/headers.ts` (was
+ * `src/host/upstream.ts` before the 2026-10-17 split, `docs/issues/22`).
  *
  * The international campaigns endpoint serves the daily CLAIM_BENEFIT round
  * only to requests carrying the desktop app's umid values; when the block

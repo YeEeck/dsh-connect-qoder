@@ -230,7 +230,8 @@ export function credentialOf(payload, machineId) {
  *
  * Measured: a refresh response carries new token material and little else. A
  * credential rebuilt from it alone loses `uid`, which `authHeaders` encrypts into
- * the signed info block (`src/host/upstream.ts:279`) — so both regions answered
+ * the signed info block (`src/host/upstream/cosy-sign.ts:31`, was
+ * `src/host/upstream.ts:279` before the split — `docs/issues/22`) — so both regions answered
  * `{"code":"101","message":"Signature invalid"}` until the overlay was added.
  */
 export function mergeRotation(original, rotated) {

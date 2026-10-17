@@ -14,7 +14,8 @@
  *   - `reasoning_effort` (a level string: low|medium|high|xhigh|max ...)
  *   - `max_tokens`       (the pinned ceiling)
  *
- * `src/host/upstream.ts` assembles them under a strict rule:
+ * `src/host/upstream/sse.ts` assembles them under a strict rule (was
+ * `src/host/upstream.ts` before the 2026-10-17 split — `docs/issues/22`):
  *
  *   - `enableThinking === true` → `enable_thinking: true`, plus `reasoning_effort`
  *     when a level string is given;
@@ -307,7 +308,7 @@ async function main() {
   }
   console.log(
     `\n✗ 参数契约漂移：${reds} 项与既有规则不符。` +
-      ' 若平台已改字段名/档位/上限，按 live 原文更新 src/host/upstream.ts 的组装规则（及 pi-model.ts 的 PROBED_MAX_TOKENS）并同步相关注释。',
+      ' 若平台已改字段名/档位/上限，按 live 原文更新 src/host/upstream/sse.ts 的组装规则（及 pi-model.ts 的 PROBED_MAX_TOKENS）并同步相关注释。',
   )
   process.exitCode = 1
 }

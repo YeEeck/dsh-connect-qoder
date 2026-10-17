@@ -36,7 +36,8 @@ const CN_REGION = { id: 'qoder-cn', displayName: 'Qoder CN', baseUrl: 'https://o
 const CREDENTIAL = { userID: 'u-test', token: 'tok-test', name: 'n', email: 'e@x', machineID: 'm' }
 
 // A raw catalog row as `fetchModels` pushes it into `models[]`
-// (src/host/upstream.ts), with the `promotion` block already shaped by
+// (src/host/upstream/api-calls.ts; was `src/host/upstream.ts` before the
+// 2026-10-17 split, `docs/issues/22`), with the `promotion` block already shaped by
 // `normalizePromotion` — the fields adapter.js and the card consume:
 //   active, windowStart, windowEnd, timezone,
 //   discountFactor, beforePromotionPriceFactor, badge, description

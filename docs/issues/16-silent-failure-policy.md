@@ -16,7 +16,8 @@
 | `readItem` / `readJsonSecret` / `loadNewCredential` 全线返回 `undefined` 且无诊断 | `src/host/credentials.ts` |
 | `zeroOutFile` 把 `statSync` 失败当"文件已不存在" | `src/host/credentials.ts` |
 | 命名空间不匹配 → 整行从设置页消失，不报错 | `lib/index.js:564` / `src/host/settings-save.ts` |
-| 上游协议形状变化 → 被当作"排队"重试到预算耗尽 | `src/host/upstream.ts` |
+| 上游协议形状变化 → 被当作"排队"重试到预算耗尽 | `src/host/upstream/retry.ts` + `src/host/upstream/sse.ts`（拆分前 `src/host/upstream.ts`，见 `docs/issues/22`） |
+| 促销活动读失败 → 只置 flag，面板上"没活动"与"读不出来"长得一样 | `src/host/upstream/fetch-usage.ts`（拆分时按本条核销，见 `docs/issues/22` 整改 #4） |
 | 产物被替换成桩 → 套件"少 6 条测试"而不是红 | `test/client-bundle.test.js:49-96` |
 
 ## 修法

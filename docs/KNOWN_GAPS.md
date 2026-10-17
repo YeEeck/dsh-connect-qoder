@@ -247,7 +247,7 @@ effect；六道宿主路由 fetch（名册 / 账号读 / 账号重读 / 账号�
 
 ## 4. 协议层的两个原理盲区
 
-**位置**：`src/host/upstream.ts` 的 `authHeaders`
+**位置**：`src/host/upstream/cosy-sign.ts` 的 `authHeaders`（拆分前在 `src/host/upstream.ts`，见 `docs/issues/22`）
 
 **为什么测不了**（已实测确认，不是推测）：
 
@@ -347,7 +347,7 @@ Qoder 客户端"——对着一个已经装了并登录了的用户。现在：
 字段；刷新只有 `created_at, device_token, expires_at, refresh_token, refresh_token_expires_at,
 token_type` 6 个，访问令牌在 `device_token` 而不是 `token`，而且**没有 `user_id`**。所以轮换必须
 **叠加**在旧凭据上、不能替换：`authHeaders` 把 uid 同时放进加密的签名 info 块
-（`src/host/upstream.ts:279`）与明文的 `Cosy-User` 头（`:328`），替换会让 uid 变空，网关两区一致地回
+（`src/host/upstream/cosy-sign.ts:31`）与明文的 `Cosy-User` 头（`:80`），替换会让 uid 变空，网关两区一致地回
 `403 {"code":"101","message":"Signature invalid"}`。这个坑是**实测抓到的、不是推断**
 （`7b15f37` 引入刷新阶段 → 两区各自 403 → `121805c` 改为叠加并加守门测试）。
 
@@ -368,7 +368,7 @@ token_type` 6 个，访问令牌在 `device_token` 而不是 `token`，而且**�
 
 **位置**：`src/host/credentials.ts`（OS keystore 封装、`runUnwrap` 平台守卫）、
 `src/client/copy-account.ts`（`account.readFail` 文案）、`src/host/account-state.ts`（`appDataRoot` 注入）、
-`src/host/upstream.ts`（`MACHINE_OS` darwin 回落）
+`src/host/upstream/client-constants.ts`（`MACHINE_OS` darwin 回落）
 
 **为什么剩下的还没有**：
 
@@ -442,8 +442,10 @@ keystore）因此从"必须补"变成"可选"：不补也不再有平台是彻�
 
 ## 8. 国际版 campaigns 端点按 umid 机器身份门控每日签到
 
-**位置**：`src/host/upstream.ts`（`openApiHeaders` 与 `readCampaigns` / `claimCampaign` /
-`fetchUsage` / `fetchUserInfo` 共用的头组）、`src/host/claim.ts`（降级列表的语义）
+**位置**：`src/host/upstream/headers.ts`（`openApiHeaders`）与
+`src/host/upstream/api-calls.ts`（`readCampaigns` / `claimCampaign`）、
+`src/host/upstream/fetch-usage.ts`（`fetchUsage`）、`src/host/upstream/api-calls.ts`
+（`fetchUserInfo`）共用的头组、`src/host/claim.ts`（降级列表的语义）
 
 **发现（2026-09-27，本机两个真实账号）**：国际版 `GET /sash/api/v1/me/campaigns`
 对**不带 umid 机器身份头**的请求只下发常驻的 `VIEW_DETAILS` 横幅（首月翻倍广告），
