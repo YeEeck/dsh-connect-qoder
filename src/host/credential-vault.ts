@@ -35,6 +35,20 @@
  *    fix: the whole read-decide-write is serialized through one chain, so the
  *    file's final state is always some serialization of the requested writes,
  *    never a mix of two.
+ *
+ *    The chain only serializes writers THAT GO THROUGH IT, though — a second
+ *    DSH profile (web and desktop share one Harness home, hence one vault file
+ *    per region) runs its own chain in its own process, and its write can land
+ *    inside this chain step's window between the read and the rename. So the
+ *    step re-reads the file just before committing and refuses to write unless
+ *    the disk still holds exactly the record the decision was made on: a
+ *    newer record from the other profile is left standing (the caller reports
+ *    a save failure and holds its rotation in memory), a record deleted by the
+ *    other profile is not resurrected, and a record replaced by a foreign
+ *    version is never stomped by a build that cannot even parse it. What
+ *    remains is the gap between that re-read and the rename — two adjacent
+ *    syscalls, no honest way to close it without a real cross-process file
+ *    lock, and registered in docs/KNOWN_GAPS.md rather than papered over.
  * 3. **A damaged file that eats the good one.** A parse failure must not be
  *    treated as "empty, so write the default over it": that converts one bad
  *    sector into permanent credential loss on the next save. The unreadable
@@ -134,6 +148,28 @@ function text(value: unknown): string | undefined {
 /** A timestamp field, in epoch ms. The on-disk form is a number; seconds are not accepted. */
 function stamp(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+/**
+ * Whether two candidate records carry the same credential.
+ *
+ * Used only by the commit-time re-read inside `update`, so the fields that
+ * matter are the ones a competing writer changes: the tokens, the identity
+ * and expiry stamps, and `savedAt` — the guard's own yardstick. Two records
+ * differing in none of these are the same credential for the race's purposes
+ * even if a future build grows a display-only field this comparison ignores.
+ */
+function recordsEqual(a: VaultRecord | undefined, b: VaultRecord | null): boolean {
+  if (a === undefined || b === null) return false
+  return (
+    a.token === b.token &&
+    a.refreshToken === b.refreshToken &&
+    a.expiresAt === b.expiresAt &&
+    a.refreshTokenExpiresAt === b.refreshTokenExpiresAt &&
+    a.userID === b.userID &&
+    a.machineID === b.machineID &&
+    a.savedAt === b.savedAt
+  )
 }
 
 /**
@@ -370,20 +406,77 @@ export class CredentialVault {
    * `read()`/`save()` themselves: a sign-out and a token refresh are both
    * ordinary events, and interleaved they resurrect a signed-out credential.
    *
+   * Cross-process writers (a second DSH profile over the same Harness home)
+   * do not go through this chain, so just before committing, the step re-reads
+   * the file and refuses to write unless the disk still holds the record the
+   * decision was based on — see the module header for the refusal cases and
+   * the window that honestly remains. A deletion (`null`) always commits: the
+   * user pressed sign-out, and no concurrent refresh may outrank that.
+   *
    * @returns whether the file's contents ended up as requested. A rejected
    *   promise is never used to report a storage failure — the caller needs to
-   *   distinguish "the disk refused" from "the operation threw".
+   *   distinguish "the disk refused" from "the operation threw". `false`
+   *   covers the disk refusing AND the commit-time re-read finding that
+   *   another process changed the record under us; both are facts the caller
+   *   must surface, never smooth over.
    */
   update(mutator: (current: VaultRecord | null) => VaultRecord | null): Promise<boolean> {
     const step = this.chain.then(() => {
       const current = this.read()
       const next = mutator(current)
-      return next === null ? this.remove() : this.save(next)
+      // A deletion decided inside the chain always commits: the user pressed
+      // sign-out, and the file is the plugin's only copy of the credential —
+      // there is no newer version of "this machine is signed out" to protect.
+      if (next === null) return this.remove()
+      if (!this.diskStillHolds(current, next)) return false
+      return this.save(next)
     })
     // The chain must survive a throwing mutator, or every later update would
     // reject on a promise nobody ever handled.
     this.chain = step.catch(() => undefined)
     return step
+  }
+
+  /**
+   * Whether the disk still holds the record this chain step decided on.
+   *
+   * A second DSH profile (web and desktop share one Harness home, hence one
+   * vault file per region) writes this file with its OWN chain, so a record
+   * can land between this step's read and its rename. Re-reading immediately
+   * before the commit narrows the race to the re-read→rename pair of syscalls
+   * and, more importantly, turns "my write silently overwrote theirs" into
+   * "my write is refused and the caller says so":
+   *
+   * - a record newer than the one decided on (the other profile refreshed or
+   *   re-signed-in) is left standing — a diverged disk is never overwritten,
+   *   whichever side claims to be newer, because "newer" across two processes
+   *   is last-writer-wins wearing a timestamp;
+   * - a file that vanished (the other profile signed out) is not resurrected;
+   * - a file that changed shape under us (unreadable, or a foreign version)
+   *   is never stomped by a build that cannot even parse it;
+   * - the decided-on state itself — including "absent", for the first-ever
+   *   sign-in — passes through.
+   *
+   * Deletions never reach here (`update` commits them unconditionally), so
+   * `next` is always a record to store.
+   */
+  private diskStillHolds(decidedOn: VaultRecord | null, next: VaultRecord): boolean {
+    const fresh = this.readResult()
+    if (decidedOn === null) {
+      // The decision was made on an empty vault. Only an actually-empty
+      // (or never-existing) disk may receive the write: an unreadable or
+      // unrecognised file is somebody's evidence, and an ok record is a
+      // sign-in the other profile just landed.
+      return fresh.kind === 'absent' || recordsEqual(fresh.kind === 'ok' ? fresh.record : undefined, next)
+    }
+    if (fresh.kind !== 'ok') return false
+    const disk = fresh.record
+    // The disk moved and is neither what we are about to write nor the state
+    // the decision was made on: refuse, whichever side is newer. Overwriting
+    // a diverged disk would be last-writer-wins — the exact bug this guard
+    // exists to stop. The caller surfaces the refusal, and its next attempt
+    // decides on the fresh record like any other step.
+    return recordsEqual(disk, next) || recordsEqual(disk, decidedOn)
   }
 
   /**

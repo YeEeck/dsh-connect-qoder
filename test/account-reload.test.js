@@ -7,8 +7,9 @@
  * `entry.region.id`, so every re-read threw a TypeError, dsh-host-webserver
  * caught it and answered 400 with no body — and the card's whole account panel
  * fell over to "读取账号状态失败" with nothing to show why. These guards pin
- * the two sides of that contract, plus the try/catch that keeps any future
- * region-start failure from taking the route down with it.
+ * the two sides of that contract. The handler-side try/catch is exercised for
+ * real in test/handlers.test.js; what stays textual here is the index.ts
+ * delegation and the startRegion shape it feeds on.
  *
  * src/host/index.ts cannot be imported in a node test (Cordis peer dependencies),
  * so — like test/config-schema.test.js — the checks are textual against the
@@ -21,10 +22,6 @@ import { fileURLToPath } from 'node:url'
 
 // Normalize so the literal newline markers below match on a CRLF checkout.
 const source = readFileSync(new URL('../src/host/index.ts', import.meta.url), 'utf8').replaceAll('\r\n', '\n')
-// The reload handler body (with its try/catch) now lives in the executable
-// handlers.ts; index.ts only delegates. Both halves are pinned: the delegation
-// here, the guard there.
-const handlersSource = readFileSync(new URL('../src/host/handlers.ts', import.meta.url), 'utf8').replaceAll('\r\n', '\n')
 
 /** Slice from a start marker to an end marker (exclusive), over an optional source. */
 function slice(start, end, fromSource = source) {
@@ -94,23 +91,14 @@ test('the stopped-region check reads that shape back', () => {
 
 test('the reload route survives a failing region start', () => {
   // The try/catch now lives in the executable reloadHandler (handlers.ts) —
-  // where it can be exercised for real, not just pattern-matched. The route in
-  // index.ts must keep delegating to it, so a re-inlined body cannot smuggle
-  // the throw back past this file's reach.
+  // exercised for real by test/handlers.test.js, which calls it with a
+  // `startStoppedRegions` that throws. The route in index.ts must keep
+  // delegating to it, so a re-inlined body cannot smuggle the throw back past
+  // this file's reach; the delegation itself is what remains textual here.
   assert.match(
     reloadHandler,
     /reloadHandler\(/,
     'POST /account/reload must delegate to src/host/handlers.ts reloadHandler',
-  )
-  const guard = slice(
-    'export async function reloadHandler(',
-    'export async function confirmHandler(',
-    handlersSource,
-  )
-  assert.match(
-    guard,
-    /try \{\s*await deps\.startStoppedRegions\(wanted\)\s*\} catch \(error(?::\s*any)?\) \{/,
-    'a throw out of startStoppedRegions would reach the web server catch-all and answer a bare 400',
   )
 })
 

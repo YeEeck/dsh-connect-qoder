@@ -282,3 +282,100 @@ test('the sweep leaves live temps and unrelated neighbours alone', () => {
     assert.ok(existsSync(join(dir, name)), `${name} is not this vault's file to delete`)
   }
 })
+
+// ---------------------------------------------------------------------------
+// Cross-process races. A second CredentialVault over the same path stands in
+// for a second DSH profile: each instance has its own chain, so neither can
+// serialize against the other — the exact shape of web + desktop sharing one
+// Harness home (docs/KNOWN_GAPS.md, 设备登录修复轮). The guard under test
+// re-reads the disk inside the chain step and refuses a write whose base has
+// moved, so every interleaving below ends with ONE record standing and the
+// losing writer told `false` — never a silent mix.
+// ---------------------------------------------------------------------------
+
+test('a refresh racing a cross-profile refresh does not stomp the newer record', async () => {
+  const path = join(tempDir(), 'vault.json')
+  const web = new CredentialVault({ path, now: clock })
+  const desktop = new CredentialVault({ path, now: clock })
+  web.save(record({ token: 'dt-base', savedAt: NOW }))
+
+  // Both profiles read the same base and rotate against it. To put desktop's
+  // write INSIDE web's chain-step window (between web's read and web's commit
+  // re-read — the only place a cross-process write can land), desktop's save
+  // is triggered from web's own mutator: that is exactly where another
+  // process's writer would be mid-flight in production.
+  const newer = record({ token: 'dt-desktop', savedAt: NOW + 5 })
+  const webAnswer = await web.update((current) => {
+    desktop.save(newer) // the rival profile commits while web's step is open
+    return { ...current, token: 'dt-web', savedAt: NOW + 9 }
+  })
+
+  assert.strictEqual(webAnswer, false, 'web must be told its write did not land')
+  const held = web.read()
+  assert.strictEqual(held.token, 'dt-desktop', 'the newer cross-profile record must survive')
+  assert.strictEqual(desktop.read().token, 'dt-desktop')
+})
+
+test('a cross-profile sign-out is honoured by a refresh that already started', async () => {
+  const path = join(tempDir(), 'vault.json')
+  const web = new CredentialVault({ path, now: clock })
+  const desktop = new CredentialVault({ path, now: clock })
+  web.save(record({ token: 'dt-base' }))
+
+  // web's refresh mutator captures its base; desktop deletes the file before
+  // web's chain step runs (queued updates resolve in order, so this interleaves
+  // the two instances' steps).
+  const refresh = web.update((current) => ({ ...current, token: 'dt-rotated', savedAt: NOW + 1 }))
+  desktop.clear()
+  await refresh
+
+  assert.strictEqual(web.read(), null, 'a cross-profile sign-out must not be resurrected')
+  assert.ok(!existsSync(path))
+})
+
+test('a cross-profile sign-in lands when the disk is empty, and is not overwritten', async () => {
+  const path = join(tempDir(), 'vault.json')
+  const web = new CredentialVault({ path, now: clock })
+  const desktop = new CredentialVault({ path, now: clock })
+
+  // web's remembered sign-in was decided against an empty disk; desktop's
+  // sign-in lands inside web's chain-step window (via the mutator, standing
+  // in for the other process's writer). web must refuse to replace it.
+  const webAnswer = await web.update(() => {
+    desktop.save(record({ token: 'dt-desktop-signin', machineID: 'machine-2', savedAt: NOW + 3 }))
+    return record({ token: 'dt-web-signin', machineID: 'machine-3', savedAt: NOW + 4 })
+  })
+
+  assert.strictEqual(webAnswer, false)
+  const held = web.read()
+  assert.strictEqual(held.token, 'dt-desktop-signin', 'the first cross-profile sign-in keeps the file')
+  assert.strictEqual(held.machineID, 'machine-2')
+})
+
+test('a no-op update over an unchanged disk still succeeds', async () => {
+  const path = join(tempDir(), 'vault.json')
+  const vault = new CredentialVault({ path, now: clock })
+  vault.save(record({ token: 'dt-base' }))
+
+  // Returning the current record unchanged must stay a success — the guard
+  // exists for foreign records, not for idempotent steps.
+  assert.strictEqual(await vault.update((current) => current), true)
+  assert.strictEqual(vault.read().token, 'dt-base')
+})
+
+test('a foreign-version file is never stomped by an update', async () => {
+  const path = join(tempDir(), 'vault.json')
+  const vault = new CredentialVault({ path, now: clock })
+  vault.save(record({ token: 'dt-base' }))
+
+  // A future build (or a botched editor) rewrote the file while this chain
+  // step was deciding. The re-read sees a shape this build cannot parse and
+  // refuses to write over evidence it does not understand.
+  writeFileSync(path, JSON.stringify({ ...record(), version: VAULT_FORMAT_VERSION + 1 }), 'utf8')
+  assert.strictEqual(await vault.update((current) => ({ ...current, token: 'dt-rotated' })), false)
+  assert.strictEqual(
+    JSON.parse(readFileSync(path, 'utf8')).version,
+    VAULT_FORMAT_VERSION + 1,
+    'the foreign record is left exactly as it was',
+  )
+})

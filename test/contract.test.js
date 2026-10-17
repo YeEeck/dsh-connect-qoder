@@ -10,10 +10,13 @@
  *    to `__save`; the host's `settings-save.ts` whitelists them. A mismatch
  *    is a silent 400.
  *
- * This test reads both source files as text and extracts the constants. It
- * does not import either (the host pulls in the Cordis peer dependencies, so
- * it cannot be imported by a test), so it checks the declarations rather than
- * the runtime values.
+ * This test reads the host's `index.ts` as text and extracts the constants —
+ * it cannot import it (the host pulls in the Cordis peer dependencies, so it
+ * cannot be imported by a test). The save whitelist is different:
+ * `settings-save.ts` is framework-free (that was the point of extracting it),
+ * so `SAVE_FIELDS` is imported and asserted as the real runtime value — a
+ * brace-walking text parser there would be a second parser to keep correct
+ * for no gain.
  *
  * Every extraction is required to prove it extracted something (`requireExtracted`)
  * before two sides are compared: a regex that stops matching returns `undefined`
@@ -27,6 +30,9 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+// settings-save.ts is framework-free by design (see its module header), so the
+// whitelist can be asserted as the real value instead of via text extraction.
+import { SAVE_FIELDS } from '../src/host/settings-save.ts'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -38,16 +44,6 @@ const extractString = (source, name) => {
   const re = new RegExp(`(?:export\\s+)?const\\s+${name}\\s*=\\s*['"]([^'"]+)['"]`)
   const match = re.exec(source)
   return match === null ? undefined : match[1]
-}
-
-/** Extract all string values matching a prefix from an object literal. */
-const extractObjectKeys = (source, name) => {
-  const re = new RegExp(`export\\s+const\\s+${name}\\s*=\\s*\\{([^}]+)\\}`, 's')
-  const match = re.exec(source)
-  if (match === null) return undefined
-  const keys = []
-  for (const m of match[1].matchAll(/(\w+)\s*:/g)) keys.push(m[1])
-  return keys
 }
 
 /**
@@ -123,11 +119,11 @@ test('route paths: client and host agree on the save route', () => {
 // --- Settings field names ---------------------------------------------------
 
 const clientWrite = read('src/client/settings-write.ts')
-const hostSave = read('src/host/settings-save.ts')
 
 test('settings fields: client and host agree on the field names', () => {
   // The client posts fields by string literal; the host whitelists them.
-  // Extract both sets and compare.
+  // The whitelist is imported (see the header note); the client side is still
+  // extracted from `settings-write.ts` because the card posts literals inline.
   const clientFields = []
   for (const m of clientWrite.matchAll(/field\s*===\s*["'](\w+)["']/g)) clientFields.push(m[1])
   // Deduplicate while preserving order.
@@ -136,8 +132,8 @@ test('settings fields: client and host agree on the field names', () => {
   // set on each side agrees vacuously, which is the silent-pass failure mode
   // this file exists to rule out (see requireExtracted).
   assert.ok(clientUnique.length > 0, 'no settings field comparisons found in settings-write.ts — the guard has nothing to check')
-  const hostKeys = requireExtracted(extractObjectKeys(hostSave, 'SAVE_FIELDS') ?? [], 'SAVE_FIELDS in src/host/settings-save.ts')
-  assert.ok(hostKeys.length > 0, 'SAVE_FIELDS extracted as an empty object — the extractor or the declaration changed')
+  const hostKeys = Object.keys(SAVE_FIELDS)
+  assert.ok(hostKeys.length > 0, 'SAVE_FIELDS imported as an empty object — the declaration changed')
   // The client references fields in comparisons; the host declares them all.
   // Every field the client checks must be in the host's whitelist.
   for (const field of clientUnique) {
