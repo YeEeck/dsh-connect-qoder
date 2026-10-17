@@ -121,6 +121,30 @@ test('the limit is recognised by code alone, and by message alone', () => {
   )
 })
 
+test('the upstream string code "daily_limit_exceeded" is its own kind, not a generic upstream error', () => {
+  // Upstream switched from the numeric `110` (prose "Billing daily count
+  // exceeded") to the string code `daily_limit_exceeded` whose prose is
+  // "Qoder's daily request allowance for this account is used up…". That prose
+  // contains NONE of the substrings the daily-limit regex used to match, so
+  // without an explicit code match it fell through to `kind:'upstream'` — losing
+  // the friendly off-peak/check-in message and the retryable:false guarantee.
+  const verdict = classifyUpstreamError(
+    {},
+    'daily_limit_exceeded',
+    "Qoder's daily request allowance for this account is used up. Waiting within the session will not help; the off-peak price (22:00–08:00 Asia/Shanghai) and the daily check-in both still work.",
+  )
+  assert.strictEqual(verdict.kind, 'daily-limit', 'must not regress to upstream on the new code')
+  assert.notStrictEqual(verdict.kind, 'upstream', 'the new code must not be reported as a generic upstream error')
+  assert.notStrictEqual(verdict.kind, 'rate-limit', 'the new code must not be read as a retryable queue')
+})
+
+test('the new code by itself, with no helpful prose, is still a daily limit', () => {
+  // The code alone must decide, because upstream may send the bare code without
+  // the explanatory message on other surfaces.
+  assert.strictEqual(classifyUpstreamError({}, 'daily_limit_exceeded', '').kind, 'daily-limit')
+  assert.strictEqual(classifyUpstreamError({}, '"daily_limit_exceeded"', '').kind, 'daily-limit')
+})
+
 test('a real queue is still a queue — the new branch must not swallow it', () => {
   // The counterpart, because a fix that turns every retryable failure into a
   // hard failure would trade one wrong answer for another. A `10605` with the

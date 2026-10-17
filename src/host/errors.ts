@@ -229,7 +229,20 @@ function classifyUpstreamError(
   // the queue-marker fallback below would otherwise read it as a queue and the
   // plugin would burn a two-minute budget waiting for something that resets at
   // the day boundary and is not improved by waiting at all.
-  if (normalized === '110' || /billing daily count|daily count exceeded|daily limit/i.test(text)) {
+  //
+  // The code is matched explicitly: upstream used to send the numeric `110`
+  // (with a "Billing daily count exceeded" prose), then switched to the string
+  // `daily_limit_exceeded` whose prose ("daily request allowance … is used up")
+  // does NOT contain any of the substrings the regex below looks for. A branch
+  // that only matched the old prose would let the new code fall through to
+  // `kind:'upstream'` — losing both the friendlier message AND the
+  // `retryable:false` guarantee, so the harness would retry a request that
+  // resets only at the day boundary.
+  if (
+    normalized === '110' ||
+    normalized === 'daily_limit_exceeded' ||
+    /billing daily count|daily count exceeded|daily limit|daily request allowance/i.test(text)
+  ) {
     // The hint IS carried through, even though the kind is not a queue. It is
     // the only thing the UI can turn into "resets at HH:MM", and discarding it
     // is what left the user with a bare "重试延迟" and nothing to plan around.
