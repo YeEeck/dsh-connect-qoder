@@ -55,6 +55,7 @@ import type { CatalogEntry, CatalogOutcome, HostContext, PluginLogger, RefreshFa
 import { applyCatalogOutcome, isRefreshObsolete } from './catalog-refresh.ts'
 import { releaseRoutes } from './lifecycle.ts'
 import { mountRouteGroup } from './route-mount.ts'
+import { requireInjected } from './injected.ts'
 import { disposeFiber } from './dispose-order.ts'
 import { publishRegions as publishRegionSet } from './publish-regions.ts'
 import { __dshQoderUmidState, exchangePat, fetchModels, fetchUsage } from './upstream.ts'
@@ -1056,28 +1057,6 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
   }
 
   /**
-   * The service an `inject` callback was handed, as a NON-optional value.
-   *
-   * `ctx.inject(['webServer'], cb)` is Cordis's way of saying "do not call `cb`
-   * until `webServer` exists" — so inside `cb` the service is present. That
-   * fact lives in the `inject` call rather than in the type of
-   * `webCtx.webServer` (which must stay optional: a Host without the service
-   * never runs this callback at all, and `apply` still has to compile for it).
-   *
-   * Rather than sprinkle `!` at the seven registrations, or `?.` on code that
-   * cannot be reached without the service, the guarantee is converted once
-   * here. The throw is unreachable under a correct Host; it exists so that a
-   * Host which fires the callback WITHOUT the service fails loudly at
-   * activation instead of registering routes into `undefined`.
-   */
-  function injected<T>(service: T | undefined, name: string): T {
-    if (service === undefined) {
-      throw new Error(`dsh-connect-qoder: ctx.inject ran for '${name}' without the service`)
-    }
-    return service
-  }
-
-  /**
    * Releases for the card routes this fiber registered, in registration order.
    *
    * Every `webServer.register` result goes through `rememberRouteRelease`, and
@@ -1281,7 +1260,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
   // host without a settings service still gets working models, just no
   // configuration surface.
   ctx.inject(['settings'], (settingsCtx: HostContext) => {
-    const settings = injected(settingsCtx.settings, 'settings')
+    const settings = requireInjected(settingsCtx.settings, 'settings')
     try {
       if (typeof settings.configure === 'function') {
         settings.configure({ auto: true }, ctx.fiber)
@@ -1322,7 +1301,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
     // only once that service exists, so binding it to a local states that fact
     // once instead of re-testing the optional at each of the registrations
     // below. See `HostContext.webServer` / `HostService.register`.
-    const webServer = injected(webCtx.webServer, 'webServer')
+    const webServer = requireInjected(webCtx.webServer, 'webServer')
     mountRouteGroup(webServer, [{
       path: QODER_STATUS_PATH,
       handler: (req: IncomingMessage, res: ServerResponse) => statusHandler(req, res, {
@@ -1341,7 +1320,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
     // only once that service exists, so binding it to a local states that fact
     // once instead of re-testing the optional at each of the registrations
     // below. See `HostContext.webServer` / `HostService.register`.
-    const webServer = injected(webCtx.webServer, 'webServer')
+    const webServer = requireInjected(webCtx.webServer, 'webServer')
     mountRouteGroup(webServer, [{
       path: QODER_MODELS_PATH,
       handler: (req: IncomingMessage, res: ServerResponse) => modelsHandler(req, res, {
@@ -1375,7 +1354,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
     // at all) — the false-"已保存" this closed, docs/issues/06. `webServer` is
     // guaranteed present by the injection; see the note on the other
     // `inject(['webServer'], …)` callbacks.
-    const webServer = injected(webCtx.webServer, 'webServer')
+    const webServer = requireInjected(webCtx.webServer, 'webServer')
     mountRouteGroup(webServer, [{
       path: QODER_SAVE_PATH,
       handler: (req: IncomingMessage, res: ServerResponse) => saveHandler(req, res, {
@@ -1397,7 +1376,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
     // only once that service exists, so binding it to a local states that fact
     // once instead of re-testing the optional at each of the registrations
     // below. See `HostContext.webServer` / `HostService.register`.
-    const webServer = injected(webCtx.webServer, 'webServer')
+    const webServer = requireInjected(webCtx.webServer, 'webServer')
     mountRouteGroup(webServer, [{
       path: QODER_USAGE_PATH,
       handler: (req: IncomingMessage, res: ServerResponse) => usageHandler(req, res, {
@@ -1427,7 +1406,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
     // only once that service exists, so binding it to a local states that fact
     // once instead of re-testing the optional at each of the registrations
     // below. See `HostContext.webServer` / `HostService.register`.
-    const webServer = injected(webCtx.webServer, 'webServer')
+    const webServer = requireInjected(webCtx.webServer, 'webServer')
     mountRouteGroup(webServer, [{
       path: QODER_CHECKIN_PATH,
       handler: (req: IncomingMessage, res: ServerResponse) => checkinHandler(req, res, {
@@ -1546,7 +1525,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
     // only once that service exists, so binding it to a local states that fact
     // once instead of re-testing the optional at each of the registrations
     // below. See `HostContext.webServer` / `HostService.register`.
-    const webServer = injected(webCtx.webServer, 'webServer')
+    const webServer = requireInjected(webCtx.webServer, 'webServer')
     // These three are ONE feature, so they mount as one group: a card that can
     // read its account state but not re-read it or confirm it looks alive and
     // does nothing on two of its buttons. `mountRouteGroup` rolls the group
