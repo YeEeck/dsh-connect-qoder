@@ -40,6 +40,7 @@ import {
   reloadHandler,
   confirmHandler,
   statusHandler,
+  createTokenHistoryCache,
 } from '../src/host/handlers.ts'
 import { REGIONS } from '../src/host/credentials.ts'
 import { ProtocolShapeChangedError } from '../src/host/errors.ts'
@@ -366,7 +367,7 @@ test('usage: a wired counter with no requests today reports 0, not unavailable',
   await usageHandler(req, res, {
     started: [{ region: CN, runtime: stubRuntime({ readUsage: async () => ({ available: true }) }) }],
     logger: quiet,
-    requestCounter: { read: () => ({ count: null, day: null }), readExhausted: () => false },
+    requestCounter: { read: () => ({ count: null, day: null }), readExhausted: () => false, gc: () => {} },
   })
   assert.equal(out.status, 200)
   const body = lastJson({ bodies }).regions[0]
@@ -396,12 +397,216 @@ test('usage: a wired counter carries the daily-limit hint when set', async () =>
   await usageHandler(req, res, {
     started: [{ region: CN, runtime: stubRuntime({ readUsage: async () => ({ available: true }) }) }],
     logger: quiet,
-    requestCounter: { read: () => ({ count: 7, day: '2026-10-18' }), readExhausted: () => true },
+    requestCounter: { read: () => ({ count: 7, day: '2026-10-18' }), readExhausted: () => true, gc: () => {} },
   })
   assert.equal(out.status, 200)
   const body = lastJson({ bodies }).regions[0]
   assert.equal(body.requestsToday, 7)
   assert.equal(body.requestsExhausted, true, 'local estimate of a hit daily limit travels with the count')
+})
+
+// ---------------------------------------------------------------------------
+// /usage — the local token counter and its 7-day history
+// ---------------------------------------------------------------------------
+
+/** A token-counter stub whose reads are counted, so caching is visible. */
+function tokenCounterStub({ total = 0, cached = 0, day = '2026-10-18', history = [] } = {}) {
+  const calls = { read: 0, readHistory: 0, gc: 0 }
+  return {
+    calls,
+    counter: {
+      read: () => {
+        calls.read += 1
+        return { total, cached, day }
+      },
+      readHistory: (region, days) => {
+        calls.readHistory += 1
+        return history
+      },
+      gc: () => {
+        calls.gc += 1
+      },
+    },
+  }
+}
+
+test('usage: a wired token counter with no usage today reports 0, not unavailable', async () => {
+  // Same two-「查不到」 separation as the request counter: wired + empty is 0.
+  const req = fakeReq({ url: '/plugins/dsh-connect-qoder/usage' })
+  const { res, out, bodies } = fakeRes(req)
+  await usageHandler(req, res, {
+    started: [{ region: CN, runtime: stubRuntime({ readUsage: async () => ({ available: true }) }) }],
+    logger: quiet,
+    tokenCounter: tokenCounterStub({ total: null }).counter,
+  })
+  assert.equal(out.status, 200)
+  const body = lastJson({ bodies }).regions[0]
+  assert.equal(body.tokensToday, 0, 'wired but empty is 0, not omitted')
+  assert.equal(body.tokensUnavailable, undefined, 'no such flag exists; tokensToday===0 already says "wired, nothing yet"')
+})
+
+test('usage: an unwired token counter sends no token fields at all', async () => {
+  const req = fakeReq({ url: '/plugins/dsh-connect-qoder/usage' })
+  const { res, out, bodies } = fakeRes(req)
+  await usageHandler(req, res, {
+    started: [{ region: CN, runtime: stubRuntime({ readUsage: async () => ({ available: true }) }) }],
+    logger: quiet,
+  })
+  const body = lastJson({ bodies }).regions[0]
+  assert.equal(body.tokensToday, undefined, 'no counter mounted → no token line, not a fake 0')
+  assert.equal(body.tokensHistory, undefined)
+})
+
+test('usage: tokensCachedToday is omitted when there is no cache hit today', async () => {
+  // cached === 0 and "the field was absent from every frame" are the same
+  // number here, and neither deserves a line on the card.
+  const req = fakeReq({ url: '/plugins/dsh-connect-qoder/usage' })
+  const { res, out, bodies } = fakeRes(req)
+  await usageHandler(req, res, {
+    started: [{ region: CN, runtime: stubRuntime({ readUsage: async () => ({ available: true }) }) }],
+    logger: quiet,
+    tokenCounter: tokenCounterStub({ total: 500, cached: 0 }).counter,
+  })
+  const body = lastJson({ bodies }).regions[0]
+  assert.equal(body.tokensToday, 500)
+  assert.equal(body.tokensCachedToday, undefined, 'a 0 cache-hit line is noise')
+})
+
+test('usage: the 7-day history is only read once while today’s total is unchanged', async () => {
+  // The chart divides by history.length, and six of those seven records have
+  // not changed since yesterday. Re-reading all seven day files on every poll
+  // (and re-sending the whole array) is pure waste — the cache keys on today's
+  // (day, total), which is a complete summary of the array.
+  const history = [
+    { day: '2026-10-12', total: 10, cached: 0 },
+    { day: '2026-10-18', total: 40, cached: 5 },
+  ]
+  const stub = tokenCounterStub({ total: 40, cached: 5, day: '2026-10-18', history })
+  const cache = createTokenHistoryCache()
+  const call = async () => {
+    const req = fakeReq({ url: '/plugins/dsh-connect-qoder/usage' })
+    const { res, bodies } = fakeRes(req)
+    await usageHandler(req, res, {
+      started: [{ region: CN, runtime: stubRuntime({ readUsage: async () => ({ available: true }) }) }],
+      logger: quiet,
+      tokenCounter: stub.counter,
+      tokenHistoryCache: cache,
+    })
+    return lastJson({ bodies }).regions[0]
+  }
+
+  const first = await call()
+  assert.deepEqual(first.tokensHistory, history, 'the first poll reads and ships the history')
+  assert.equal(stub.calls.readHistory, 1)
+
+  const second = await call()
+  assert.deepEqual(second.tokensHistory, history, 'the array is still correct')
+  assert.equal(stub.calls.readHistory, 1, 'an unchanged today-total must not re-read seven files')
+
+  const third = await call()
+  assert.equal(stub.calls.readHistory, 1)
+  assert.equal(stub.calls.read, 3, 'today’s read is the cheap one and still happens every poll')
+})
+
+test('usage: a growing today-total rebuilds the history so the last bar moves', async () => {
+  // The cache must not pin a stale "today" bar: as the day's total grows the
+  // last record has to grow with it.
+  let total = 100
+  const history = () => [{ day: '2026-10-18', total, cached: 0 }]
+  let today = 100
+  const stub = tokenCounterStub({ day: '2026-10-18', history: history() })
+  stub.counter.read = () => {
+    stub.calls.read += 1
+    return { total: today, cached: 0, day: '2026-10-18' }
+  }
+  stub.counter.readHistory = () => {
+    stub.calls.readHistory += 1
+    return history()
+  }
+  const cache = createTokenHistoryCache()
+  const call = async () => {
+    const req = fakeReq({ url: '/plugins/dsh-connect-qoder/usage' })
+    const { res, bodies } = fakeRes(req)
+    await usageHandler(req, res, {
+      started: [{ region: CN, runtime: stubRuntime({ readUsage: async () => ({ available: true }) }) }],
+      logger: quiet,
+      tokenCounter: stub.counter,
+      tokenHistoryCache: cache,
+    })
+    return lastJson({ bodies }).regions[0]
+  }
+
+  assert.equal((await call()).tokensHistory[0].total, 100)
+  total = 260
+  today = 260
+  assert.equal((await call()).tokensHistory[0].total, 260, 'the newest total must invalidate the cache')
+  assert.equal(stub.calls.readHistory, 2, 'a changed summary re-reads the window')
+})
+
+test('usage: a day rollover rebuilds the history with a new window', async () => {
+  // Midnight: today's file is a different file, so (day, total) changes and the
+  // whole window is re-read. Without this the card would keep drawing yesterday's
+  // window under today's title until the first request bumped the total.
+  let day = '2026-10-17'
+  const history = () => [{ day, total: 30, cached: 0 }]
+  const stub = tokenCounterStub({ day, total: 30, history: history() })
+  stub.counter.read = () => {
+    stub.calls.read += 1
+    return { total: 30, cached: 0, day }
+  }
+  stub.counter.readHistory = () => {
+    stub.calls.readHistory += 1
+    return history()
+  }
+  const cache = createTokenHistoryCache()
+  const call = async () => {
+    const req = fakeReq({ url: '/plugins/dsh-connect-qoder/usage' })
+    const { res, bodies } = fakeRes(req)
+    await usageHandler(req, res, {
+      started: [{ region: CN, runtime: stubRuntime({ readUsage: async () => ({ available: true }) }) }],
+      logger: quiet,
+      tokenCounter: stub.counter,
+      tokenHistoryCache: cache,
+    })
+    return lastJson({ bodies }).regions[0]
+  }
+
+  assert.equal((await call()).tokensHistory[0].day, '2026-10-17')
+  day = '2026-10-18'
+  assert.equal((await call()).tokensHistory[0].day, '2026-10-18', 'a new calendar day must re-read the window')
+  assert.equal(stub.calls.readHistory, 2, 'a new day is a new summary')
+})
+
+test('usage: the token counter is gc’d on the usage route', async () => {
+  // The route is the only thing that runs on a timer with no conversation
+  // happening, so it is where stale day files get collected. A test pins the
+  // wiring: move the call out of here and nothing else would ever notice.
+  const stub = tokenCounterStub({ history: [] })
+  const req = fakeReq({ url: '/plugins/dsh-connect-qoder/usage' })
+  const { res } = fakeRes(req)
+  await usageHandler(req, res, {
+    started: [{ region: CN, runtime: stubRuntime({ readUsage: async () => ({ available: true }) }) }],
+    logger: quiet,
+    tokenCounter: stub.counter,
+    tokenHistoryCache: createTokenHistoryCache(),
+  })
+  assert.equal(stub.calls.gc, 1, 'the usage route must still sweep stale day files')
+})
+
+test('usage: without a history cache the route still answers, just without memoising', async () => {
+  // deps.tokenHistoryCache is optional (an older host wiring it absent must not
+  // break the route), so the no-cache path is the fallback, not an error.
+  const stub = tokenCounterStub({ history: [{ day: '2026-10-18', total: 1, cached: 0 }] })
+  const req = fakeReq({ url: '/plugins/dsh-connect-qoder/usage' })
+  const { res, out, bodies } = fakeRes(req)
+  await usageHandler(req, res, {
+    started: [{ region: CN, runtime: stubRuntime({ readUsage: async () => ({ available: true }) }) }],
+    logger: quiet,
+    tokenCounter: stub.counter,
+  })
+  assert.equal(out.status, 200)
+  assert.equal(lastJson({ bodies }).regions[0].tokensHistory.length, 1)
+  assert.equal(stub.calls.readHistory, 1)
 })
 
 // ---------------------------------------------------------------------------

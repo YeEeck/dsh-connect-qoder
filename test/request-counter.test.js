@@ -196,6 +196,78 @@ test('gc removes only this plugin’s stale day files, never neighbours', () => 
   assert.ok(existsSync(join(dir, '.qoder-auth.qoder-cn.json')), 'other plugin file untouched')
 })
 
+// The window is the contract this counter shares with the token counter:
+// `keepDays: 7` means today plus the six days before it. The original
+// implementation cut off at `now - keepDays * DAY_MS`, which deleted the 7th day
+// back a day early — and with keepDays=1 deleted yesterday's file too, so the
+// documented "7 天" window was really 6 (or 0).
+
+test('gc keeps exactly the keepDays window, today included', () => {
+  const dir = tempDir()
+  const inside = localDayKey(clock() - 6 * 24 * 60 * 60 * 1000) // 7th day back, still inside
+  const outside = localDayKey(clock() - 7 * 24 * 60 * 60 * 1000) // 8th day back
+  for (const day of [inside, outside]) {
+    writeFileSync(
+      join(dir, `.qoder-request-count.qoder-cn.${day}.json`),
+      JSON.stringify({ version: 1, count: 1, day, dailyLimitHit: false }),
+      'utf8',
+    )
+  }
+  const counter = counterIn(dir, { keepDays: 7 })
+  counter.gc(clock())
+
+  assert.ok(existsSync(join(dir, `.qoder-request-count.qoder-cn.${inside}.json`)),
+    'keepDays=7 must retain today plus the 6 days before it')
+  assert.ok(!existsSync(join(dir, `.qoder-request-count.qoder-cn.${outside}.json`)),
+    'anything older than the window is still collected')
+})
+
+test('gc with keepDays=1 keeps only today', () => {
+  const dir = tempDir()
+  const yesterday = localDayKey(clock() - 24 * 60 * 60 * 1000)
+  writeFileSync(
+    join(dir, `.qoder-request-count.qoder-cn.${yesterday}.json`),
+    JSON.stringify({ version: 1, count: 4, day: yesterday, dailyLimitHit: false }),
+    'utf8',
+  )
+  const counter = counterIn(dir, { keepDays: 1 })
+  counter.gc(clock())
+  assert.ok(!existsSync(join(dir, `.qoder-request-count.qoder-cn.${yesterday}.json`)),
+    'with a 1-day window yesterday is outside it')
+})
+
+test('gc removes a stale tmp leftover as well', () => {
+  const dir = tempDir()
+  const stale = localDayKey(clock() - 30 * 24 * 60 * 60 * 1000)
+  const staleTmp = `.qoder-request-count.qoder-cn.${stale}.json.tmp`
+  writeFileSync(join(dir, staleTmp), '{"version":1', 'utf8')
+  counterIn(dir, { keepDays: 7 }).gc(clock())
+  assert.ok(!existsSync(join(dir, staleTmp)),
+    'the token counter collects its tmp leftovers; this counter must not be the one that accumulates them')
+})
+
+test('gc throttles to at most one directory scan per local day', () => {
+  const dir = tempDir()
+  const counter = counterIn(dir, { keepDays: 7 })
+  const stale = localDayKey(clock() - 30 * 24 * 60 * 60 * 1000)
+  writeFileSync(join(dir, `.qoder-request-count.qoder-cn.${stale}.json`),
+    JSON.stringify({ version: 1, count: 1, day: stale, dailyLimitHit: false }), 'utf8')
+  counter.gc(clock())
+  assert.ok(!existsSync(join(dir, `.qoder-request-count.qoder-cn.${stale}.json`)),
+    'the first call of the day really scans and collects')
+  // A leftover that appears AFTER the day's scan (a mid-write crash): the
+  // same-day repeat must not re-scan — the throttle returns before readdir,
+  // so this file is still here…
+  const freshTmp = join(dir, `.qoder-request-count.qoder-cn.${localDayKey(clock() - 31 * 24 * 60 * 60 * 1000)}.json.tmp`)
+  writeFileSync(freshTmp, '{"version":1', 'utf8')
+  counter.gc(clock())
+  assert.ok(existsSync(freshTmp), 'same-day repeat is a no-op')
+  // …and the next local day's first call picks it up — the window is one
+  // polling round after midnight, not one week.
+  counter.gc(nextDay())
+  assert.ok(!existsSync(freshTmp), 'the next local day scans again and collects it')
+})
+
 test('the written file carries only counter fields, never a token', () => {
   const dir = tempDir()
   const path = join(dir, '.qoder-request-count.qoder-cn.2023-11-15.json')

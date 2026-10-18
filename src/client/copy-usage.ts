@@ -82,8 +82,10 @@ export const zhUsage = {
 	"pill.offpeakRemaining": "剩余 {time}",
 	// 本地请求计数器（本客户端经本插件发往上游的每日对话轮数）。上游不给每日上限，
 	// 只报「用完了」，所以这是本地自计——与魔搭社区兄弟插件同款本地口径。桌面端与
-	// Web 端各记各的；官方总量以 Qoder 为准。`requestsToday` 不可用（count 为 null）
-	// 画 `—`，不冒充 `0`。撞到每日限流时附 `requestsExhausted` 注（仅本地推断，不保证）。
+	// Web 端各记各的；官方总量以 Qoder 为准。`requestsToday` 为 `null`（文件尚不存在）
+	// 时宿主下发 `0`，客户端说「今日 0 次」（有数据、只是还没有）；计数器没挂上（旧宿主 /
+	// 未启用）时发 `requestsUnavailable: true`，客户端说「本地计数未接入」。
+	// 撞到每日限流时附 `requestsExhausted` 注（仅本地推断，不保证）。
 	"usage.requestsToday": "今日经本客户端请求 {count} 次",
 	"usage.requestsUnavailable": "本地请求计数未接入",
 	"usage.requestsExhausted": "今日额度疑似已用尽（本地统计，仅供参考）",
@@ -96,7 +98,8 @@ export const zhUsage = {
 	"usage.tokensDailyAvg": "日均 {avg}",
 	"usage.tokensTrendUp": "↑ 涨 {pct}%",
 	"usage.tokensTrendDown": "↓ 跌 {pct}%",
-	"usage.tokensTrendFlat": "— 持平"
+	"usage.tokensTrendFlat": "— 持平",
+	"usage.tokensDayTooltip": "{day}: {total} tokens"
 };
 /** English — usage panel copy. */
 export const enUsage = {
@@ -150,9 +153,10 @@ export const enUsage = {
 	"pill.offpeakIdle": "Off-peak window {window} · inactive",
 	"pill.offpeakRemaining": "{time} remaining",
 	// See the zh note: local request counter, self-counted (upstream only says
-	// "used up", never the limit), same local-only口径 as the ModelScope sibling
-	// plugin. Desktop and Web count separately. When unavailable, show an
-	// unavailable line rather than a fake 0.
+	// "used up", never the limit), same local-only accounting as the ModelScope
+	// sibling plugin. Desktop and Web count separately. When the counter is
+	// wired but has no data yet, the host sends 0; when it is not wired at all,
+	// the host sends requestsUnavailable: true.
 	"usage.requestsToday": "Requested {count} times via this client today",
 	"usage.requestsUnavailable": "Local request count not wired in",
 	"usage.requestsExhausted": "Daily allowance may be used up (local estimate, for reference)",
@@ -167,5 +171,6 @@ export const enUsage = {
 	"usage.tokensDailyAvg": "Avg {avg}",
 	"usage.tokensTrendUp": "↑ +{pct}%",
 	"usage.tokensTrendDown": "↓ −{pct}%",
-	"usage.tokensTrendFlat": "— flat"
+	"usage.tokensTrendFlat": "— flat",
+	"usage.tokensDayTooltip": "{day}: {total} tokens"
 };

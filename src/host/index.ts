@@ -75,6 +75,7 @@ import {
   deviceLoginPollHandler,
   deviceLoginCancelHandler,
   deviceLoginSignOutHandler,
+  createTokenHistoryCache,
 } from './handlers.ts'
 import type { DeviceLoginDeps } from './handlers.ts'
 import { DeviceLoginFlow } from './device-login-flow.ts'
@@ -1016,6 +1017,8 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
     basePath: (filename) => qoderCatalogPath(filename),
     logger: ctx.logger,
   })
+  // 多日历史的进程内缓存（usage 路由轮询时复用），与计数器同生命周期。
+  const globalTokenHistoryCache = createTokenHistoryCache()
   for (const region of REGIONS) {
     const entry = await startRegion(region, ctx, enabledIdsFor, deviceSources.get(region.id), globalRequestCounter, globalTokenCounter)
     if (entry !== undefined) started.push(entry)
@@ -1405,6 +1408,10 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
         umidState: __dshQoderUmidState,
         requestCounter: globalRequestCounter,
         tokenCounter: globalTokenCounter,
+        // 7 天历史的进程内备忘录：轮询一次就重读 7 个文件再重发整份数组，
+        // 其中 6 份自从昨天起没动过。缓存按「今日读数」做 key（见
+        // handlers.ts 的 TokenHistoryCache 论证）。
+        tokenHistoryCache: globalTokenHistoryCache,
       }),
     }], routeReleases, ctx.logger)
   })

@@ -22,7 +22,7 @@
  */
 import { test, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -183,5 +183,157 @@ test('a failed write leaves no temp orphan', () => {
   const files = readdirSync(dir)
   assert.strictEqual(files.some((f) => f.endsWith('.tmp')), false)
 })
+
+// --- readHistory: the 7-day chart's data source -----------------------------
+//
+// The chart divides by `history.length` to show a daily average, so the length
+// of this array IS the denominator the user sees. An earlier revision pushed a
+// `{total: 0}` record for every day with no file, which made a brand-new user's
+// average read 1/7 of the truth and drew six bars indistinguishable from "no
+// usage that day". Both properties are asserted below.
+
+test('readHistory omits days with no file instead of zero-filling them', () => {
+  const dir = tempDir()
+  const c = counterIn(dir)
+  // Only today has data.
+  c.addUsage('qoder-cn', USAGE_100)
+
+  const history = c.readHistory('qoder-cn', 7)
+
+  assert.strictEqual(history.length, 1, 'a day with no file must not appear as a zero record')
+  assert.deepStrictEqual(history, [{ day: '2023-11-15', total: 100, cached: 20 }])
+})
+
+test('readHistory returns days in ascending order, oldest first', () => {
+  const dir = tempDir()
+  // Three consecutive days of files, written through the counter itself so the
+  // on-disk shape is the real one.
+  const days = ['2023-11-13', '2023-11-14', '2023-11-15']
+  for (const [i, day] of days.entries()) {
+    writeFileSync(
+      join(dir, `.qoder-token-count.qoder-cn.${day}.json`),
+      JSON.stringify({ version: 1, total: 10 * (i + 1), cached: i, day }),
+      'utf8',
+    )
+  }
+  const c = counterIn(dir)
+  const history = c.readHistory('qoder-cn', 7)
+
+  assert.deepStrictEqual(
+    history.map((r) => r.day),
+    days,
+    'the chart plots left-to-right oldest-to-newest; a reversed array draws the trend backwards',
+  )
+  assert.deepStrictEqual(
+    history.map((r) => r.total),
+    [10, 20, 30],
+  )
+})
+
+test('readHistory is empty for a region that has never been used', () => {
+  const dir = tempDir()
+  const c = counterIn(dir)
+  assert.deepStrictEqual(c.readHistory('qoder-cn', 7), [])
+})
+
+test('readHistory never returns more than keepDays of records', () => {
+  const dir = tempDir()
+  const c = counterIn(dir, { keepDays: 3 })
+  // Write eight days of history — more than the window.
+  for (let i = 0; i < 8; i++) {
+    const day = localDayKey(NOW - i * 24 * 60 * 60 * 1000)
+    writeFileSync(
+      join(dir, `.qoder-token-count.qoder-cn.${day}.json`),
+      JSON.stringify({ version: 1, total: 1, cached: 0, day }),
+      'utf8',
+    )
+  }
+  assert.strictEqual(c.readHistory('qoder-cn', 7).length, 3, 'the window is min(days, keepDays), not days')
+})
+
+test('readHistory falls back to a crash-left tmp file for that day', () => {
+  const dir = tempDir()
+  const c = counterIn(dir)
+  c.addUsage('qoder-cn', USAGE_100)
+  // Simulate a crash between writeFileSync and renameSync: the real file is
+  // gone, the tmp is what holds today's total.
+  const today = '.qoder-token-count.qoder-cn.2023-11-15.json'
+  renameSync(join(dir, today), join(dir, `${today}.tmp`))
+  assert.deepStrictEqual(c.readHistory('qoder-cn', 7), [{ day: '2023-11-15', total: 100, cached: 20 }])
+})
+
+// --- gc window semantics ----------------------------------------------------
+
+test('gc keeps exactly the keepDays window, today included', () => {
+  const dir = tempDir()
+  const c = counterIn(dir, { keepDays: 7 })
+  const inside = localDayKey(NOW - 6 * 24 * 60 * 60 * 1000) // the 7th day back, still inside
+  const outside = localDayKey(NOW - 7 * 24 * 60 * 60 * 1000) // the 8th day back
+  for (const day of [inside, outside]) {
+    writeFileSync(
+      join(dir, `.qoder-token-count.qoder-cn.${day}.json`),
+      JSON.stringify({ version: 1, total: 1, cached: 0, day }),
+      'utf8',
+    )
+  }
+  c.gc()
+
+  assert.ok(existsSync(join(dir, `.qoder-token-count.qoder-cn.${inside}.json`)),
+    'keepDays=7 must retain today plus the 6 days before it; the old off-by-one deleted the 7th day too early')
+  assert.ok(!existsSync(join(dir, `.qoder-token-count.qoder-cn.${outside}.json`)),
+    'anything older than the window is still collected')
+})
+
+test('gc with keepDays=1 keeps only today', () => {
+  const dir = tempDir()
+  const c = counterIn(dir, { keepDays: 1 })
+  const yesterday = localDayKey(NOW - 24 * 60 * 60 * 1000)
+  writeFileSync(
+    join(dir, `.qoder-token-count.qoder-cn.${yesterday}.json`),
+    JSON.stringify({ version: 1, total: 1, cached: 0, day: yesterday }),
+    'utf8',
+  )
+  c.addUsage('qoder-cn', USAGE_100)
+  c.gc()
+
+  assert.ok(!existsSync(join(dir, `.qoder-token-count.qoder-cn.${yesterday}.json`)), 'yesterday is outside a 1-day window')
+  assert.strictEqual(c.read('qoder-cn').total, 100, 'today survives')
+})
+
+test('gc removes a stale tmp leftover as well', () => {
+  const dir = tempDir()
+  const c = counterIn(dir, { keepDays: 7 })
+  const stale = localDayKey(NOW - 30 * 24 * 60 * 60 * 1000)
+  const staleTmp = `.qoder-token-count.qoder-cn.${stale}.json.tmp`
+  writeFileSync(join(dir, staleTmp), '{"version":1', 'utf8')
+  c.gc()
+  assert.ok(!existsSync(join(dir, staleTmp)),
+    'a crash before renameSync leaves a tmp; leaving it forever accumulates garbage nobody reads')
+})
+
+test('gc throttles to at most one directory scan per local day', () => {
+  const dir = tempDir()
+  const c = counterIn(dir, { keepDays: 1 })
+  const stale1 = localDayKey(NOW - 2 * 24 * 60 * 60 * 1000)
+  writeFileSync(join(dir, `.qoder-token-count.qoder-cn.${stale1}.json`), JSON.stringify({ version: 1, total: 5, cached: 0, day: stale1 }))
+  c.gc()
+  assert.ok(!existsSync(join(dir, `.qoder-token-count.qoder-cn.${stale1}.json`)),
+    'the first call of a day scans and collects')
+
+  // A second stale file "appearing" the same day: the repeat call must
+  // short-circuit — the usage route polls every 5 minutes over the SAME shared
+  // dir, and re-scanning it all day is pure sync-IO waste.
+  const stale2 = localDayKey(NOW - 3 * 24 * 60 * 60 * 1000)
+  writeFileSync(join(dir, `.qoder-token-count.qoder-cn.${stale2}.json`), JSON.stringify({ version: 1, total: 5, cached: 0, day: stale2 }))
+  c.gc()
+  assert.ok(existsSync(join(dir, `.qoder-token-count.qoder-cn.${stale2}.json`)),
+    'a same-day repeat is skipped by the throttle')
+
+  // Crossing into the next local day re-arms the scan.
+  c.gc(nextDay())
+  assert.ok(!existsSync(join(dir, `.qoder-token-count.qoder-cn.${stale2}.json`)),
+    'the next local day collects what the throttled day skipped')
+})
+
 
 

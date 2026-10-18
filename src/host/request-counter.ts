@@ -36,8 +36,9 @@ import { dirname } from 'node:path'
 /** 落盘 JSON 的版本号；与 `throttle-store.ts` 同款约定，读错版本即丢弃。 */
 const COUNTER_FORMAT_VERSION = 1
 
-/** 一天毫秒数，用于零点翻页的 `now` 注入与测试。 */
-const DAY_MS = 24 * 60 * 60 * 1000
+// 没有 `DAY_MS`：本模块的「往前 N 天」一律用 Date 日历减法（见 `gc` 的
+// setDate）。固定 24h 步进在 DST 时区会把「昨天」算到另一条日历日上——这正是
+// 早期 gc 的 bug，别把它当工具常量加回来。
 
 /**
  * 把 region / 日期各段收敛成安全文件名分量。
@@ -123,6 +124,8 @@ export class RequestCounter {
   private now: () => number
   private logger?: { warn?: (message: string, error?: unknown) => void }
   private keepDays: number
+  /** gc 的「每本地日至多一次真扫」节流标记（与 TokenCounter.lastGcDay 同款）。 */
+  private lastGcDay: string | null = null
 
   constructor({ basePath, now = () => Date.now(), logger, keepDays = 7 }: RequestCounterOptions) {
     this.basePath = basePath
@@ -276,8 +279,15 @@ export class RequestCounter {
    *
    * 只删除**本插件命名且日期早于保留窗口**的计数文件，绝不碰目录里其它文件
    * （越界防护）。扫描以 basePath 目录为单位，按文件名日期分量判断——日期分量
-   * 白名单过，非本插件格式的文件名（缺 `daily-request-count.` 前缀或分量非法）
+   * 白名单过，非本插件格式的文件名（缺 `.qoder-request-count.` 前缀或分量非法）
    * 一律跳过，杜绝误删目录外/目录内无关文件。
+   *
+   * 窗口语义：`keepDays: 7` 保留今天与过去 6 天，删除第 7 天之前的文件——与
+   * `readHistory(region, 7)` 的扫描范围逐日对齐。早期实现用 `-keepDays` 天做
+   * cutoff（`keepDays=1` 时连昨天的文件都删），历史窗口比读路径短一天。这里取
+   * `-(keepDays - 1)`：`keepDays=1` 只留今天，`keepDays=7` 留今天起 7 天。
+   * 用 Date 日历减法（setDate）而非固定 24h 步进，避免 DST 时区错位（与
+   * `token-counter.ts` 的 gc 同一套算法，两计数器行为一致）。
    *
    * @param now - 基准时间；默认用构造时钟。
    */
@@ -285,7 +295,18 @@ export class RequestCounter {
     const dir = dirname(this.basePath('x'))
     if (!existsSync(dir)) return
     const keepDays = this.keepDays
-    const cutoffDay = localDayKey(now - keepDays * DAY_MS)
+    if (keepDays < 1) return
+    // 「每本地日至多一次真扫」节流：gc 挂在 usage 轮询热路径上（客户端每 5 分钟
+    // 敲一次 handlers.ts），扫目录是同步 IO；而过期文件只在「某日过期」的第二天
+    // 起才存在，当日首扫完成后不会有新活。key 取传入 now 的日（非 this.now()），
+    // 测试可确定性驱动。todayKey 为 null（时区不可用）时不短路——照旧走后面的
+    // cutoffDay null 降级分支。与 TokenCounter.gc 同一套节流（见 token-counter.ts）。
+    const todayKey = localDayKey(now)
+    if (todayKey !== null && todayKey === this.lastGcDay) return
+    // Use calendar subtraction (setDate) instead of 24h step, consistent with readHistory.
+    const cutoffDate = new Date(now)
+    cutoffDate.setDate(cutoffDate.getDate() - (keepDays - 1))
+    const cutoffDay = localDayKey(cutoffDate.getTime())
     if (cutoffDay === null) return
     // 用同步 readdir 以便测试可控；目录通常只有个位数本插件文件。
     let names: string[]
@@ -295,8 +316,11 @@ export class RequestCounter {
       this.logger?.warn?.(`dsh-connect-qoder: could not scan request-count dir ${dir}`, error)
       return
     }
+    // 今日扫描完成 → 同日后续调用短路。readdir 失败不打标记（上面已 warn + return），
+    // 下次轮询照试——best-effort 语义不变，没有新增静默分支。
+    this.lastGcDay = todayKey
     for (const name of names) {
-      const match = /^\.qoder-request-count\.([A-Za-z0-9_-]+)\.(\d{4}-\d{2}-\d{2})\.json$/.exec(name)
+      const match = /^\.qoder-request-count\.([A-Za-z0-9_-]+)\.(\d{4}-\d{2}-\d{2})\.json(\.tmp)?$/.exec(name)
       if (match === null) continue
       const fileDay = match[2] as string
       if (fileDay < cutoffDay) {

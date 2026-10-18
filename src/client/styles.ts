@@ -172,6 +172,10 @@ const QODER_CARD_CSS = [
 	".dsm-qoder-usage-local-note{color:var(--dsw-alias-state-warn-primary,#f79009)}",
 	".dsm-qoder-usage-local-unavailable{font-style:italic}",
 	".dsm-qoder-usage-spacer{flex:1}",
+	// 视觉隐藏但读屏可见（token 历史图的语义表格）：clip 而非 display:none，
+	// 后者会让读屏软件整块跳过。图表本身只给 sighted 用户，逐日数值必须还有
+	// 一条不依赖 <title>/aria-label 的通路——那两件事在 NVDA/JAWS 上并不可靠。
+	".dsm-qoder-visually-hidden{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}",
 	// Model row: a picker-visibility checkbox on the left, the name and its
 	// rate in the middle, the image choice on the right.
 	".dsm-qoder-pick{display:flex;align-items:center;gap:6px;flex:0 0 auto}",

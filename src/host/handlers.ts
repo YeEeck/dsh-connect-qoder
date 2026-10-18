@@ -45,6 +45,7 @@ import { claimCampaign, fetchUserInfo, readCampaigns } from './upstream.ts'
 import type { UsageSnapshot } from './upstream.ts'
 import type { CatalogEntry, PluginLogger, RefreshFailureReason, Region } from './domain.ts'
 import type { Preferences } from './preferences.ts'
+import type { TokenDayRecord } from './token-counter.ts'
 
 /**
  * The runtime surface the routes read — a structural minimum of the
@@ -192,7 +193,9 @@ export async function saveHandler(
   }
 }
 
-/** The regions the usage route reports on. */
+/**
+ * The regions the usage route reports on.
+ */
 export interface UsageDeps {
   started: RouteRuntimeEntry[]
   logger: PluginLogger
@@ -211,6 +214,7 @@ export interface UsageDeps {
   requestCounter?: {
     read(region: string): { count: number | null; day: string | null }
     readExhausted(region: string): boolean
+    gc(now?: number): void
   }
   /**
    * 本地 token 消耗累加器（可选）。挂上时把「今日经本客户端累计消耗的 token 数」
@@ -221,6 +225,47 @@ export interface UsageDeps {
   tokenCounter?: {
     read(region: string): { total: number | null; cached: number | null; day: string | null }
     readHistory(region: string, days?: number): { day: string; total: number; cached: number }[]
+    gc(now?: number): void
+  }
+  /**
+   * 多日历史的进程内缓存（可选）。usage 路由每次轮询都重读一遍 7 个日文件、
+   * 再把整份数组重发一遍——其中 6 份自从昨天起就没变过。缓存把「读」压到 1 次
+   * 文件读（今日那一份），历史数组在今日读数不变时直接复用。
+   *
+   * 注入而非模块级 Map：缓存跟着 host 实例走，测试可以各给一个、互不串味。
+   */
+  tokenHistoryCache?: TokenHistoryCache
+}
+
+/**
+ * 多日 token 历史的进程内备忘录。
+ *
+ * 正确性论证（为什么按「今日读数」做 key 是安全的）：
+ * - 历史数组里只有最后一项是今天；其余几项对应的日文件已经写满，不会再变
+ *   （本地日一切换就会新建文件，而那时今日读数必然也变了）。
+ * - 所以 `read()` 拿到的 (day, total) 是整份数组的完整摘要：它不变，数组就不变。
+ *
+ * 已知边界：**只对同进程成立**。web / desktop 两个 profile 共用 `$DSH_HOME`
+ *   时另一进程写的量这里看不到——这与 `token-counter.ts` 头注释登记的跨进程
+ *   缺口是同一个，不是本缓存新引入的。
+ */
+export interface TokenHistoryCache {
+  /** 取某 region 的历史；未命中返回 undefined，由调用方决定是否重建。 */
+  get(region: string): { day: string | null; total: number | null; records: TokenDayRecord[] } | undefined
+  /** 记下某 region 本次重建所用的摘要与结果。 */
+  set(region: string, value: { day: string | null; total: number | null; records: TokenDayRecord[] }): void
+}
+
+/** 建一个空的进程内历史缓存（host 启动时一个）。 */
+export function createTokenHistoryCache(): TokenHistoryCache {
+  const entries = new Map<string, { day: string | null; total: number | null; records: TokenDayRecord[] }>()
+  return {
+    get(region) {
+      return entries.get(region)
+    },
+    set(region, value) {
+      entries.set(region, value)
+    },
   }
 }
 
@@ -281,7 +326,21 @@ export async function usageHandler(
             requestsField.tokensCachedToday = tokens.cached
           }
           // 多日历史：过去 7 天每天一个记录，供客户端渲染柱状图。
-          const history = tokenCounter.readHistory(runtime.region.id, 7)
+          // 轮询一次就整份重发一遍，其中 6 份自从昨天起就没动过——用「今日读数」
+          // 做 key 缓存：它不变，历史数组就不变（见 TokenHistoryCache 的论证）。
+          const cache = deps.tokenHistoryCache
+          const summary = { day: tokens.day, total: tokens.total }
+          const cached = cache?.get(runtime.region.id)
+          let history = cached?.records
+          // cached 命中且 (day, total) 摘要未变 → 今天这一份读数没动，数组也不变
+          // （只有最后一项是今天，其余日文件已写满）。否则重建。
+          if (history === undefined ||
+              cached === undefined ||
+              cached.day !== summary.day ||
+              cached.total !== summary.total) {
+            history = tokenCounter.readHistory(runtime.region.id, 7)
+            cache?.set(runtime.region.id, { ...summary, records: history })
+          }
           if (history.length > 0) {
             requestsField.tokensHistory = history
           }
@@ -306,6 +365,14 @@ export async function usageHandler(
       }
     }),
   )
+  // 清理过期旧文件（7 天窗口之外的计数文件 + .tmp 残留）。每请求一次就够——
+  // gc 扫的是共享目录（文件名里的 region 只用于判定删谁的文件），早先放在
+  // per-region 块内是每区扫一遍，两区 5 分钟轮询就是每轮两次白工。两个计数器
+  // 内部各有「每本地日至多一次」节流（lastGcDay，同款算法），这里不必再算。
+  // requestCounter 那条曾是「文档说有 GC、生产里从不调用」的死代码——挂在
+  // 这里与 tokenCounter 对称，request-count 文件才真的按窗口回收。
+  deps.tokenCounter?.gc()
+  deps.requestCounter?.gc()
   sendJson(res, 200, { regions, ...checkinAvailability(deps) })
 }
 
@@ -450,6 +517,25 @@ export async function checkinHandler(
     // The one route where failure must name itself: an unusable sign-in, a
     // round that ended minutes ago, and a rejected claim are three different
     // problems wearing the same "nothing happened".
+    //
+    // Posture split (deliberate, unlike what a passing glance suggests): the
+    // status route publishes only an error NAME (see statusHandler's comment),
+    // while this family — checkin and the account-confirm route — publishes
+    // the message to the same browser-visible surface. The boundary is the
+    // error's origin, not the surface: providerRegistrationError is an
+    // arbitrary host-wiring failure that can carry any activation-time path,
+    // and the status comment refuses to bet it holds no credential-bearing
+    // URL. Here the throwers are plugin-owned call sites (claim, fetchUserInfo,
+    // loadCredentialAsync) whose endpoints are plugin-built constants and
+    // whose credentials travel ONLY in `Authorization` headers — never in a
+    // URL string (`upstream/headers.ts` builds `Bearer ${token}`, and
+    // `upstream/cosy-sign.ts` builds the COSY value the same way) — so an
+    // error message here cannot echo a bearer out of a query string. The
+    // detail is also a pinned recovery contract (test/handlers.test.js pins
+    // "502 naming the reason"; the card renders it to tell re-sign-in from
+    // update-the-plugin), and it is length-capped at 300 chars where exposed.
+    // If any of those call sites ever moves a secret into a URL, this comment
+    // is the tripwire — cut the detail back to the kind alone.
     deps.logger.warn?.(`dsh-connect-qoder: ${entry.region.displayName} check-in failed`, error)
     sendJson(res, 502, { error: error instanceof Error ? error.message : String(error) })
   }
@@ -667,6 +753,10 @@ export async function confirmHandler(
     const read = deps.readCredential ?? ((id: Region) => loadCredentialAsync(id, appDataRootFor()))
     credential = runtime !== undefined ? await runtime.resolveCredential() : (await read(region)) ?? loadEnvCredential(region)
   } catch (error) {
+    // The detail-publishing posture here is the same one justified in
+    // checkinHandler's catch (posture-split comment): plugin-owned throwers,
+    // header-only credentials, 300-char cap, and the card needs the reason to
+    // tell re-sign-in from update-the-plugin.
     return sendJson(res, 200, {
       region: region.id,
       available: false,

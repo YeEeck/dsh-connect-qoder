@@ -126,11 +126,66 @@ export interface CardUsageRegion {
 	 */
 	tokensCachedToday?: number
 	/**
-	 * 本地口径：过去 7 天每日 token 消耗历史，按 day 升序排列。供客户端渲染
-	 * 柱状图、计算周总量与日均。
+	 * 本地口径：过去若干天每日 token 消耗历史，按 day 升序排列。供客户端渲染
+	 * 柱状图、计算窗口总量与日均。
+	 *
+	 * **只含真实有数据的日子**：host 的 `readHistory` 不给缺失日补 0，所以
+	 * `length` 本身就是「有数据的天数」，客户端算总量/日均/趋势时直接按它分
+	 * 母。早期版本 host 侧补 0，新用户前 6 天会被摊薄成当日值的 1/7——那时
+	 * 这里的注释还写着「过去 7 天」，两个口径并不一致。
 	 */
-	tokensHistory?: { day: string; total: number; cached: number }[]
+	tokensHistory?: TokenDayRecord[]
 	[key: string]: unknown
+}
+
+/**
+ * 一天的 token 消耗记录（多日历史用）。
+ *
+ * **跨进程契约，一处定义、两端消费**：host 侧 `src/host/token-counter.ts` 与
+ * 本接口字段必须一致。双 region 纪律下 client 不许 import `src/host/`
+ * （card-model.ts 头部的 import 注释写着这条），所以这里是唯一声明处，host 侧
+ * 各写各的。`test/token-history-contract.test.js` 把两边的形状钉在一起：
+ * host 增删字段而 client 没跟上（或反之）会直接红，而不是等到用户看到 NaN。
+ */
+export interface TokenDayRecord {
+	/** 本地日历日（YYYY-MM-DD）。 */
+	day: string
+	/** 当日经本客户端累计消耗的 token 总数。 */
+	total: number
+	/** 当日经本客户端累计命中的缓存 token 数。 */
+	cached: number
+}
+
+/**
+ * 两个 YYYY-MM-DD 是否恰好相差一个日历日（跨月/跨年/闰年边界都算对）。
+ *
+ * **纯 UTC 日序差，绝不读本地时区**：host 侧（`token-counter.ts` 的 readHistory/gc、
+ * `request-counter.ts`）已整体改用 `setDate` 日历步进、认定固定 24h 在 DST 切换日
+ * 是错的（相邻日会差 23h/25h）；客户端这条渲染链曾把 `Date.parse('...T00:00:00')`
+ * （本地午夜）+ `=== 24h` 方程用回来过——那会让趋势箭头在 DST 日每年静默消失一天。
+ * 回归钉在 `test/token-adjacent-days.test.js`（含强制 DST 时区的边界对）。
+ */
+export function areAdjacentDays(a: string, b: string): boolean {
+	const da = dayOrdinal(a)
+	const db = dayOrdinal(b)
+	if (da === null || db === null) return false
+	return Math.abs(db - da) === 1
+}
+
+/** YYYY-MM-DD → UTC 日序数；非法返回 null。Date.UTC 会把越界分量归一化
+ *  （2026-02-30 变成 03-02），所以必须读回校验各日历字段原位，否则坏日期
+ *  会被算成合法相邻日。年份 0099 之类同样被这层挡住（Date.UTC 把 0-99 映射到 1900+）。 */
+function dayOrdinal(day: string): number | null {
+	const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day)
+	if (match === null) return null
+	const year = Number(match[1])
+	const month = Number(match[2])
+	const date = Number(match[3])
+	const ms = Date.UTC(year, month - 1, date)
+	if (Number.isNaN(ms)) return null
+	const back = new Date(ms)
+	if (back.getUTCFullYear() !== year || back.getUTCMonth() !== month - 1 || back.getUTCDate() !== date) return null
+	return ms / 86_400_000
 }
 
 /** One quota bucket, in either the base or the add-on slot. */
