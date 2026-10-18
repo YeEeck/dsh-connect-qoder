@@ -68,6 +68,34 @@ false`），shim 按 502 + 完整消息回给 agent，「插件需要更新」�
 `test/protocol-shape-card.test.js`。仍欠的是 issue 10 的周期性心跳探测（仍不单做：模型
 目录每 30 分钟刷新一次，每轮都在做形状分诊，已有等价的证据面）。
 
+**契约回放 fixture（2026-10-18，本轮新增）**：上面的形状分诊是**运行时**的——网关
+已经变了才会说话；仓库里此前没有任何东西把「某一天的真实应答」冻结下来。`test/` 里
+每份漂移测试都拿手写内联样本，只能证明 shape reader 与自己一致：把 reader 顺手收紧或
+放宽，它们全绿，漂移信号就没了。本轮补的是**快照**——`probe/capture-fixtures.mjs`
+用真实凭据抓四个只读端点（模型目录 / usage / campaigns / userinfo；chat 端点不抓，
+它花真实额度，与 `verify-live.mjs` 同一条纪律），每个 body 先过生产在用的同一个
+shape reader（拒了就是活漂移，照样落盘但明确标注），再 scrubbing 掉个人身份字段
+（`<redacted>`），写到 `test/fixtures/<region>.<kind>.json`。`test/contract-replay.test.js`
+在 CI 里无凭据重放：reader 拒真实 wire → 红（要么网关变了该刷新 fixture，要么
+reader 被收紧该修 reader）；fixture 缺失 → 红（`EXPECTED_FIXTURES` 逐个点名，
+删掉任意一个都红，不只是整个目录清空）；fixture 里字符串值出现 32+ 位 `[\w-]`
+的 token 形串 → 红（对**每个** fixture 都查，不只 userinfo；匹配的是值位置而非
+JSON key，因为 COSY 自己就有 `dedicated_resource_packages`、`c-daily-checkin-*`
+这类长串字段）。capture 脚本另有一道**精确**守卫：写盘前比较 body 是否包含
+credential 自身的字段（token / userID / name / email），命中即拒写——那是
+启发式猜不出的，只有持凭据的一方抓得到。capture 脚本
+在无凭据时不写任何文件、已提交的 fixture 不受影响，也不会谎称「重放套件会
+跳过」——若 fixture 真缺，重放套件会红，这正是它该做的。
+种子 fixture 由实测 shape 派生（`probe/model-shape.mjs` + issue 04），模型名与额度是
+占位不是实时抓取，`_meta.note` 里写清了；有登录态的真机上跑 capture 脚本即可换成
+真快照。变异实测：`chat` 改名 `models`、userinfo 丢身份字段、catalog 的
+`max_input_tokens` 变成字符串均被红；usage 有一个
+**已知**残留——`readUsageShape` 认「任意已知字段」，而 `display_mode` 是包装层自己的
+字段，所以网关若只把内层 quota 包装改名、外层 `display_mode` 还在，reader 会放行然后
+读到空，渲染成「无用量」；重放套件为此断言 usage fixture 的内层 body 必须至少带一个
+quota 字段，让那种捕获在 fixture 校验层就红，而不是靠运行时撞一次。
+
+
 **凭据 sweep 的身份守卫（issue 01）**：`sweepStaleOscryptDirs` 现在要求
 `lstat` 判真目录 + `.dsh-oscrypt` 标记文件 + `key.b64` 恰好解出 32 字节，
 三道闸全部由 `test/credential-cleanup.test.js` 的新用例守着，且两道守卫各自
