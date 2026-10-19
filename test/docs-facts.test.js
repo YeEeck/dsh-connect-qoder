@@ -28,9 +28,9 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+import { dirname, join, normalize, sep } from 'node:path'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -189,4 +189,72 @@ test('package.json points every self-referential URL at the repository it declar
   for (const url of [pkg.homepage, pkg.bugs.url]) {
     assert.equal(new URL(url).pathname.split('/')[1], owner, `${url} is not under ${owner} (fork leftover)`)
   }
+})
+
+/**
+ * Images referenced by the repository's own prose, resolved against THIS
+ * checkout.
+ *
+ * WHY: an `![](assets/x.png)` whose file was renamed or never committed
+ * renders as an empty frame and nothing goes red — the same silent-failure
+ * shape the code gates were built for, moved into the docs. `screenshots.json`
+ * is worse: the market reads it to build the plugin's detail page, so a stale
+ * entry drops a screenshot from a published listing with no error anywhere.
+ *
+ * Both sources are checked the same way, because they are two views of the
+ * same asset set: a file must exist on disk and hold bytes. Only presence and
+ * non-emptiness are asserted — matching image *pixels* or alt text would make
+ * every screenshot refresh a test edit.
+ */
+const IMAGE_EXT = /\.(png|jpe?g|webp|gif|svg)$/i
+/** A remote reference is the author's call; a local one is this checkout's promise. */
+const isRemote = (ref) => /^(https?:)?\/\//i.test(ref) || ref.startsWith('data:')
+
+/** Resolve a repo-relative reference, refusing paths that climb out of the repo. */
+function repoPath(ref, where) {
+  const rel = normalize(ref.replace(/^\.\//, ''))
+  assert.ok(
+    !rel.startsWith('..') && !rel.includes(`..${sep}`) && !rel.match(/^([a-zA-Z]:|[\\/])/),
+    `${where} points outside the repository: ${ref}`,
+  )
+  return join(root, rel)
+}
+
+function assertAssetExists(ref, where) {
+  const abs = repoPath(ref, where)
+  const stat = statSync(abs, { throwIfNoEntry: false })
+  assert.ok(stat !== undefined, `${where} references ${ref}, which does not exist on disk`)
+  assert.ok(stat.isFile(), `${where} references ${ref}, which is not a regular file`)
+  assert.ok(stat.size > 0, `${where} references ${ref}, which is empty`)
+}
+
+test('every screenshots.json entry is a real, non-empty image in this checkout', () => {
+  const declared = JSON.parse(read('screenshots.json'))
+  assert.ok(Array.isArray(declared), 'screenshots.json must be an array of paths (or {"screenshots": [...]})')
+  // awesomedsh (contributing.md, "Screenshots"): 1–8 entries; more are ignored
+  // and zero means the market falls back to scraping the README.
+  assert.ok(declared.length >= 1 && declared.length <= 8, `screenshots.json has ${declared.length} entries; the market shows 1–8`)
+
+  const seen = new Set()
+  for (const ref of declared) {
+    assert.equal(typeof ref, 'string', `screenshots.json entry is not a string: ${JSON.stringify(ref)}`)
+    assert.ok(isRemote(ref) || IMAGE_EXT.test(ref), `screenshots.json entry is not an image: ${ref}`)
+    assert.ok(!seen.has(ref), `screenshots.json lists ${ref} twice`)
+    seen.add(ref)
+    if (isRemote(ref)) continue // the market honours GitHub-hosted absolute URLs; not ours to stat
+    assertAssetExists(ref, 'screenshots.json')
+  }
+})
+
+test('every local image referenced by the README exists in this checkout', () => {
+  const readme = read('README.md')
+  // Markdown images and raw <img> tags are both used in this README; the
+  // relative-path rule has to cover whichever form the next edit picks.
+  const refs = [
+    ...[...readme.matchAll(/!\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g)].map((m) => m[1]),
+    ...[...readme.matchAll(/<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi)].map((m) => m[1]),
+  ].filter((ref) => !isRemote(ref) && !ref.startsWith('#'))
+
+  assert.ok(refs.length > 0, 'the README lost every local image — re-add it or delete screenshots.json')
+  for (const ref of refs) assertAssetExists(decodeURI(ref), 'README.md')
 })

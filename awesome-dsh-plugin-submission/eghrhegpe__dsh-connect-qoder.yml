@@ -1,28 +1,19 @@
 # Submission draft for awesome-dsh-plugin.
 #
 # Copy this file to `data/plugins/eghrhegpe__dsh-connect-qoder.yml` in a fork of
-# awesome-dsh-plugin/awesome-dsh-plugin and open a PR that adds only it. Do not
-# edit that repository's READMEs — both are generated from data/plugins/.
+# awesome-dsh-plugin/awesome-dsh-plugin and open a PR that touches only it.
+# Do not edit that repository's READMEs (they are generated), do not add an `npm:` field,
+# do not put screenshots here (the market reads this repo's `screenshots.json`).
+# Rules live in `./contributing.md` (upstream copy) — do not restate them anywhere.
 #
-# The description is read as a claim and checked against the code, so every
-# noun in it is one the source actually has:
-#   "already signed in on this machine … no token to configure" — credentials
-#     are decrypted out of the Qoder app's own store on this machine
-#     (lib/credentials.js, DPAPI / OSCrypt). The user never enters a PAT. This
-#     is also what separates the entry from mo-n/dsh-provider-qoder, which is
-#     already on the list and takes a Qoder Personal Access Token by hand.
-#   "CN and global" — lib/credentials.js and lib/client.js carry both
-#     (Qoder CN / 国内版 and 国际版, com.qoder.cn and qoder.com).
-#   "rate and off-peak window" — rateAt / offPeakState / windowLabelOf, and the
-#     countdown driven by promotion.active.
-#   "daily check-in" — CardCheckin and the check-in card
-#     (src/client/card-model.ts, src/client/card.tsx).
-#   "on-card usage pills" — the usage pill rendered beside the card
-#     (src/client/composer-usage-pill.tsx).
-#   "credit lookup" — Credits rendered via formatCredits in the card model.
+# `description.zh` is the text of record; `description.en` is its sentence-by-sentence
+# counterpart. Re-check a claim against these modules, not against this comment:
+#   desktop login state             lib/credentials.js
+#   rate / off-peak / check-in      src/client/card-model.ts, card.tsx
+#   card pill, credits              src/client/composer-usage-pill.tsx
 url: https://github.com/eghrhegpe/dsh-connect-qoder
 name: eghrhegpe/dsh-connect-qoder
 category: model
 description:
-  en: 'Registers both Qoder CN and international models into DeepSeek Harness, showing each model''s rate that shifts with off-peak hours, plus a daily check-in, on-card usage pills, and a credit lookup — no token to configure when the Qoder app is already signed in on this machine, otherwise one browser login.'
-  zh: '注册 Qoder 中国版与国际版的语言模型到 DSH，自动获取每个模型的费率，随错峰时段变化。并提供每天签到、卡片胶囊与积分查询功能。需要本机Qoder的登录态，或浏览器登陆一次'
+  en: 'Registers Qoder CN and international language models into DSH, fetching each model''s rate automatically as it shifts with off-peak hours. It also provides a daily check-in, a usage pill and a credit lookup. Needs the Qoder login state on this machine, or one browser login.'
+  zh: '注册 Qoder 中国版与国际版的语言模型到 DSH，自动获取每个模型的费率，随错峰时段变化。并提供每天签到、用量胶囊与积分查询功能。需要本机Qoder的登录态，或浏览器登录一次。'

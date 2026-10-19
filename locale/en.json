@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "DSH Connect Qoder",
-    "description": "Registers both Qoder CN and international models into DeepSeek Harness, showing each model's rate that shifts with off-peak hours, plus a daily check-in, on-card usage pills, and a credit lookup — no token to configure when the Qoder app is already signed in on this machine, otherwise one browser login."
+    "description": "Registers Qoder CN and international language models into DSH, fetching each model's rate automatically as it shifts with off-peak hours. It also provides a daily check-in, a usage pill and a credit lookup. Needs the Qoder login state on this machine, or one browser login."
   }
 }
