@@ -63,12 +63,19 @@ jobs:
       # would tie this cache to a runner image revision. `npm root -g` follows
       # the prefix, which is exactly the probe `test/composer-pill.test.js`
       # uses, so the anchor the test reads moves with it.
+      #
+      # It is set as NPM_CONFIG_PREFIX, NOT via `npm config set prefix`:
+      # windows-latest exports NPM_CONFIG_PREFIX=C:\npm\prefix, and an env var
+      # outranks every npmrc. The first attempt wrote the user npmrc,
+      # `npm root -g` kept answering C:\npm\prefix\node_modules, the install
+      # landed there, and the cache step then logged "Path Validation Error …
+      # does not exist, hence no cache is being saved" — a green job that
+      # cached nothing. The env var is the one npm obeys on both images.
       - name: Point npm's global prefix at a cacheable directory
         shell: bash
         run: |
           PREFIX="$(node -p "require('node:path').join(process.env.RUNNER_TEMP, 'dsh-global')")"
-          npm config set prefix "$PREFIX"
-          echo "npm root -g -> $(npm root -g)"
+          echo "NPM_CONFIG_PREFIX=$PREFIX" >> "$GITHUB_ENV"
 
       # The key carries the resolved host version, not a pinned constant: a new
       # upstream release invalidates the cache on its own, so the gate keeps
@@ -97,11 +104,17 @@ jobs:
       - name: Install the DSH runtime the slot-gate reads
         shell: bash
         run: |
+          echo "npm root -g -> $(npm root -g)"
           ANCHOR="$(npm root -g)/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-base"
           if node -e "process.exit(require('node:fs').existsSync(process.argv[1]) ? 0 : 1)" "$ANCHOR"; then
             echo "cached runtime already present: $ANCHOR"
           else
             npm install -g @deepseek-ai/dsh || echo "dsh CLI not installable here; the slot-gate assertions will name the missing peer"
+            # The install is what creates the cached directory; failing loudly
+            # here is better than a green job whose cache step then finds nothing
+            # to save (that is exactly how the first attempt went wrong).
+            node -e "process.exit(require('node:fs').existsSync(process.argv[1]) ? 0 : 1)" "$ANCHOR" \
+              || echo "::warning::the runtime anchor is still missing after install; the cache will not be saved"
           fi
 
       # A bare checkout now carries the committed lib/ (docs/issues/19), but the
