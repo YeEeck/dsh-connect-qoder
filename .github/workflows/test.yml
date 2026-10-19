@@ -93,7 +93,16 @@ jobs:
         shell: bash
         run: echo "version=$(npm view @deepseek-ai/dsh version)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/cache@v4
+      # restore/save are split rather than the combined `actions/cache`, which
+      # saves whatever the path holds at job teardown. That version persisted an
+      # EMPTY directory whenever the install below failed (a registry blip is
+      # enough), and a saved key is never overwritten — so one bad run would
+      # leave every later run for the same host version restoring an empty shell
+      # and paying the full install again, forever, with a cache that reports a
+      # hit. Saving only when the anchor was actually found closes that.
+      - name: Restore the cached DSH runtime
+        id: dsh-cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/dsh-global
           key: dsh-runtime-${{ runner.os }}-node${{ matrix.node }}-${{ steps.dsh-version.outputs.version }}
@@ -110,6 +119,7 @@ jobs:
       # skip this step while the four assertions quietly go back to passing as
       # skips. If the anchor is missing, we install.
       - name: Install the DSH runtime the slot-gate reads
+        id: dsh-runtime
         shell: bash
         run: |
           echo "npm root -g -> $(npm root -g)"
@@ -118,12 +128,22 @@ jobs:
             echo "cached runtime already present: $ANCHOR"
           else
             npm install -g @deepseek-ai/dsh || echo "dsh CLI not installable here; the slot-gate assertions will name the missing peer"
-            # The install is what creates the cached directory; failing loudly
-            # here is better than a green job whose cache step then finds nothing
-            # to save (that is exactly how the first attempt went wrong).
-            node -e "process.exit(require('node:fs').existsSync(process.argv[1]) ? 0 : 1)" "$ANCHOR" \
-              || echo "::warning::the runtime anchor is still missing after install; the cache will not be saved"
           fi
+          # This, and only this, decides whether the cache is written: an anchor
+          # still missing after the install means there is nothing worth saving,
+          # and saving it anyway is the poisoned-key failure described above.
+          if node -e "process.exit(require('node:fs').existsSync(process.argv[1]) ? 0 : 1)" "$ANCHOR"; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::the runtime anchor is still missing after install; the cache will not be saved"
+          fi
+
+      - name: Save the DSH runtime for the next run
+        if: steps.dsh-cache.outputs.cache-hit != 'true' && steps.dsh-runtime.outputs.present == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/dsh-global
+          key: ${{ steps.dsh-cache.outputs.cache-primary-key }}
 
       # A bare checkout now carries the committed lib/ (docs/issues/19), but the
       # build still runs first: the tests that read lib/client.js assert against
@@ -152,6 +172,34 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      # Guards ALIGNMENT, not behaviour: every host peer range is scored against
+      # ALL 36 published @deepseek-ai/dsh versions and compared to the committed
+      # partition in `test/host-range.golden.json`. `peer-compat.test.js` above
+      # checks the ranges against a 7-version hand-written table (the DECISION);
+      # this checks them against the whole published universe (the WORLD), which
+      # is how a newly published 0.2.2-rc.1 gets noticed instead of silently
+      # landing inside a range nobody re-read.
+      #
+      # It is a separate step from `npm test` because it is intentionally NOT in
+      # that glob: the file is `test/host-range.test.mjs`, and `npm test` runs
+      # `test/*.test.js`. (It could join the glob — the universe is committed, so
+      # there is no network — but it is a release-time question, not an edit-time
+      # one, and a red run here means "go look at the version universe", which is
+      # a different instruction from "your change broke a test".)
+      #
+      # No network: the universe is committed. The one network-touching piece —
+      # the semver cross-check — probes the runtime installed two steps above via
+      # `npm root -g`, and skips (not fails) when it is absent.
+      #
+      # Order matters: run the gate first, and only then say whether the golden
+      # file is stale. Both can be red at once (a stale universe AND a range that
+      # now scores differently), and the gate's message is the actionable one.
+      - name: Host range covers the whole published universe
+        shell: bash
+        run: |
+          node --test test/host-range.test.mjs
+          node scripts/update-host-range.mjs --check
 
       # Enforced as a FLOOR, not as a score: `test:coverage` carries
       # --test-coverage-lines/functions/branches set a little under the current
