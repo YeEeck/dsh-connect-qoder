@@ -57,6 +57,12 @@ prose `daily request allowance`）返回 `{ kind: 'daily-limit' }`——这个�
 也就是说：`DailyLimitRejection` 的类注释原写着「`retryable: false` 同时挡住插件阶梯和
 宿主的重试策略」——后半句从来没有成立过（`retryable` 不可能跨进程传给宿主）。
 
+> 后续（2026-10-19）：这一层现在由 [24](24-terminal-failure-status-codes.md) 一并关掉——
+> `src/host/route-retry-policy.ts` 把本路由交给宿主的策略收窄为
+> `EMPTY_RESPONSE / TIMEOUT / TRANSPORT`，`RATE_LIMIT` 不再被宿主重试。上面这段描述的是
+> 收窄**之前**的默认策略，保留作为"为什么文案也是锁"的出处：quota 措辞让宿主把这件事
+> 判成 `QUOTA`（诚实、并且不依赖那份码表），码表收窄则覆盖所有终态判决。
+
 ## 修复
 
 1. **`src/host/upstream/sse.ts:394-421`：先读 body、后判状态。**
@@ -77,7 +83,8 @@ prose `daily request allowance`）返回 `{ kind: 'daily-limit' }`——这个�
   变异验证：把第 1 步的提前判断删掉，3 个新测试全红（各 8 s 超时 = 阶梯被进入），恢复后全绿。
 - `probe/host-retry-classification-probe.mjs`：从安装副本 `app.asar` 取出**宿主自己的**
   `isQuotaExceededError`（该文件零 import，可直接执行）判定真文案；并**读取**宿主的
-  `classifyPiAiError` 顺序与 `DEFAULT_RETRYABLE_CODES`，任一处漂移即 FAIL。当前 PASS：
+  `classifyPiAiError` 顺序、默认可重试码表（`DEFAULT_RETRYABLE_CODES`）与**本路由生效的
+  策略**（`src/host/route-retry-policy.ts`），任一处漂移即 FAIL。当前 PASS：
   两种文本合成（`429: <json>` / `429 <message>`）都命中 `QUOTA`，上游原文（无括注）不命中。
 - `npm run typecheck` / `npm test` / `npm run build`（重建 `lib/`）全绿。
 

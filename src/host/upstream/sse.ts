@@ -571,15 +571,21 @@ class QueueRejection extends Error {
  * host classifies on those — `classifyPiAiError` in
  * `@deepseek-ai/dsh-llm-pi-ai/lib/index.js` tests `isQuotaExceededError`
  * (`@deepseek-ai/dsh-llm/lib/types/error.js`) BEFORE its `\b429\b|rate.?limit`
- * rule. A message that only says the allowance "is used up" matches neither
- * wording, so it fell through to `RATE_LIMIT`, which IS in the host's retryable
- * set (`DEFAULT_RETRYABLE_CODES` in `@deepseek-ai/dsh-llm/lib/types/retry-policy.js`)
- * — and the request was retried five more times. That is why the sentence below
- * says "daily quota exhausted": the phrase is load-bearing, it is the wording
- * the host's quota predicate looks for, and dropping it silently reinstates
- * those retries. The old claim here was that the flag alone did this; it never
- * could. `probe/host-retry-classification-probe.mjs` asserts the contract
- * against the installed host, and `test/daily-limit.test.js` pins the phrase.
+ * rule. A message that only said the allowance "is used up" matched neither
+ * wording, so this failure fell through to `RATE_LIMIT` and the request was
+ * retried five more times. Two locks close that, and they do different jobs:
+ *
+ *   1. this route's policy no longer retries `RATE_LIMIT`/`SERVER`
+ *      (`src/host/route-retry-policy.ts`, docs/issues/24) — that is what stops
+ *      the retries, and it covers every terminal verdict, not only this one;
+ *   2. the sentence below says "daily quota exhausted". The phrase is
+ *      load-bearing: it is the wording the host's quota predicate looks for, so
+ *      the classification is `QUOTA` — the honest name for the cause, and still
+ *      right if the retryable set is ever widened back.
+ *
+ * The old claim here was that the flag alone did this; it never could.
+ * `probe/host-retry-classification-probe.mjs` asserts both against the
+ * installed host, and `test/daily-limit.test.js` pins the phrase.
  *
  * The message names the cause in the user's terms, because the upstream text
  * ("Billing daily count exceeded") is a billing term and the action is none of

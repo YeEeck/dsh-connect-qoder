@@ -17,6 +17,7 @@ import { createProvider } from '@earendil-works/pi-ai'
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy'
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import { resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
+import { ROUTE_RETRY_POLICY } from './route-retry-policy.ts'
 import { buildModelsFor } from './adapter-models.ts'
 import type { ModelRuntime } from './adapter-models.ts'
 import type { ImageMode } from './preferences.ts'
@@ -250,7 +251,8 @@ export function createQoderAdapter(
         provider: providerId,
         displayName,
         streamIdleTimeoutMs: STREAM_IDLE_TIMEOUT_MS,
-        retryPolicy: resolveRetryPolicy(undefined, `dsh-connect-qoder.${providerId}.retryPolicy`),
+        // Narrowed on purpose — see `route-retry-policy.ts` and docs/issues/24.
+        retryPolicy: resolveRetryPolicy(ROUTE_RETRY_POLICY, `dsh-connect-qoder.${providerId}.retryPolicy`),
         configuredMaxTokens: new Map(),
         modelErrors: new Map(),
         ...REQUEST_IMAGE_BUDGETS,

@@ -3,9 +3,10 @@
  *
  * 为什么要问这个问题：本插件的 `DailyLimitRejection` 有 `retryable:false`，但**宿主看不见
  * 这个标志**。宿主只拿到 HTTP 状态 + 一段文本，然后按文本分类
- * （`classifyPiAiError`，见下）。所以「不重试」这半边靠的是——文案里出现宿主认得的
- * quota 措辞。这条耦合在 `src/host/upstream/sse.ts` 的类注释里写明了，本探针用**宿主自己
- * 的代码**把它验一遍，而不是拿一份手抄的规则去对比手抄的规则。
+ * （`classifyPiAiError`，见下）。「不重试」这半边因此有两道锁（docs/issues/24）：
+ * 本路由的策略不再重试 `RATE_LIMIT`/`SERVER`（`src/host/route-retry-policy.ts`），
+ * 以及文案里出现宿主认得的 quota 措辞。本探针用**宿主自己的代码**把两道都验一遍，
+ * 而不是拿一份手抄的规则去对比手抄的规则。
  *
  * 做法（不复制任何规则）：
  *   1. 从安装副本的 `app.asar` 取出 `@deepseek-ai/dsh-llm/lib/types/error.js`——该文件零
@@ -14,12 +15,16 @@
  *   2. 用真的 `streamChat` + fetch stub 跑一次真实回合，拿到本插件真的错误文案；
  *   3. 按宿主真实的文本合成路径判定（两条都试，见 COMPOSITIONS）；
  *      负对照：把括注去掉的旧文案必须**不**命中；
- *   4. **读取**（不执行）宿主分类器的顺序和可重试码表：quota 必须在 `429|rate.?limit`
- *      之前判定，且 QUOTA 不在 `DEFAULT_RETRYABLE_CODES` 里。任一处漂移，本探针报 FAIL。
+ *   4. **读取**（不执行）宿主分类器的顺序和默认可重试码表，再拿本插件交出去的
+ *      `ROUTE_RETRY_POLICY` 当作宿主**生效**的集合：quota 必须在 `429|rate.?limit` 之前
+ *      判定，本路由的码必须只从默认表里做减法，且 `RATE_LIMIT`/`SERVER` 不在其中；
+ *   5. 端到端矩阵：每种失败 → shim 出口 → 宿主的判决 → 会不会重试。
+ *      任一处漂移，本探针报 FAIL。
  *
  * 运行：node probe/host-retry-classification-probe.mjs [--asar <path/to/app.asar>]
  *
- * 退出码：0 = 宿主会把它当不可重试的额度错误；1 = 会重试（或在宿主里找不到那些规则）。
+ * 退出码：0 = 宿主不会重试（判 QUOTA，且策略里没有 RATE_LIMIT/SERVER）；1 = 会重试
+ * （或在宿主里找不到那些规则）。
  */
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -123,6 +128,8 @@ if (typeof isQuotaExceededError !== 'function' || typeof QUOTA_EXCEEDED_CODE !==
 
 const { streamChat } = await import('../src/host/upstream.ts')
 const { ProtocolShapeChangedError, thrownFlag } = await import('../src/host/errors.ts')
+// 本路由的策略（零 import 的纯数据模块）：矩阵的「会不会重试」用的是它，不是宿主默认表。
+const { ROUTE_RETRY_POLICY } = await import('../src/host/route-retry-policy.ts')
 
 const REGION = { id: 'qoder', displayName: 'Qoder', baseUrl: 'https://gateway.example' }
 const CREDENTIAL = { userID: 'u-probe', token: 'tok-probe', name: 'n', email: 'e@x', machineID: 'm' }
@@ -244,14 +251,48 @@ check(
 )
 check(classifier.includes('QUOTA_EXCEEDED_CODE'), '返回的是 QUOTA_EXCEEDED_CODE 而不是 RATE_LIMIT')
 
-console.log('\n[3] 可重试码表（读 dsh-llm/lib/types/retry-policy.js）')
+console.log('\n[3] 可重试码表：宿主默认表（读）与本路由的策略（本插件自己给的）')
 const policy = textOf(RETRY_POLICY_JS) ?? ''
 const listStart = policy.indexOf('DEFAULT_RETRYABLE_CODES = Object.freeze([')
 const listEnd = listStart === -1 ? -1 : policy.indexOf(']', listStart)
 const retryable = listStart === -1 || listEnd === -1 ? '' : policy.slice(listStart, listEnd)
+/** 宿主默认集合：字面量里的字符串码 + 标识符形式的 EMPTY_RESPONSE_CODE（原样取自宿主常量）。 */
+const DEFAULT_RETRYABLE = new Set([...retryable.matchAll(/'([A-Z_]+)'/g)].map((m) => m[1]))
+if (retryable.includes('EMPTY_RESPONSE_CODE')) DEFAULT_RETRYABLE.add(EMPTY_RESPONSE_CODE)
+
 check(retryable !== '', '找得到 DEFAULT_RETRYABLE_CODES 的字面量')
-check(retryable.includes('RATE_LIMIT'), 'RATE_LIMIT 在可重试集合里（所以分类错误就真的会重试）')
-check(!retryable.includes('QUOTA'), 'QUOTA 不在可重试集合里')
+check(!retryable.includes('QUOTA'), 'QUOTA 不在宿主默认集合里')
+
+/**
+ * 本路由的**生效**集合：宿主用 `resolveRetryPolicy(ROUTE_RETRY_POLICY, …)`
+ * （`src/host/adapter.ts`），而这里只有本插件自己交出去的那份配置。
+ * docs/issues/24 §1–§3 的全部结论都建立在「`RATE_LIMIT`/`SERVER` 不在里面」之上，
+ * 所以这两条是硬断言：谁把策略改宽（或改回 `undefined` = 默认），本探针立刻红。
+ */
+const EFFECTIVE_RETRYABLE = new Set(ROUTE_RETRY_POLICY.retryableCodes)
+// 这份配置真被交出去才算数：`adapter.ts` 一旦回到 `resolveRetryPolicy(undefined, …)`
+// （宿主默认 = 含 RATE_LIMIT/SERVER），下面的结论全部作废。
+const adapterSource = readFileSync(new URL('../src/host/adapter.ts', import.meta.url), 'utf8')
+check(
+  adapterSource.includes('retryPolicy: resolveRetryPolicy(ROUTE_RETRY_POLICY,') &&
+    !adapterSource.includes('resolveRetryPolicy(undefined'),
+  'adapter.ts 确实把 ROUTE_RETRY_POLICY 交给宿主（不是 undefined = 默认策略）',
+)
+console.log(`        本路由 = [${[...EFFECTIVE_RETRYABLE].join(', ')}]`)
+console.log(`        宿主默认 = [${[...DEFAULT_RETRYABLE].join(', ')}]`)
+check(ROUTE_RETRY_POLICY.mode === 'normal', '策略是 normal 模式（有界重试，不是 always）')
+check(
+  [...EFFECTIVE_RETRYABLE].every((code) => DEFAULT_RETRYABLE.has(code)),
+  '本路由的每个码都在宿主默认集合里（只做减法，没有自造码）',
+)
+check(EFFECTIVE_RETRYABLE.size < DEFAULT_RETRYABLE.size, '本路由的集合确实比默认窄')
+check(!EFFECTIVE_RETRYABLE.has('RATE_LIMIT'), 'RATE_LIMIT 不在本路由的策略里（队列预算不再被宿主续杯）')
+check(!EFFECTIVE_RETRYABLE.has('SERVER'), 'SERVER 不在本路由的策略里（终态判决不再白重试）')
+check(!EFFECTIVE_RETRYABLE.has('QUOTA'), 'QUOTA 不在本路由的策略里（宿主哪天把它放进默认表也不会波及本路由）')
+check(
+  ROUTE_RETRY_POLICY.retryableCodes.includes(EMPTY_RESPONSE_CODE),
+  `保留了 ${EMPTY_RESPONSE_CODE}（拼写与宿主常量一致，不是自造的字符串）`,
+)
 
 /* ---- 4. 端到端矩阵：本插件的各种失败 → 宿主会判成什么、会不会重试 ------ */
 
@@ -287,9 +328,12 @@ const { classify, count } = buildHostClassifier(classifier)
 check(count === 9, `分类器解析出 ${count} 条 if（宿主这版是 9 条）`)
 check(classifier.includes('return "PI_AI_ERROR"'), '兜底分支 `return "PI_AI_ERROR"` 还在')
 
-/** 可重试集合：字面量里的字符串码 + 标识符形式的 EMPTY_RESPONSE_CODE（原样取自宿主常量）。 */
-const RETRYABLE = new Set([...retryable.matchAll(/'([A-Z_]+)'/g)].map((m) => m[1]))
-if (retryable.includes('EMPTY_RESPONSE_CODE')) RETRYABLE.add(EMPTY_RESPONSE_CODE)
+/**
+ * 「宿主会不会重试」用的是**本路由的策略**（[3] 的 `EFFECTIVE_RETRYABLE`），
+ * 不是宿主默认表：默认表只用来断言我们只做减法。宿主判出什么码由 [4] 的
+ * 分类器决定，两个集合的交集才是最终答案。
+ */
+const RETRYABLE = EFFECTIVE_RETRYABLE
 
 /**
  * shim 的三个出口（`src/host/shim.ts:438-461`）：`retryable` → 503 `rate_limit`、
@@ -325,8 +369,9 @@ const hostTexts = (carrier, status, type, message) =>
       }
 
 /**
- * 每一行记录**宿主当前的行为**（不是我们希望的行为）。`open` 标记的是「终态判决却被
- * 宿主当成可重试」——那是记在案的口子；宿主一旦改好，这一行会变成 CHANGED，提醒改表。
+ * 每一行记录**宿主当前的行为**（不是我们希望的行为）。`code` 是宿主的判决，`retryable`
+ * 是判决落不落在本路由的策略里（[3]）。docs/issues/24 之后不该再有「终态判决被重试」的
+ * 行——谁把策略改宽，这一行就会变成 CHANGED。
  * `carrier: 'inband'` 表示这次失败发生在 200 流内部、shim 已提交响应头，因此没有状态前缀。
  */
 const SSE = { contentType: 'text/event-stream' }
@@ -349,8 +394,8 @@ const CASES = [
     label: '登录过期：200 流内的错误帧（105），首个帧 → shim 出口 502',
     drive: () => driveChat([frameCase({ code: '105', message: 'Login expired' })]),
     expect: 'SERVER',
-    expectRetryable: true,
-    open: '首帧就失败 → 502，文案里没有 401/403 也没有 4xx 数字 → 宿主判 SERVER，白重试 5 次',
+    expectRetryable: false,
+    note: '502 仍判 SERVER（文案里既没有 401/403 也没有 4xx 数字），但 SERVER 不在本路由的策略里 → 判决不变、不再白重试；每次尝试都会走 invalidateCredential',
   },
   {
     label: '登录过期：200 流内的错误帧（105），已有分片之后 → 帧内交付',
@@ -376,8 +421,8 @@ const CASES = [
     label: '协议形状漂移（终态，shim 出口 502）',
     drive: async () => ({ error: new ProtocolShapeChangedError('{"unexpected":true}'), attempts: 0 }),
     expect: 'SERVER',
-    expectRetryable: true,
-    open: '502 命中 `\\b5\\d\\d\\b` → SERVER → 重试 5 次；而它的文案正是「插件需要更新」',
+    expectRetryable: false,
+    note: '502 命中 `\\b5\\d\\d\\b` → SERVER（文案说的是「插件需要更新」），但本路由的策略不重试 SERVER → 用户立刻看到这句话',
   },
   {
     label: '上游拒绝（HTTP 400 的不明 body，shim 出口 502）',
@@ -403,28 +448,31 @@ for (const item of CASES) {
     `code=${verdicts.join('/')} retryable=${retried}`
   const codeMatches = verdicts.includes(item.expect)
   const retryMatches = item.expectRetryable === undefined || item.expectRetryable === retried
-  const tag = item.open !== undefined ? 'ok  [OPEN]' : 'ok       '
   if (!codeMatches || !retryMatches) {
-    console.log(`  CHANGED ${head}\n        记录的是 code=${item.expect} retryable=${item.expectRetryable ?? '（未记）'}——宿主行为变了就来改这张表`)
+    console.log(`  CHANGED ${head}\n        记录的是 code=${item.expect} retryable=${item.expectRetryable ?? '（未记）'}——宿主或本路由的策略变了就来改这张表`)
     failures += 1
   } else if (verdicts.length !== 1) {
-    console.log(`  ${tag} ${head}\n        两种合成分别是 ${codes.map(([carrier, code]) => `${carrier}=${code}`).join(' / ')}，“会不会重试”一致`)
+    console.log(`  ok       ${head}\n        两种合成分别是 ${codes.map(([carrier, code]) => `${carrier}=${code}`).join(' / ')}，“会不会重试”一致`)
   } else {
-    console.log(`  ${tag} ${head}`)
+    console.log(`  ok       ${head}`)
   }
-  if (item.open !== undefined) console.log(`        记在案的口子：${item.open}`)
   if (item.note !== undefined) console.log(`        说明：${item.note}`)
 }
 
 /**
  * 传输层失败不驱动：它会被插件自己的阶梯接住并把 120 s 预算跑满（实测 11 次请求），
- * 探针不该为此停两分钟。改用源码断言——那一条分类规则还在，宿主的判决就还是可重试。
+ * 探针不该为此停两分钟。改用源码断言——那条分类规则还在，宿主就仍会判 RATE_LIMIT；
+ * 但 docs/issues/24 收窄策略后，它**不再**被宿主重试（插件阶梯是这条路上唯一的预算）。
  */
 const sseSource = readFileSync(new URL('../src/host/upstream/sse.ts', import.meta.url), 'utf8')
 check(
   sseSource.includes("code === 'ECONNRESET'") && sseSource.includes('throw new QueueRejection(0, `network: ${detail}`)'),
-  '传输层失败（ECONNRESET 等）仍是 QueueRejection → shim 出口 503 → 宿主 RATE_LIMIT/SERVER（设计意图：会重试）',
+  '传输层失败（ECONNRESET 等）仍是 QueueRejection → shim 出口 503 → 宿主判 RATE_LIMIT',
+)
+check(
+  !EFFECTIVE_RETRYABLE.has('RATE_LIMIT'),
+  '而 RATE_LIMIT 不在本路由的策略里：网络失败同样不再被宿主兜底（24 §3 记下的代价）',
 )
 
-console.log(`\n${failures === 0 ? 'PASS' : `FAIL (${failures})`}：${failures === 0 ? '每日额度这条 429 不可重试；其余各行与探针记录一致（[OPEN] 是记在案的口子）' : '契约已漂移，或每日额度这条 429 又变成可重试了'}`)
+console.log(`\n${failures === 0 ? 'PASS' : `FAIL (${failures})`}：${failures === 0 ? '终端判决不再被宿主重试，队列预算不再被宿主续杯；每日额度这条 429 判 QUOTA' : '契约已漂移，或本路由的策略又被改宽了'}`)
 process.exitCode = failures === 0 ? 0 : 1

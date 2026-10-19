@@ -250,6 +250,7 @@ dsh plugin --profile web add <本仓库路径>
 | `src/host/upstream/messages.ts` | DSH ↔ Qoder 的消息与工具描述转换（`toQoderMessages` / `toQoderTools`） |
 | `src/host/shim.ts` | 面向 pi-ai 的 OpenAI 兼容回环端点 |
 | `src/host/adapter.ts` | pi-ai provider 与 `PiAiAdapter` profile（被关的 provider 以零模型组呈现，由 DSH 自行隐藏） |
+| `src/host/route-retry-policy.ts` | 本路由**交出去给宿主**的重试策略：只留 `EMPTY_RESPONSE` / `TIMEOUT` / `TRANSPORT`，让插件的队列阶梯成为唯一重试源——宿主默认策略含 `RATE_LIMIT` / `SERVER`，会把已烧完 120 s 预算的队列失败再续 5 次（≈12 min），也会白重试 shim 一律用 502 表达的终态判决；刻意不设 `maxRetries` / `backoff`（未知键会让整个 profile 注册失败；`docs/issues/24`，无 peer 依赖） |
 | `src/host/catalog-entry.ts` | 目录条目的归一化、模型过滤（含按区域开关）与卡片行投影（无 peer 依赖） |
 | `src/host/catalog-store.ts` | 目录的磁盘缓存与原子落盘（无 peer 依赖） |
 | `src/host/catalog-refresh.ts` | 一次目录刷新的结果如何落地：**空目录也是结果**（照实清空并推进 `fetchedAt`），只有失败才保留上一份，且失败按 `credential` / `no-credential` / `fetch` / `protocol-shape-changed` 分档（无 peer 依赖） |
