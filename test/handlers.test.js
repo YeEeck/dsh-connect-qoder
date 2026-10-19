@@ -43,7 +43,7 @@ import {
   createTokenHistoryCache,
 } from '../src/host/handlers.ts'
 import { REGIONS } from '../src/host/credentials.ts'
-import { ProtocolShapeChangedError } from '../src/host/errors.ts'
+import { ProtocolShapeChangedError, UpstreamRefusalError } from '../src/host/errors.ts'
 
 const CN = REGIONS.find((r) => r.id === 'qoder-cn')
 assert.ok(CN !== undefined, 'REGIONS lost the CN edition')
@@ -297,6 +297,60 @@ test('usage: an ordinary failure is NOT named as a shape change', async () => {
   const body = lastJson({ bodies }).regions[0]
   assert.equal(body.available, false)
   assert.equal(body.unavailableReason, 'read-failed', 'a transport blip must not be blamed on the plugin version')
+})
+
+test('usage: a spent daily allowance is named, and marks the local exhausted badge', async () => {
+  // docs/issues/24. This route is the surface the card polls, and the limit is
+  // per ACCOUNT — but before the verdict travelled the flag, the only writer of
+  // `markExhausted` was the chat shim, so a daily limit that refused the usage
+  // read looked exactly like a network blip: the card said "刷新失败" and the
+  // badge said nothing, for a whole day, on the one poll that knows the number.
+  const req = fakeReq({ url: '/plugins/dsh-connect-qoder/usage' })
+  const { res, out, bodies } = fakeRes(req)
+  const marked = []
+  await usageHandler(req, res, {
+    started: [{
+      region: CN,
+      runtime: stubRuntime({
+        readUsage: async () => {
+          throw new UpstreamRefusalError('HTTP 429', 429, '{"type":"daily_limit_exceeded"}')
+        },
+      }),
+    }],
+    logger: quiet,
+    requestCounter: {
+      read: () => ({ count: null, day: null }),
+      readExhausted: () => false,
+      markExhausted: (regionId) => { marked.push(regionId) },
+      gc: () => {},
+    },
+  })
+  assert.equal(out.status, 200, 'a spent allowance is a per-region verdict, not a panel outage')
+  const body = lastJson({ bodies }).regions[0]
+  assert.equal(body.available, false)
+  assert.equal(body.unavailableReason, 'daily-limit')
+  assert.deepEqual(marked, ['qoder-cn'], 'the badge is per region, and this is the region that failed')
+})
+
+test('usage: an ordinary failure does NOT mark the badge', async () => {
+  // The negative control for the test above: `markExhausted` is durable (a file
+  // per local day), so marking on a transient blip would leave the card
+  // claiming a spent allowance it never saw. Only the verdict may write it.
+  const req = fakeReq({ url: '/plugins/dsh-connect-qoder/usage' })
+  const { res, out } = fakeRes(req)
+  const marked = []
+  await usageHandler(req, res, {
+    started: [{ region: CN, runtime: stubRuntime({ readUsage: async () => { throw new Error('ETIMEDOUT') } }) }],
+    logger: quiet,
+    requestCounter: {
+      read: () => ({ count: null, day: null }),
+      readExhausted: () => false,
+      markExhausted: (regionId) => { marked.push(regionId) },
+      gc: () => {},
+    },
+  })
+  assert.equal(out.status, 200)
+  assert.deepEqual(marked, [], 'a transport failure is not evidence about the allowance')
 })
 
 test('usage: an unavailable machine identity is reported so the card can explain itself', async () => {

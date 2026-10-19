@@ -1018,20 +1018,27 @@ export function QoderPluginCard({ t, settingsScope, view }: QoderPluginCardProps
 							</button>
 							{refreshedAt !== undefined && !refreshing ? (
 								<span className="dsm-qoder-state">
-									{/* Four shapes, one slot. A protocol change replaces
+									{/* Five shapes, one slot. A protocol change replaces
 									    the timestamp entirely rather than decorating it:
 									    the time of a last successful fetch is not useful
 									    next to "your plugin is out of date", and offering a
 									    time there invites the user to believe the rows are
 									    current. A persist failure does the same — the rows
 									    are real, but a "已更新（time）" stamp would hide that
-									    they will not survive a restart. */}
+									    they will not survive a restart. A daily limit does
+									    NOT: the rows are as real and as old as a transient
+									    failure's, so it keeps the timestamp and only names a
+									    truer reason than "刷新失败" (issue 24). */}
 									{refreshFailure === "protocol-shape-changed"
 										? t("row.protocolChanged")
 										: refreshFailure === "persist"
 											? t("row.refreshNotPersisted")
 											: t(
-													refreshFailure === "transient" ? "row.refreshStale" : "row.refreshed",
+													refreshFailure === "transient"
+														? "row.refreshStale"
+														: refreshFailure === "daily-limit"
+															? "row.refreshDailyLimitStale"
+															: "row.refreshed",
 													{ time: new Date(refreshedAt).toLocaleTimeString() },
 												)}
 								</span>
@@ -1045,14 +1052,18 @@ export function QoderPluginCard({ t, settingsScope, view }: QoderPluginCardProps
 									// it here would restore the original "everything looks
 									// fine" reading for exactly the case that matters.
 									title={
-										refreshFailure === "protocol-shape-changed" || refreshFailure === "persist"
+										refreshFailure === "protocol-shape-changed" ||
+										refreshFailure === "persist" ||
+										refreshFailure === "daily-limit"
 											? undefined
 											: t("row.refreshFailed", { reason: refreshFailure })
 									}
 								>
 									{refreshFailure === "protocol-shape-changed"
 										? t("row.protocolChanged")
-										: t("row.refreshFailed", { reason: refreshFailure })}
+										: refreshFailure === "daily-limit"
+											? t("row.refreshDailyLimit")
+											: t("row.refreshFailed", { reason: refreshFailure })}
 								</span>
 							) : null}
 						</div>

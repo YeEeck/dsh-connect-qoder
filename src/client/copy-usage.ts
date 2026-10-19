@@ -39,6 +39,9 @@ export const zhUsage = {
 	// 这不是「稍后再试」能好的——只有更新插件能修，所以不能借用「读不到用量」的
 	// 措辞让用户反复重试。「重新登录也没有用」是刻意写明的：账号是好的，是形状变了。
 	"usage.protocolChanged": "Qoder 返回了本插件不认识的格式——请更新插件（重新登录没有用）",
+	// docs/issues/24：第二个「重试无用」的读失败。上游明确说今日额度已用尽，能等的只有
+	// 零点重置；沿用「暂时读不到」会让用户反复点刷新去等一件不会因为刷新而改变的事。
+	"usage.dailyLimit": "今日额度已用尽（上游口径）——零点重置后自动恢复",
 	"usage.promotionsProtocolChanged": "活动接口返回了本插件不认识的格式——请更新插件（重新登录没有用）",
 	"usage.viewDetails": "查看详情",
 	"usage.credits": "Credits",
@@ -128,6 +131,7 @@ export const enUsage = {
 	// See the zh note: a shape change cannot be retried into working, so this
 	// copy points at a plugin update instead of borrowing the retry wording.
 	"usage.protocolChanged": "Qoder replied in a shape this plugin does not recognise — update the plugin (signing in again will not help)",
+	"usage.dailyLimit": "Today's allowance is spent (upstream's own words) — it comes back after the midnight reset",
 	"usage.promotionsProtocolChanged": "The offers endpoint replied in a shape this plugin does not recognise — update the plugin (signing in again will not help)",
 	"usage.viewDetails": "View details",
 	"usage.credits": "Credits",

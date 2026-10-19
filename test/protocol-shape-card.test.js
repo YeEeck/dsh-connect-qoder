@@ -137,6 +137,47 @@ test('a protocol change wins over a transient failure in the same payload', () =
   )
 })
 
+test('a spent daily allowance is its own verdict, never a transient one', () => {
+  // docs/issues/24. The rows are as real and as old as a transient failure's —
+  // which is why this verdict keeps the timestamp rather than replacing it —
+  // but "retry" is the one move that cannot work: the allowance resets at the
+  // day boundary, so the generic stale stamp would invite a refresh loop
+  // against a door that is shut until tomorrow.
+  assert.strictEqual(
+    refreshNoticeKey({ refreshedAt: 1, refreshFailures: [{ region: 'qoder-cn', reason: 'daily-limit' }] }),
+    'daily-limit',
+  )
+  // Precedence, in one payload each way: the standing verdicts still win (they
+  // name what the user must DO), and the allowance wins over a plain blip.
+  assert.strictEqual(
+    refreshNoticeKey({
+      refreshFailures: [
+        { region: 'qoder', reason: 'daily-limit' },
+        { region: 'qoder-cn', reason: 'protocol-shape-changed' },
+      ],
+    }),
+    'protocol-shape-changed',
+  )
+  assert.strictEqual(
+    refreshNoticeKey({
+      refreshFailures: [
+        { region: 'qoder', reason: 'daily-limit' },
+        { region: 'qoder-cn', reason: 'persist' },
+      ],
+    }),
+    'persist',
+  )
+  assert.strictEqual(
+    refreshNoticeKey({
+      refreshFailures: [
+        { region: 'qoder', reason: 'daily-limit' },
+        { region: 'qoder-cn', reason: 'fetch' },
+      ],
+    }),
+    'daily-limit',
+  )
+})
+
 test('a malformed failures field cannot crash the card', () => {
   // The route is the untrusted input here — a hand-edited payload, an older
   // host, a proxy. Every one of these must fold to a verdict, never throw,
@@ -144,7 +185,11 @@ test('a malformed failures field cannot crash the card', () => {
   for (const value of [null, 0, '', 'x', {}, [null, 1, 'x'], [{ reason: 1 }], { refreshFailures: {} }]) {
     const verdict = refreshNoticeKey({ refreshedAt: 1, refreshFailures: value })
     assert.ok(
-      verdict === null || verdict === 'transient' || verdict === 'persist' || verdict === 'protocol-shape-changed',
+      verdict === null ||
+        verdict === 'transient' ||
+        verdict === 'persist' ||
+        verdict === 'protocol-shape-changed' ||
+        verdict === 'daily-limit',
       `${JSON.stringify(value)} → ${JSON.stringify(verdict)}`,
     )
   }
@@ -196,5 +241,33 @@ test('the card copy for a protocol change points at a plugin update, not a login
   assert.ok(persistStrings.length >= 2, `expected a zh and an en string, found ${persistStrings.length}`)
   for (const text of persistStrings) {
     assert.match(text, /重启|restart/i, `persist copy does not name the restart consequence: ${text}`)
+  }
+})
+
+test('the card copy for a spent allowance names the reset, and is not the stale stamp', () => {
+  // docs/issues/24. The remedy for a daily limit is neither "retry" nor
+  // "update": it is time, and the card has to say which. Both keys are asserted
+  // as text because the wording IS the fix — the host could carry the reason
+  // perfectly and still reach the user as "刷新失败".
+  for (const key of ['row.refreshDailyLimit', 'row.refreshDailyLimitStale']) {
+    const strings = [...BUNDLE.matchAll(new RegExp(`"${key.replace(/\./g, '\\.')}":\\s*"([^"]*)"`, 'g'))].map((m) => m[1])
+    assert.ok(strings.length >= 2, `expected a zh and an en string for ${key}, found ${strings.length}`)
+    for (const text of strings) {
+      assert.match(text, /额度|allowance/i, `${key} does not name the allowance: ${text}`)
+    }
+  }
+  // The stale stamp it replaces would have been "last updated (refresh failed)":
+  // true, but it names the wrong cause and invites the retry that cannot work.
+  const stale = [...BUNDLE.matchAll(/"row\.refreshDailyLimitStale":\s*"([^"]*)"/g)].map((m) => m[1])
+  for (const text of stale) {
+    assert.doesNotMatch(text, /刷新失败|refresh failed/i, `the allowance stamp still reads as a generic failure: ${text}`)
+  }
+  // The usage panel's own verdict, for the read that failed rather than the
+  // roster: same reason, so the same promise (it comes back by itself).
+  const usageStrings = [...BUNDLE.matchAll(/"usage\.dailyLimit":\s*"([^"]*)"/g)].map((m) => m[1])
+  assert.ok(usageStrings.length >= 2, `expected a zh and an en string for usage.dailyLimit, found ${usageStrings.length}`)
+  for (const text of usageStrings) {
+    assert.match(text, /额度|allowance/i, `usage.dailyLimit does not name the allowance: ${text}`)
+    assert.match(text, /重置|reset/i, `usage.dailyLimit does not say when it comes back: ${text}`)
   }
 })

@@ -30,7 +30,7 @@ import { buildModelRowsPayload, projectModelRow } from './catalog-entry.ts'
 import type { RateHelpers } from './catalog-entry.ts'
 import { saveFieldOutcome } from './settings-save.ts'
 import type { SettingsService } from './settings-save.ts'
-import { classifyUpstreamError, describeThrown, isProtocolShapeChangedError, providerRegistrationState } from './errors.ts'
+import { classifyUpstreamError, describeThrown, isProtocolShapeChangedError, providerRegistrationState, thrownFlag } from './errors.ts'
 import type { DeviceLoginFlow } from './device-login-flow.ts'
 import type { DeviceCredentialStatus } from './device-credential.ts'
 import {
@@ -214,6 +214,12 @@ export interface UsageDeps {
   requestCounter?: {
     read(region: string): { count: number | null; day: string | null }
     readExhausted(region: string): boolean
+    /**
+     * 「今日额度疑似用尽」的写入面。此前只有 chat shim 那一条路会调它
+     * （`src/host/shim.ts`），于是**按账号**的每日额度拒掉了 usage 轮询时，卡片
+     * 既说不出原因、徽标也不会亮——docs/issues/24 §4 就是这条缝。
+     */
+    markExhausted?(region: string): void
     gc(now?: number): void
   }
   /**
@@ -355,12 +361,27 @@ export async function usageHandler(
         )
         // The card can only offer the right remedy if it knows which failure
         // this is: a transport blip heals on its own, a renamed upstream
-        // envelope needs a plugin update. Everything else stays the generic
-        // "could not read" the card already renders.
+        // envelope needs a plugin update, and a spent daily allowance needs
+        // neither — it needs the day to roll over. Everything else stays the
+        // generic "could not read" the card already renders.
+        const dailyLimit = thrownFlag(error, 'upstreamKind') === 'daily-limit'
+        if (dailyLimit) {
+          // The one signal the local "疑似已用尽" badge listens for
+          // (`markExhausted`), and the reason docs/issues/24 exists: before the
+          // verdict was carried, a daily limit on THIS read — the surface the
+          // card polls — was indistinguishable from a network blip and the
+          // badge could never light. A counter-less host stays silent rather
+          // than claiming knowledge it does not have.
+          deps.requestCounter?.markExhausted?.(runtime.region.id)
+        }
         return {
           ...base,
           available: false,
-          unavailableReason: isProtocolShapeChangedError(error) ? 'protocol-shape-changed' : 'read-failed',
+          unavailableReason: isProtocolShapeChangedError(error)
+            ? 'protocol-shape-changed'
+            : dailyLimit
+              ? 'daily-limit'
+              : 'read-failed',
         }
       }
     }),

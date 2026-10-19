@@ -60,7 +60,7 @@ import { disposeFiber } from './dispose-order.ts'
 import { publishRegions as publishRegionSet } from './publish-regions.ts'
 import { __dshQoderUmidState, exchangePat, fetchModels, fetchUsage } from './upstream.ts'
 import type { UsageSnapshot } from './upstream.ts'
-import { isProtocolShapeChangedError } from './errors.ts'
+import { isProtocolShapeChangedError, thrownFlag } from './errors.ts'
 import { RequestCounter } from './request-counter.ts'
 import { TokenCounter } from './token-counter.ts'
 import {
@@ -601,18 +601,31 @@ class RegionRuntime {
       // gone, there is nobody left to tell, and logging it would put a warning
       // in the log of every disable/reload.
       if (isRefreshObsolete(this)) return
-      // Two failures that look alike and must not be merged: a transport or
+      // Three failures that look alike and must not be merged: a transport or
       // auth error leaves the last good catalog in place, and so does a protocol
       // shape change — but the second is a standing verdict about the plugin,
       // not about this fetch, and it is recorded under its own reason so the
-      // card says "update the plugin" instead of "sign in again".
+      // card says "update the plugin" instead of "sign in again". A spent daily
+      // allowance is a third: the last good catalog is still right and the
+      // remedy is neither a retry nor an update — it is tomorrow.
+      //
+      // The local "疑似已用尽" badge is deliberately NOT marked from here even
+      // though this is where the model list is refreshed: that badge is
+      // published inside the USAGE payload (`requestsExhausted`), the usage
+      // route is the surface that marks it, and it is the same upstream
+      // allowance gating both — so the next usage poll lights it. Threading a
+      // counter into this class to reach it one poll earlier would buy nothing.
       this.logger?.warn?.(
         `dsh-connect-qoder: ${this.region.displayName} catalog refresh failed`,
         error,
       )
       this.applyOutcome({
         ok: false,
-        reason: isProtocolShapeChangedError(error) ? 'protocol-shape-changed' : 'fetch',
+        reason: isProtocolShapeChangedError(error)
+          ? 'protocol-shape-changed'
+          : thrownFlag(error, 'upstreamKind') === 'daily-limit'
+            ? 'daily-limit'
+            : 'fetch',
         error,
       })
     }

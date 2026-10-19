@@ -68,7 +68,7 @@ export function thrownFlag(error: unknown, key: ThrownFlag): unknown {
 }
 
 /** The flag names {@link thrownFlag} will read. A literal union, so typos fail to compile. */
-export type ThrownFlag = 'name' | 'message' | 'cause' | 'code' | 'retryable' | 'dailyLimit' | 'signInExpired' | 'protocolShapeChanged' | 'retryAfterSeconds' | 'status'
+export type ThrownFlag = 'name' | 'message' | 'cause' | 'code' | 'retryable' | 'dailyLimit' | 'signInExpired' | 'protocolShapeChanged' | 'retryAfterSeconds' | 'status' | 'upstreamKind'
 
 /**
  * The provider-registration verdict, in the shape the browser is allowed to see.
@@ -263,6 +263,87 @@ function classifyUpstreamError(
   return { kind: 'upstream' }
 }
 
+/** The verdict for a non-2xx reply from a one-shot JSON endpoint (see {@link classifyHttpRefusal}). */
+export interface HttpRefusal {
+  /** Which of the four known failures this reply is. */
+  kind: 'daily-limit' | 'rate-limit' | 'sign-in-expired' | 'upstream'
+  /** Seconds the BODY claims to wait (a `Retry-After` header is the caller's to prefer), or 0. */
+  retryAfterSeconds: number
+}
+
+/**
+ * The verdict for one non-2xx reply from a one-shot JSON endpoint.
+ *
+ * The stream path has always known what a failure body means (see
+ * {@link classifyUpstreamError}); the one-shot readers — model list, usage,
+ * userinfo, campaigns, check-in — did not, and threw a plain
+ * `new Error('… HTTP 500 …')` with the body discarded. Two verdicts were lost
+ * with it, both recorded in docs/issues/24: a spent daily allowance arrived as a
+ * generic "refresh failed" and never marked the local exhausted badge, and a
+ * sign-in rejection was indistinguishable from a network blip.
+ *
+ * The body is classified FIRST, exactly as docs/issues/23 settled for the
+ * stream: a `daily_limit_exceeded` carried on a 429 is a spent allowance, not a
+ * rate limit, and the status alone cannot tell the two apart. The status is only
+ * consulted when the body says nothing at all.
+ *
+ * 403 is deliberately NOT a sign-in rejection, even though the credential-vault
+ * exchange treats it as one: the international campaigns endpoint is gated on
+ * machine identity and answers 403 for a perfectly good login, so reading that
+ * as a dead credential would invalidate a working token. Only 401, which is
+ * about the credential itself, means the sign-in is gone.
+ *
+ * @param status - the HTTP status of the reply.
+ * @param bodyText - the reply body as text, possibly empty or not JSON.
+ * @returns the verdict, plus any wait the BODY stated (the `Retry-After` header
+ *   is the caller's to prefer; this function never sees headers).
+ */
+export function classifyHttpRefusal(status: number, bodyText: string): HttpRefusal {
+  // Purity is the point of this module: no imports, so both the shim and the
+  // one-shot readers can reach the same rules and a test can feed them directly.
+  const classified = classifyUpstreamError({}, httpFailureCode(bodyText), bodyText)
+  if (classified.kind === 'daily-limit' || classified.kind === 'rate-limit' || classified.kind === 'sign-in-expired') {
+    return { kind: classified.kind, retryAfterSeconds: classified.retryAfterSeconds ?? 0 }
+  }
+  // No code and no prose: the status is all there is. 429 is a rate limit by
+  // definition here — a daily-limit 429 would have carried its code and been
+  // caught above, which is the whole ordering argument of docs/issues/23.
+  if (status === 429) return { kind: 'rate-limit', retryAfterSeconds: 0 }
+  if (status === 401) return { kind: 'sign-in-expired', retryAfterSeconds: 0 }
+  return { kind: 'upstream', retryAfterSeconds: 0 }
+}
+
+/**
+ * Pull a failure code out of a non-stream HTTP body, leniently.
+ *
+ * The gateways have answered with the code in any of four places — top-level
+ * `code`, `errorCode`, `type` (which is where the new daily-limit 429 puts it),
+ * or nested under an OpenAI-shaped `error` object — and with the code as either
+ * a string or a number. A wrong guess here is not cosmetic: it is the difference
+ * between "your allowance is spent" and the harness retrying a request that
+ * resets at the day boundary. A body that is not JSON at all (an HTML SSO page,
+ * an empty 502) answers `''`, which leaves the status to speak.
+ */
+function httpFailureCode(bodyText: string): string {
+  try {
+    const parsed: unknown = JSON.parse(bodyText)
+    if (parsed === null || typeof parsed !== 'object') return ''
+    const record = parsed as Record<string, unknown>
+    const nested = record.error
+    const nestedRecord =
+      nested !== null && typeof nested === 'object' ? (nested as Record<string, unknown>) : undefined
+    const candidates = [record.code, record.errorCode, record.type, nestedRecord?.code]
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate !== '') return candidate
+      if (typeof candidate === 'number' && Number.isFinite(candidate)) return String(candidate)
+    }
+    return ''
+  } catch {
+    // A non-JSON body is the common case for a gateway error page, not a bug.
+    return ''
+  }
+}
+
 /**
  * Read a `Retry-After` hint as seconds, from either spelling the gateway uses.
  *
@@ -380,6 +461,62 @@ export class ProtocolShapeChangedError extends Error {
  */
 export function isProtocolShapeChangedError(error: unknown): boolean {
   return (error as { protocolShapeChanged?: unknown } | null | undefined)?.protocolShapeChanged === true
+}
+
+/**
+ * A refusal from a one-shot OpenAPI read (model list, usage, userinfo,
+ * campaigns, check-in), carrying the verdict the stream path already computes.
+ *
+ * Before this class those five readers threw a plain `Error` whose message was
+ * the only thing that survived: the status and body were dropped, so a spent
+ * daily allowance reached the card as "上次更新：{time}（刷新失败）" instead of
+ * naming the allowance, and — worse than cosmetic — the local exhausted badge
+ * (`RequestCounter.markExhausted`, said "疑似已用尽，仅供参考" on the card) was
+ * never set, because the only signal it listens for is a flag no plain `Error`
+ * carries. See docs/issues/24.
+ *
+ * The message is byte-identical to the plain `Error` this replaces: it is what
+ * the card shows and what several tests pin, so the classification rides
+ * alongside the wording in flags rather than changing it.
+ *
+ * The flags are fields (not the class name) for the same reason
+ * {@link ProtocolShapeChangedError}'s are: a caught value that lost its
+ * prototype — a cross-realm throw, a re-wrap — still reads correctly through
+ * `thrownFlag`. There is no `retryable: false` here on purpose: these reads run
+ * through no queue ladder, and if one ever did, an absent flag already answers
+ * "do not wait" (`queueWaitFor` gates on `retryable === true`).
+ */
+export class UpstreamRefusalError extends Error {
+  /** The HTTP status of the reply, kept for callers that want to re-derive a verdict. */
+  status: number
+  /** The verdict from {@link classifyHttpRefusal}. */
+  upstreamKind: HttpRefusal['kind']
+  /** Seconds to wait: the `Retry-After` header when it stated one, else the body's own. */
+  retryAfterSeconds: number
+  /** True when the verdict is a spent daily allowance — the local exhausted badge's signal. */
+  dailyLimit: boolean
+  /** True when the verdict is a sign-in rejection — the credential's invalidation signal. */
+  signInExpired: boolean
+
+  /**
+   * @param message - the user-visible message, unchanged from the plain `Error`.
+   * @param status - the HTTP status of the reply.
+   * @param bodyText - the reply body as text, for classification.
+   * @param retryAfterHeader - the `Retry-After` header, still `unknown` as it
+   *   arrives from the fetch layer; it wins over the body's own field because
+   *   the header is what HTTP promises and the field is a courtesy the gateway
+   *   only sometimes includes (the same precedence the exchange throttle uses).
+   */
+  constructor(message: string, status: number, bodyText: string, retryAfterHeader?: unknown) {
+    super(message)
+    this.name = 'UpstreamRefusalError'
+    const verdict = classifyHttpRefusal(status, bodyText)
+    this.status = status
+    this.upstreamKind = verdict.kind
+    this.retryAfterSeconds = parseRetryAfterSeconds(retryAfterHeader) ?? verdict.retryAfterSeconds
+    this.dailyLimit = verdict.kind === 'daily-limit'
+    this.signInExpired = verdict.kind === 'sign-in-expired'
+  }
 }
 
 export { classifyUpstreamError }

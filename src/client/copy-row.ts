@@ -54,6 +54,14 @@ export const zhRow = {
 	"row.refreshFailed": "刷新失败：{reason}",
 	"row.refreshNotPersisted": "已刷新，但写盘失败——重启后会回到旧目录（下次刷新会自动重试）",
 	"row.protocolChanged": "Qoder 的接口返回了本插件不认识的格式——请更新插件（重新登录没有用）",
+	// Issue 24: the third verdict that is neither "try again" nor "update the
+	// plugin" — upstream says this account's daily allowance is spent. The
+	// wording names the reset because that is the only thing the user can wait
+	// for, and explicitly rules out the two remedies the neighbouring strings
+	// offer (re-signing in, updating), so a refused catalog does not send
+	// anyone through a ritual that cannot work.
+	"row.refreshDailyLimit": "上游说今日额度已用尽——要等零点重置（不是登录问题，也不用更新插件）",
+	"row.refreshDailyLimitStale": "上次更新：{time}（今日额度已用尽）",
 	// Issue 20's leftover: activation survives a provider-registration failure
 	// now, so the roster renders even when the provider half is dead. The card
 	// has to say so, or the list below reads as usable and the chat picker
@@ -135,6 +143,8 @@ export const enRow = {
 	"row.refreshFailed": "Refresh failed: {reason}",
 	"row.refreshNotPersisted": "Refreshed, but the catalog could not be written — it will revert after a restart (the next refresh retries automatically)",
 	"row.protocolChanged": "Qoder replied in a format this plugin does not recognise — update the plugin (signing in again will not help)",
+	"row.refreshDailyLimit": "Upstream says today's allowance is spent — it resets at midnight (this is not a sign-in problem, and updating will not help)",
+	"row.refreshDailyLimitStale": "Last updated: {time} (today's allowance is spent)",
 	"row.providerRegistrationFailed": "The model provider failed to register when the plugin started ({reason}): the models below cannot be picked in chat. The full error is in the host log.",
 	"row.offPeakOn": "off-peak",
 	"row.offPeakOff": "standard",

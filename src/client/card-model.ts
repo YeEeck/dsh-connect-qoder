@@ -492,6 +492,10 @@ export function rateAt(model: CardModelRow, now: Date): number | undefined {
  * - **a transient failure** (`fetch` / `credential` / `no-credential`) → the
  *   stamp still shows, marked stale, because the rows on screen are real, just
  *   old. The user's next move is to retry.
+ * - **`daily-limit`** → upstream refused the model list because the account's
+ *   daily allowance is spent. The rows are as real as a transient failure's, but
+ *   "retry" is the one thing that cannot help, so it does not reuse the stale
+ *   wording: it names the allowance and its reset (docs/issues/24).
  * - **`persist`** → the rows on screen are the newest answer, but the disk
  *   write was swallowed, so they will not survive a restart. Nothing is wrong
  *   with the data being shown — only with its durability — so this gets its
@@ -503,13 +507,15 @@ export function rateAt(model: CardModelRow, now: Date): number | undefined {
  *
  * The protocol verdict wins over a transient one in the same payload, since it
  * is the one that cannot resolve on its own; `persist` outranks a transient
- * one because it names a different, actionable condition.
+ * one because it names a different, actionable condition; and `daily-limit`
+ * outranks a transient one because it is the one failure retrying cannot fix.
  */
 export function refreshNoticeKey(value: unknown): string | null {
 	const failures = Array.isArray((value as { refreshFailures?: unknown } | null | undefined)?.refreshFailures) ? (value as { refreshFailures: unknown[] }).refreshFailures : [];
 	if (failures.length === 0) return null;
 	if (failures.some((f) => (f as { reason?: string } | null | undefined)?.reason === "protocol-shape-changed")) return "protocol-shape-changed";
 	if (failures.some((f) => (f as { reason?: string } | null | undefined)?.reason === "persist")) return "persist";
+	if (failures.some((f) => (f as { reason?: string } | null | undefined)?.reason === "daily-limit")) return "daily-limit";
 	return "transient";
 }
 
@@ -520,11 +526,15 @@ export function refreshNoticeKey(value: unknown): string | null {
  * longer has the shape this plugin reads, and only an update fixes it. Reusing
  * the generic "unavailable" wording would leave the user retrying a read that
  * cannot succeed — the silent failure this triage exists to end, and the same
- * split `refreshNoticeKey` already makes for the model list. A host older than
- * the `unavailableReason` field degrades to the old copy.
+ * split `refreshNoticeKey` already makes for the model list. A spent daily
+ * allowance is the second such case (docs/issues/24): the read is refused until
+ * the day rolls over, so "unavailable" would invite a retry that must fail. A
+ * host older than the `unavailableReason` field degrades to the old copy.
  */
 export function usageUnavailableKey(entry: CardUsageRegion | null | undefined): string {
-	return entry?.unavailableReason === "protocol-shape-changed" ? "usage.protocolChanged" : "usage.unavailable";
+	if (entry?.unavailableReason === "protocol-shape-changed") return "usage.protocolChanged";
+	if (entry?.unavailableReason === "daily-limit") return "usage.dailyLimit";
+	return "usage.unavailable";
 }
 
 /**

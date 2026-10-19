@@ -217,6 +217,11 @@ export interface CatalogLike {
  * being collapsed into a boolean. `persist` is a third class: the upstream
  * answer landed in memory, but the disk write was swallowed — the rows on
  * screen are the newest answer, yet they will not survive a restart.
+ * `daily-limit` is a fourth, and the only one the user can neither fix nor
+ * retry: upstream says the account's daily allowance is spent (docs/issues/24),
+ * so the model list is refused until the day rolls over. It is recorded as
+ * itself rather than folded into `fetch` so the card can say that instead of
+ * "temporary, try again".
  */
 export interface RefreshFailure {
   reason: RefreshFailureReason
@@ -243,6 +248,7 @@ export const REFRESH_FAILURE_REASONS = [
   'fetch',
   'persist',
   'protocol-shape-changed',
+  'daily-limit',
 ] as const
 
 /** One reason a refresh left the catalog unrefreshed. */

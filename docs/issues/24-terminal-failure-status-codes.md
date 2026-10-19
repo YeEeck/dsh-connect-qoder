@@ -1,6 +1,6 @@
 # 终态判决的出口状态：shim 一律 502、宿主一律当 SERVER——白重试 5 次
 
-**P2 · 规模 S · 依赖 23 · ✅ 已修（2026-10-19）§1–§3；§4 未动**
+**P2 · 规模 S · 依赖 23 · ✅ 已修（2026-10-19）§1–§4**
 
 23 修掉了「每日额度这条 429 被当成队列」。修完顺手把**每一种**失败都喂给宿主自己的
 分类器（`probe/host-retry-classification-probe.mjs` 的 [4] 矩阵），于是同一类的其余口子
@@ -30,11 +30,36 @@ export const ROUTE_RETRY_POLICY = {
   并用源码断言钉住 `adapter.ts` 的接线（回到 `resolveRetryPolicy(undefined` 会红）。
 - `src/host/upstream/sse.ts` 的 `DailyLimitRejection` 类注释改写为如实的两道锁说明。
 
+### §4 的修复（同一批）
+
+不是给非 chat 路径各写一套判断，而是**把判决本身做成可携带的**——一个分类器 + 一个错误类，
+放在既有的 `src/host/errors.ts`（无 import，shim 与一次性读取器都能到达）：
+
+- `src/host/errors.ts`：新增 `classifyHttpRefusal(status, bodyText)`（**先读 body 的 code，再退回
+  状态**——顺序是 23 的教训）与 `UpstreamRefusalError`（带 `status` / `upstreamKind` /
+  `retryAfterSeconds` / `dailyLimit` / `signInExpired` flags）；`ThrownFlag` 联合加
+  `'upstreamKind'`，于是调用方不必 `instanceof`。
+- 五个读取点改抛它，**文案一个字没改**（测试逐条钉住，`test/http-refusal.test.js`）：
+  `api-calls.ts` 的 campaigns / 签到 / 模型目录 / userinfo、`fetch-usage.ts` 的 `read`。签到与
+  模型目录原来是**读完文本就丢**，现在文本进分类器。
+- **不动**兑换（`exchangePat`）：它的 `status`/`retryAfterSeconds` 是 `credential-cache.ts:154`
+  那条独立限流窗口的输入，已正确，不该被第二套规则碰。
+- `src/host/handlers.ts` 的 usage 捕获：`daily-limit` → `unavailableReason: 'daily-limit'` +
+  `deps.requestCounter?.markExhausted?.()`（`requestCounter` 的 deps 类型因此多了一个**可选**方法）
+  —— 这是「今日额度疑似已用尽」徽标此前在非 chat 路径永远不亮的缝。
+- `src/host/index.ts` 的目录刷新捕获：只贡献 `reason: 'daily-limit'`，不碰计数器（那条线没有
+  计数器，穿进去只是为了好看，理由写在代码注释里）。
+- 判决对外传播：`src/host/domain.ts` 的 `REFRESH_FAILURE_REASONS` 加 `'daily-limit'`（测试
+  逐项遍历这个数组，所以加值是安全的）；客户端 `card-model.ts` 的 `refreshNoticeKey` 与
+  `usageUnavailableKey` 各加一支，`card.tsx` 渲染两支新文案
+  （`row.refreshDailyLimit` / `row.refreshDailyLimitStale` / `usage.dailyLimit`，中英各一）。
+
 ## 方法（可复跑）
 
 ```sh
 node probe/host-retry-classification-probe.mjs   # 0.3 s，PASS 时 exit 0
 node --test test/route-retry-policy.test.js
+node --test test/http-refusal.test.js            # §4 的分类器 + 五个读取点
 ```
 
 矩阵不手抄宿主的规则：它从安装副本里取出 `classifyPiAiError` 的**每个分支原文**求值
@@ -90,17 +115,30 @@ node --test test/route-retry-policy.test.js
 `PI_AI_ERROR`）。代价是往"状态码是给宿主看的"这条隐式契约上再加一层，且 4xx 语义对
 "上游形状变了"并不贴切；而策略收窄一次覆盖了所有终态失败，不需要每种失败各挑一个状态码。
 
-### 4. 非 chat 路径不参与分类，也不写 `markExhausted`（`ℹ️ 一致性`，**未动**）
+### 4. 非 chat 路径不参与分类，也不写 `markExhausted`（`ℹ️ 一致性`；**本次已修**）
 
-`fetchModels` / `fetchUserInfo` / `fetchUsage` / 签到 / 兑换在 `!ok` 时只抛裸状态码
+修前：`fetchModels` / `fetchUserInfo` / `fetchUsage` / 签到 / 兑换在 `!ok` 时只抛裸状态码
 （`api-calls.ts:104/136/232/443`、`fetch-usage.ts:395`），既不跑 `classifyUpstreamError`，
-也不调 `requestCounter.markExhausted`（全仓唯一调用点在 `shim.ts:457`）。后果：撞上每日
+也不调 `requestCounter.markExhausted`（当时全仓唯一调用点在 `shim.ts:457`）。后果：撞上每日
 限流时，chat 给的是"今天用完了、零点重置"，而卡片刷新只说"上次更新：{time}（刷新失败）"
 （`card-model.ts` 的 `refreshNoticeKey` 只分 `protocol-shape-changed`/`persist`/`transient`），
 且卡片的本地推断"今日额度疑似已用尽"（`usage.requestsExhausted`）不会亮。
 
-（23 的修复让 429 载体的每日限流真的走到 `markExhausted`，所以 chat 那一侧的
-「今日额度疑似已用尽」现在会亮；这里说的是非 chat 路径。）
+修后：
+
+- 五个读取点改抛 `UpstreamRefusalError`（**消息文本逐条保持原样**），分类器先读 body 里的
+  code、再退回状态：`429 + daily_limit_exceeded` → `daily-limit`，`429` 裸 → `rate-limit`，
+  `401` → `sign-in-expired`（`403` **故意不**算登录过期：国际版 campaigns 端点按 umid 机器
+  身份门控每日签到，见 `docs/KNOWN_GAPS.md` 第 8 条——把它当过期会误导用户重登）。
+- usage 路由把它变成两个可见事实：`unavailableReason: 'daily-limit'`（卡片不再说"刷新失败"）
+  与 `markExhausted(region)`（"今日额度疑似已用尽"徽标亮起）。徽标按 region 写，且**只有**
+  这个判决会写——普通网络失败仍然不写（`markExhausted` 是持久化到当天的，误写会让卡片
+  一整天都在断言它没看见的事；负对照测试钉住这条）。
+- 目录刷新只贡献理由、不写徽标：那条线没有计数器（`index.ts` 的注释写明），徽标由 usage
+  轮询点亮即可——两者看的是同一件"按账号"的事实。
+- 文案层：`row.refreshDailyLimit`（有旧时间戳，因此保留"上次更新"）+ `row.refreshDailyLimitStale`
+  （无时间戳）+ `usage.dailyLimit`，中英各一，全部不许读成"重试"或"更新插件"（
+  `test/protocol-shape-card.test.js` 逐句断言）。
 
 ## 顺带确认的、**不是**问题的
 
@@ -120,5 +158,7 @@ node --test test/route-retry-policy.test.js
 - [x] 探针 [4] 矩阵里两处 `[OPEN]` 消失，矩阵表随之更新。
 - [x] 一条测试钉住 provider 的 `retryPolicy`：`test/route-retry-policy.test.js`。
 - [x] `docs/issues/23` 的宿主侧说明里同步"重试来源"的现状。
-- [ ] §4 若动手：`api-calls.ts`/`fetch-usage.ts` 的 `!ok` 路径至少把 `daily-limit` 分类
-      出来（复用 `classifyUpstreamError` + `describeThrown`），并让卡片带上额度措辞。
+- [x] §4 已动手：`api-calls.ts` / `fetch-usage.ts` 的 `!ok` 路径经
+      `classifyHttpRefusal` 分类（`test/http-refusal.test.js` 逐条钉住消息文本未变），
+      usage 路由写 `markExhausted`，卡片三段新文案（`test/protocol-shape-card.test.js`、
+      `test/handlers.test.js`、`test/card-model.test.js`）。

@@ -32,6 +32,7 @@ import {
   rateAt,
   describeThrown,
   providerRegistrationFailure,
+  usageUnavailableKey,
 } from '../src/client/card-model.ts'
 
 /** A translation stub that names the key it is asked for. */
@@ -237,4 +238,21 @@ test('providerRegistrationFailure never returns an empty name', () => {
   assert.equal(providerRegistrationFailure({ providerRegistration: { ok: false, errorName: '' } }), 'Error')
   assert.equal(providerRegistrationFailure({ providerRegistration: { ok: false, errorName: 42 } }), 'Error')
   assert.equal(providerRegistrationFailure({ providerRegistration: { ok: false, errorName: null } }), 'Error')
+})
+
+test('usageUnavailableKey gives a spent allowance its own wording', () => {
+  // docs/issues/24: same split as the roster notice, on the read the usage panel
+  // makes directly. "刷新失败（read-failed）" is true of a daily limit and useless
+  // — it invites the retry that cannot work until the allowance resets — so the
+  // verdict must survive the last hop to the string.
+  assert.equal(usageUnavailableKey({ unavailableReason: 'daily-limit' }), 'usage.dailyLimit')
+  assert.equal(usageUnavailableKey({ unavailableReason: 'protocol-shape-changed' }), 'usage.protocolChanged')
+  assert.equal(usageUnavailableKey({ unavailableReason: 'read-failed' }), 'usage.unavailable')
+  assert.equal(usageUnavailableKey(null), 'usage.unavailable')
+  assert.equal(usageUnavailableKey(undefined), 'usage.unavailable')
+  assert.equal(usageUnavailableKey({}), 'usage.unavailable')
+  // The two standing verdicts stay distinct in precedence order too: a payload
+  // can only carry one reason, but an older host's unknown string must not be
+  // mistaken for either.
+  assert.equal(usageUnavailableKey({ unavailableReason: 'credential' }), 'usage.unavailable')
 })

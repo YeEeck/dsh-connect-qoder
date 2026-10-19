@@ -10,7 +10,7 @@ import { authHeaders } from './cosy-sign.ts'
 import { openApiHeaders } from './headers.ts'
 import { modelListUrl, exchangeUrl, userInfoUrl, campaignsUrl, claimCampaignUrl } from './endpoints.ts'
 import { normalizePromotion } from './fetch-usage.ts'
-import { parseRetryAfterSeconds, ProtocolShapeChangedError } from '../errors.ts'
+import { parseRetryAfterSeconds, ProtocolShapeChangedError, UpstreamRefusalError } from '../errors.ts'
 import { toEpochMs } from '../time.ts'
 import type { QoderCredential, Region } from '../domain.ts'
 
@@ -101,7 +101,18 @@ export async function readCampaigns(
     redirect: 'error',
     signal,
   })
-  if (!response.ok) throw new Error(`Qoder campaigns failed: HTTP ${response.status}`)
+  if (!response.ok) {
+    // The body is read even though the message does not include it: it is where
+    // the daily-limit code (`type`/`code`/`errorCode`) and the sign-in prose
+    // live, and that is the whole difference between the card naming a spent
+    // allowance and it naming a generic refresh failure (docs/issues/24).
+    throw new UpstreamRefusalError(
+      `Qoder campaigns failed: HTTP ${response.status}`,
+      response.status,
+      (await response.text()).slice(0, 300),
+      response.headers.get('retry-after'),
+    )
+  }
   return readCampaignsShape(await readJson(response, 'Qoder campaigns'))
 }
 
@@ -134,7 +145,12 @@ export async function claimCampaign(
   })
   const text = await response.text()
   if (!response.ok) {
-    throw new Error(`Qoder check-in failed: HTTP ${response.status} ${text.slice(0, 200)}`)
+    throw new UpstreamRefusalError(
+      `Qoder check-in failed: HTTP ${response.status} ${text.slice(0, 200)}`,
+      response.status,
+      text.slice(0, 300),
+      response.headers.get('retry-after'),
+    )
   }
   try {
     return JSON.parse(text)
@@ -230,7 +246,13 @@ export async function fetchModels(
     signal,
   })
   if (!response.ok) {
-    throw new Error(`Qoder model list failed: HTTP ${response.status} ${(await response.text()).slice(0, 300)}`)
+    const text = (await response.text()).slice(0, 300)
+    throw new UpstreamRefusalError(
+      `Qoder model list failed: HTTP ${response.status} ${text}`,
+      response.status,
+      text,
+      response.headers.get('retry-after'),
+    )
   }
   const data = await readJson(response, 'Qoder model list')
   const chat = readModelCatalogShape(data, region)
@@ -441,7 +463,13 @@ export async function fetchUserInfo(
     signal,
   })
   if (!response.ok) {
-    throw new Error(`Qoder userinfo failed: HTTP ${response.status} ${(await response.text()).slice(0, 300)}`)
+    const text = (await response.text()).slice(0, 300)
+    throw new UpstreamRefusalError(
+      `Qoder userinfo failed: HTTP ${response.status} ${text}`,
+      response.status,
+      text,
+      response.headers.get('retry-after'),
+    )
   }
   const data = await readJson(response, 'Qoder userinfo')
   // Two envelopes occur: the identity sits either under `data` or at the top

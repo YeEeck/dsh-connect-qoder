@@ -18,7 +18,7 @@ import { readJson, readCampaigns } from './api-calls.ts'
 import { windowIsOpen } from '../offpeak.ts'
 import { toEpochMs } from '../time.ts'
 import { checkinStateFrom } from '../claim.ts'
-import { describeThrown, isProtocolShapeChangedError, ProtocolShapeChangedError } from '../errors.ts'
+import { describeThrown, isProtocolShapeChangedError, ProtocolShapeChangedError, UpstreamRefusalError } from '../errors.ts'
 import type { QoderCredential, Region } from '../domain.ts'
 
 /** One quota bucket as the usage panel renders it. */
@@ -392,7 +392,20 @@ export async function fetchUsage(
 
   const read = async (url: string): Promise<unknown> => {
     const response = await fetch(url, { method: 'GET', headers, redirect: 'error', signal })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    // The body is read for its verdict, not for this reader's message: the
+    // message has always been the bare status, and what the card needs is the
+    // flag (`unavailableReason`, and a spent allowance marking the local
+    // exhausted badge). Both spellings of the usage route answer the same way,
+    // so the presentation→quota fallback below re-throws a verdict it cannot
+    // fix. See docs/issues/24.
+    if (!response.ok) {
+      throw new UpstreamRefusalError(
+        `HTTP ${response.status}`,
+        response.status,
+        (await response.text()).slice(0, 300),
+        response.headers.get('retry-after'),
+      )
+    }
     return readJson(response, 'Qoder usage')
   }
 
