@@ -113,7 +113,7 @@ mkdirSync(dir, { recursive: true })
 const entry = join(dir, 'error.mjs')
 writeFileSync(entry, source)
 const hostErrors = await import(pathToFileURL(entry).href)
-const { isQuotaExceededError, QUOTA_EXCEEDED_CODE } = hostErrors
+const { isQuotaExceededError, QUOTA_EXCEEDED_CODE, EMPTY_RESPONSE_CODE } = hostErrors
 if (typeof isQuotaExceededError !== 'function' || typeof QUOTA_EXCEEDED_CODE !== 'string') {
   console.error('宿主 error.js 里找不到 isQuotaExceededError / QUOTA_EXCEEDED_CODE——契约变了')
   process.exit(1)
@@ -122,6 +122,7 @@ if (typeof isQuotaExceededError !== 'function' || typeof QUOTA_EXCEEDED_CODE !==
 /* ------------------------------------------- 2. 本插件真的文案（真执行） ---- */
 
 const { streamChat } = await import('../src/host/upstream.ts')
+const { ProtocolShapeChangedError, thrownFlag } = await import('../src/host/errors.ts')
 
 const REGION = { id: 'qoder', displayName: 'Qoder', baseUrl: 'https://gateway.example' }
 const CREDENTIAL = { userID: 'u-probe', token: 'tok-probe', name: 'n', email: 'e@x', machineID: 'm' }
@@ -143,25 +144,49 @@ const BODY = {
   code: 'daily_limit_exceeded',
 }
 
-const originalFetch = globalThis.fetch
-let calls = 0
-globalThis.fetch = async () => {
-  calls += 1
-  return new Response(JSON.stringify(BODY), { status: 429, headers: { 'content-type': 'application/json' } })
-}
-let rejection
-try {
-  for await (const chunk of streamChat(REGION, CREDENTIAL, CHAT_REQUEST, new AbortController().signal)) {
-    void chunk
+/**
+ * 驱动一次真实回合，返回抛出的错误与发出的请求数。
+ *
+ * `replies` 用完后就重复最后一条，所以「退化成重试」的场景会以请求数暴增表现出来
+ * （而不是挂到超时）。需要让 fetch 直接抛（传输层失败）时给该项 `{ throw: <error> }`。
+ */
+async function driveChat(replies) {
+  const original = globalThis.fetch
+  let calls = 0
+  globalThis.fetch = async () => {
+    const reply = replies[Math.min(calls, replies.length - 1)]
+    calls += 1
+    if (reply.throw !== undefined) throw reply.throw
+    return new Response(reply.text, {
+      status: reply.status,
+      // 200 流必须是 `text/event-stream`：帧读取器只在 SSE 载体上解析 `data:` 行，
+      // 用 `application/json` 送帧会被当成「一个都没读懂的流」→ 形状漂移判决。
+      headers: { 'content-type': reply.contentType ?? 'application/json' },
+    })
   }
-} catch (thrown) {
-  rejection = thrown
-} finally {
-  globalThis.fetch = originalFetch
+  let error
+  try {
+    for await (const chunk of streamChat(REGION, CREDENTIAL, CHAT_REQUEST, new AbortController().signal)) {
+      void chunk
+    }
+  } catch (thrown) {
+    error = thrown
+  } finally {
+    globalThis.fetch = original
+  }
+  return { error, attempts: calls }
 }
 
+/** 一帧 `data:` 包体，形状与上游的 200 流一致（信封的 `body` 是 JSON 字符串）。 */
+const sseFrame = (body) => `data: ${JSON.stringify({ body: JSON.stringify(body) })}\n\n`
+
+/** 让 fetch 抛出一个 undici 形状的 ECONNRESET（含 `cause.code`）。 */
+const ecReset = () => Object.assign(new Error('fetch failed'), { cause: Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }) })
+
+const { error: rejection, attempts } = await driveChat([{ status: 429, text: JSON.stringify(BODY) }])
+
 const ourMessage = String(rejection?.message ?? '')
-console.log(`commit: attempts=${calls} name=${rejection?.name} retryable=${rejection?.retryable} dailyLimit=${rejection?.dailyLimit}`)
+console.log(`commit: attempts=${attempts} name=${rejection?.name} retryable=${rejection?.retryable} dailyLimit=${rejection?.dailyLimit}`)
 console.log(`plugin message: ${ourMessage.slice(0, 160)}…`)
 
 /* --------------------------------- 3. 宿主会拿去分类的文本（两种合成） ---- */
@@ -228,5 +253,178 @@ check(retryable !== '', '找得到 DEFAULT_RETRYABLE_CODES 的字面量')
 check(retryable.includes('RATE_LIMIT'), 'RATE_LIMIT 在可重试集合里（所以分类错误就真的会重试）')
 check(!retryable.includes('QUOTA'), 'QUOTA 不在可重试集合里')
 
-console.log(`\n${failures === 0 ? 'PASS' : `FAIL (${failures})`}：${failures === 0 ? '宿主会把这条 429 当不可重试的额度错误' : '宿主仍会重试，或契约已漂移'}`)
+/* ---- 4. 端到端矩阵：本插件的各种失败 → 宿主会判成什么、会不会重试 ------ */
+
+/**
+ * 判定器用的是**宿主源码里每个分支的原文**，不是手抄的一份规则：把
+ * `if (<条件>) return <码>;` 逐行取出，条件与返回值都按它们自己的文本求值。
+ * 宿主新增或重排分支时本探针跟着变；兜底分支另按原文断言存在，不静默退化。
+ */
+function buildHostClassifier(body) {
+  const branches = []
+  for (const line of body.split('\n')) {
+    const matched = /^\s*if \((.*)\) return (.*);$/.exec(line)
+    if (matched === null) continue
+    branches.push({
+      test: new Function('message', 'isQuotaExceededError', `return (${matched[1]});`),
+      value: new Function('QUOTA_EXCEEDED_CODE', `return (${matched[2]});`),
+    })
+  }
+  return {
+    count: branches.length,
+    classify: (message) => {
+      for (const branch of branches) {
+        if (branch.test(message, isQuotaExceededError) === true) return branch.value(QUOTA_EXCEEDED_CODE)
+      }
+      return 'PI_AI_ERROR'
+    },
+  }
+}
+
+const { classify, count } = buildHostClassifier(classifier)
+// 宿主这版正好 9 条 `if`（末行是 `return "PI_AI_ERROR"` 兜底，不参与解析）。数字变了
+// 说明宿主改了分类器，本探针的矩阵与注释得跟着重读——所以按相等断言，而不是“至少几条”。
+check(count === 9, `分类器解析出 ${count} 条 if（宿主这版是 9 条）`)
+check(classifier.includes('return "PI_AI_ERROR"'), '兜底分支 `return "PI_AI_ERROR"` 还在')
+
+/** 可重试集合：字面量里的字符串码 + 标识符形式的 EMPTY_RESPONSE_CODE（原样取自宿主常量）。 */
+const RETRYABLE = new Set([...retryable.matchAll(/'([A-Z_]+)'/g)].map((m) => m[1]))
+if (retryable.includes('EMPTY_RESPONSE_CODE')) RETRYABLE.add(EMPTY_RESPONSE_CODE)
+
+/**
+ * shim 的三个出口（`src/host/shim.ts:438-461`）：`retryable` → 503 `rate_limit`、
+ * `dailyLimit` → 429 `daily_limit_exceeded`、其余 → 502 `upstream_error`。
+ * 下面是它的镜像；先用源码文本断言那三行还在，免得镜像悄悄过期。
+ */
+const shimSource = readFileSync(new URL('../src/host/shim.ts', import.meta.url), 'utf8')
+const SHIM_EXITS = {
+  queue: { text: "writeError(res, 503, 'rate_limit'", status: 503, type: 'rate_limit' },
+  quota: { text: "writeError(res, 429, 'daily_limit_exceeded'", status: 429, type: 'daily_limit_exceeded' },
+  other: { text: "writeError(res, 502, 'upstream_error'", status: 502, type: 'upstream_error' },
+}
+for (const exit of Object.values(SHIM_EXITS)) {
+  check(shimSource.includes(exit.text), `shim 出口仍在：${exit.text}…)`)
+}
+
+const shimExitFor = (error) => {
+  if (thrownFlag(error, 'retryable') === true) return SHIM_EXITS.queue
+  if (thrownFlag(error, 'dailyLimit') === true) return SHIM_EXITS.quota
+  return SHIM_EXITS.other
+}
+
+/**
+ * 宿主看到的文本。两条合成路径见 [1] 的出处；`inband` 表示这次失败发生在 200 流内部
+ * （shim 已经提交了响应头，所以没有状态前缀——见 `src/host/shim.ts:561-601`）。
+ */
+const hostTexts = (carrier, status, type, message) =>
+  carrier === 'inband'
+    ? { inband: message }
+    : {
+        'http(json)': `${status}: ${JSON.stringify({ message, type, code: type })}`,
+        'http(msg)': `${status} ${message}`,
+      }
+
+/**
+ * 每一行记录**宿主当前的行为**（不是我们希望的行为）。`open` 标记的是「终态判决却被
+ * 宿主当成可重试」——那是记在案的口子；宿主一旦改好，这一行会变成 CHANGED，提醒改表。
+ * `carrier: 'inband'` 表示这次失败发生在 200 流内部、shim 已提交响应头，因此没有状态前缀。
+ */
+const SSE = { contentType: 'text/event-stream' }
+const frameCase = (body) => ({ status: 200, text: sseFrame(body), ...SSE })
+
+const CASES = [
+  {
+    label: '每日额度：429 + daily_limit_exceeded（首个响应 → shim 出口 429）',
+    drive: () => driveChat([{ status: 429, text: JSON.stringify(BODY) }]),
+    expect: 'QUOTA',
+    expectRetryable: false,
+  },
+  {
+    label: '每日额度：200 流内的错误帧，首个帧（shim 出口仍是 429）',
+    drive: () => driveChat([frameCase({ code: 'daily_limit_exceeded', message: 'daily request allowance is used up' })]),
+    expect: 'QUOTA',
+    expectRetryable: false,
+  },
+  {
+    label: '登录过期：200 流内的错误帧（105），首个帧 → shim 出口 502',
+    drive: () => driveChat([frameCase({ code: '105', message: 'Login expired' })]),
+    expect: 'SERVER',
+    expectRetryable: true,
+    open: '首帧就失败 → 502，文案里没有 401/403 也没有 4xx 数字 → 宿主判 SERVER，白重试 5 次',
+  },
+  {
+    label: '登录过期：200 流内的错误帧（105），已有分片之后 → 帧内交付',
+    carrier: 'inband',
+    drive: () =>
+      driveChat([
+        {
+          status: 200,
+          text: sseFrame({ choices: [{ delta: { content: 'hi' } }] }) + sseFrame({ code: '105', message: 'Login expired' }),
+          ...SSE,
+        },
+      ]),
+    expect: 'PI_AI_ERROR',
+    expectRetryable: false,
+  },
+  {
+    label: '登录过期：HTTP 401（文案里带 HTTP 401）',
+    drive: () => driveChat([{ status: 401, text: JSON.stringify({ message: 'Login expired' }) }]),
+    expect: 'AUTH',
+    expectRetryable: false,
+  },
+  {
+    label: '协议形状漂移（终态，shim 出口 502）',
+    drive: async () => ({ error: new ProtocolShapeChangedError('{"unexpected":true}'), attempts: 0 }),
+    expect: 'SERVER',
+    expectRetryable: true,
+    open: '502 命中 `\\b5\\d\\d\\b` → SERVER → 重试 5 次；而它的文案正是「插件需要更新」',
+  },
+  {
+    label: '上游拒绝（HTTP 400 的不明 body，shim 出口 502）',
+    drive: () => driveChat([{ status: 400, text: JSON.stringify({ message: 'account is not allowed to use this model' }) }]),
+    expect: 'INVALID_REQUEST',
+    expectRetryable: false,
+    note: '宿主判对是因为插件文案保留了上游状态（`(HTTP 400: …)`），不是刻意设计——换状态码就会变',
+  },
+]
+
+console.log('\n[4] 矩阵：本插件的失败 → shim 出口 → 宿主的判决')
+for (const item of CASES) {
+  const { error, attempts: tries } = await item.drive()
+  const message = String(error?.message ?? '')
+  const exit = item.carrier === 'inband' ? SHIM_EXITS.other : shimExitFor(error)
+  const texts = hostTexts(item.carrier ?? 'http', exit.status, exit.type, message)
+  const codes = Object.entries(texts).map(([carrier, text]) => [carrier, classify(text)])
+  const verdicts = [...new Set(codes.map(([, code]) => code))]
+  const retried = verdicts.some((code) => RETRYABLE.has(code))
+  const head =
+    `${item.label}\n        shim=${item.carrier === 'inband' ? `in-band/${exit.type}` : `${exit.status}/${exit.type}`} ` +
+    `name=${error?.name ?? '-'} attempts=${tries} ` +
+    `code=${verdicts.join('/')} retryable=${retried}`
+  const codeMatches = verdicts.includes(item.expect)
+  const retryMatches = item.expectRetryable === undefined || item.expectRetryable === retried
+  const tag = item.open !== undefined ? 'ok  [OPEN]' : 'ok       '
+  if (!codeMatches || !retryMatches) {
+    console.log(`  CHANGED ${head}\n        记录的是 code=${item.expect} retryable=${item.expectRetryable ?? '（未记）'}——宿主行为变了就来改这张表`)
+    failures += 1
+  } else if (verdicts.length !== 1) {
+    console.log(`  ${tag} ${head}\n        两种合成分别是 ${codes.map(([carrier, code]) => `${carrier}=${code}`).join(' / ')}，“会不会重试”一致`)
+  } else {
+    console.log(`  ${tag} ${head}`)
+  }
+  if (item.open !== undefined) console.log(`        记在案的口子：${item.open}`)
+  if (item.note !== undefined) console.log(`        说明：${item.note}`)
+}
+
+/**
+ * 传输层失败不驱动：它会被插件自己的阶梯接住并把 120 s 预算跑满（实测 11 次请求），
+ * 探针不该为此停两分钟。改用源码断言——那一条分类规则还在，宿主的判决就还是可重试。
+ */
+const sseSource = readFileSync(new URL('../src/host/upstream/sse.ts', import.meta.url), 'utf8')
+check(
+  sseSource.includes("code === 'ECONNRESET'") && sseSource.includes('throw new QueueRejection(0, `network: ${detail}`)'),
+  '传输层失败（ECONNRESET 等）仍是 QueueRejection → shim 出口 503 → 宿主 RATE_LIMIT/SERVER（设计意图：会重试）',
+)
+
+console.log(`\n${failures === 0 ? 'PASS' : `FAIL (${failures})`}：${failures === 0 ? '每日额度这条 429 不可重试；其余各行与探针记录一致（[OPEN] 是记在案的口子）' : '契约已漂移，或每日额度这条 429 又变成可重试了'}`)
 process.exitCode = failures === 0 ? 0 : 1
