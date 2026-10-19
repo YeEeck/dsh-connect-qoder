@@ -2,7 +2,7 @@
   "name": "@eghrhegpe/dsh-connect-qoder",
   "displayName": "DSH Connect Qoder",
   "description": "Bring the Qoder models already signed in on this machine into DeepSeek Harness with zero configuration.",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "icon": "./icon.svg",
   "author": "eghrhegpe",
   "homepage": "https://github.com/eghrhegpe/dsh-connect-qoder",
