@@ -193,51 +193,61 @@ test('a recorded failure always carries a reason', async () => {
   }
 })
 
-test('the async read does not block the event loop', async () => {
-  // The claim under test, stated as something that can fail: the call must hand
-  // control back to the loop before it finishes. A synchronous reader would run
-  // to completion inside the call, so nothing else could have run in between.
-  //
-  // The verdict is ORDER, not elapsed time. An earlier version counted ticks of
-  // a 5 ms interval and asserted at least one had fired before the first yield.
-  // That reads as deterministic but is not: it only holds when the read happens
-  // to take longer than the interval. On Linux the unwrap is refused by the
-  // platform check within a couple of milliseconds, so a fast runner scored zero
-  // ticks and failed on a green tree (run 39302554281, node 24; the same commit
-  // passed on node 22 and on Windows, where a real PowerShell child makes the
-  // wait long).
-  //
-  // A macrotask cannot run before a promise that settled synchronously — the
-  // `.then` continuation is a microtask, and microtasks drain first. So "the
-  // immediate won the race" is exactly "the call yielded", independent of how
-  // fast the machine is, and a reader that never yields still fails here.
-  //
-  // The marker MUST be queued BEFORE the call. Queued after, it loses to an
-  // implementation that yields with its own `setImmediate` (that immediate was
-  // registered first, so it runs first in the same check phase) — which would
-  // fail a correct reader. Measured both orders against three shapes: sync,
-  // immediate-yielding and timer-yielding; only "marker first" separates the
-  // synchronous one from both asynchronous ones.
-  const dir = appDirWith(mkdtempSync(join(tmpdir(), 'qoder-async-')))
-  try {
-    setCredentialDiagnosticSink(() => {})
-    // A directory with a `Local State` but no `auth.v1.dat` reaches the unwrap
-    // and then finds nothing to decrypt — which is the path this assertion is
-    // about.
-    const marker = new Promise((resolve) => setImmediate(() => resolve('yielded')))
-    const settled = loadCredentialAsync(REGION, join(dir, '..')).then(() => 'settled')
-    const first = await Promise.race([settled, marker])
-    assert.strictEqual(
-      first,
-      'yielded',
-      'the async read settled before the loop got to run — this is the regression',
-    )
-    await settled
-  } finally {
-    setCredentialDiagnosticSink(undefined)
-    rmSync(join(dir, '..'), { recursive: true, force: true })
-  }
-})
+test(
+  'the async read does not block the event loop',
+  {
+    // Only Windows has a wait to observe. There the unwrap spawns a real
+    // PowerShell child (~100 ms), which is exactly the wait this asserts is not
+    // blocked. Everywhere else `defaultDpapiUnprotect` refuses the platform
+    // before awaiting anything, so the call settles without ever yielding —
+    // measured at 2.4 ms with the whole call inside the microtask queue (run
+    // 39304167878). Asserting a yield there asserts the runner's speed, which is
+    // what the previous 5 ms tick counter did: it failed on a green tree when a
+    // fast runner finished inside the interval (run 39302554281) and passed when
+    // the machine happened to be slow.
+    skip:
+      process.platform === 'win32'
+        ? false
+        : 'off Windows the unwrap is refused before any await — there is no wait to not-block',
+  },
+  async () => {
+    // The claim under test, stated as something that can fail: the call must
+    // hand control back to the loop before it finishes. A synchronous reader
+    // would run to completion inside the call, so nothing else could have run in
+    // between.
+    //
+    // The verdict is ORDER, not elapsed time — a macrotask cannot run before a
+    // promise that settled synchronously, because the `.then` continuation is a
+    // microtask and microtasks drain first. So "the immediate won the race" is
+    // exactly "the call yielded".
+    //
+    // The marker MUST be queued BEFORE the call. Queued after, it loses to an
+    // implementation that yields with its own `setImmediate` (that immediate was
+    // registered first, so it runs first in the same check phase) — which would
+    // fail a correct reader. Measured both orders against three shapes: sync,
+    // immediate-yielding and timer-yielding; only "marker first" separates the
+    // synchronous one from both asynchronous ones.
+    const dir = appDirWith(mkdtempSync(join(tmpdir(), 'qoder-async-')))
+    try {
+      setCredentialDiagnosticSink(() => {})
+      // A directory with a `Local State` but no `auth.v1.dat` reaches the unwrap
+      // and then finds nothing to decrypt — which is the path this assertion is
+      // about.
+      const marker = new Promise((resolve) => setImmediate(() => resolve('yielded')))
+      const settled = loadCredentialAsync(REGION, join(dir, '..')).then(() => 'settled')
+      const first = await Promise.race([settled, marker])
+      assert.strictEqual(
+        first,
+        'yielded',
+        'the async read settled before the loop got to run — this is the regression',
+      )
+      await settled
+    } finally {
+      setCredentialDiagnosticSink(undefined)
+      rmSync(join(dir, '..'), { recursive: true, force: true })
+    }
+  },
+)
 
 test('the async reader returns a promise, the sync one does not', async () => {
   // The shape difference callers depend on: `CredentialCache.resolve` awaits
