@@ -42,6 +42,15 @@ jobs:
       # renders the shipped card with them.
       - run: npm install --no-audit --no-fund
 
+      # The slot-gate assertions in `test/composer-pill.test.js` (A–D) read the
+      # HOST's own client bundles, which a bare runner does not have: the
+      # `@deepseek-ai/*` peers come from the DSH runtime, not the public registry.
+      # Without this step all four skip, and `node --test` counts a skip as a
+      # pass — the gate would be green on CI while verifying nothing. The test
+      # resolves this tree via `npm root -g`, so a global install is what it needs.
+      - name: Install the DSH runtime the slot-gate reads
+        run: npm install -g @deepseek-ai/dsh || echo "dsh CLI not installable here; the slot-gate assertions will name the missing peer"
+
       # A bare checkout now carries the committed lib/ (docs/issues/19), but the
       # build still runs first: the tests that read lib/client.js assert against
       # the SHIPPED bundle on purpose (see test/client-bundle.test.js), and building

@@ -11,7 +11,9 @@
  *      `ComposerUsagePill`，且注册进 lib 产物。
  *   4. slot-gate：peer 契约在，`conversation.input.right` 是可挂的 `kind:'list'`/
  *      `scope:'session'` 座席，renderer 对 session 作用域严格物化（`optional=false`）。
- *      peer 路径是开发机布局，找不到时 skip 而非失败。
+ *      peer 根除开发机布局外还探全局 CLI 树（`npm root -g`）——那是 CI runner 上
+ *      唯一的来源；两处都没有时仍 skip（与既有 peer 缺席范式一致），但 workflow
+ *      会先 `npm install -g @deepseek-ai/dsh`，所以 CI 上不该出现这个 skip。
  *
  * DOM 行为（真的渲染 lib 产物、断言用户看到什么）在 `composer-pill-dom.test.js`，
  * 走 `test/helpers/render-card.js`，与本文件的静态断言分开。
@@ -19,6 +21,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import {
   isQoderRegion,
@@ -201,8 +205,32 @@ test('the composer pill registration degrades to console.error, not a throw', ()
 /* 8. slot-gate：peer 契约在                                         */
 /* ---------------------------------------------------------------- */
 
+/**
+ * The global `dsh` CLI's `node_modules`, where a runner keeps the client copy.
+ *
+ * A trimmed copy of the sibling plugins' `test/peer-roots.mjs` helper: same
+ * `npm root -g` probe, same `dsh-base` anchor (the anchor matters — a prefix
+ * without the runtime would only trade one missing path for another), memoised
+ * so the three `peerRootOf` calls spawn `npm` once.
+ * @returns {string|undefined} a `node_modules` directory, or undefined.
+ */
+let cliRuntimeCache = null
+function cliRuntimeModules() {
+  if (cliRuntimeCache !== null) return cliRuntimeCache === false ? undefined : cliRuntimeCache
+  const root = spawnSync('npm root -g', { shell: true, encoding: 'utf8', timeout: 30_000 })
+  if (root.error !== undefined || root.status !== 0) {
+    cliRuntimeCache = false
+    return undefined
+  }
+  const prefix = root.stdout.trim()
+  const anchor = prefix === '' ? '' : join(prefix, '@deepseek-ai', 'dsh', 'node_modules')
+  cliRuntimeCache = anchor !== '' && existsSync(join(anchor, '@deepseek-ai', 'dsh-base')) ? anchor : false
+  return cliRuntimeCache === false ? undefined : cliRuntimeCache
+}
+
 /** 定位 peer 包根；多候选路径遍历，找不到返回 undefined。 */
 function peerRootOf(pkg) {
+  const cli = cliRuntimeModules()
   const candidates = [
     `${REPO_ROOT}node_modules/@deepseek-ai/${pkg}`,
     `${process.env.HOME}/.dsh/profiles/web/node_modules/@deepseek-ai/${pkg}`,
@@ -211,6 +239,10 @@ function peerRootOf(pkg) {
     `${process.env.HOME}/.dsh/profiles/node_modules/@deepseek-ai/${pkg}`,
     `${process.env.USERPROFILE}/.dsh/profiles/node_modules/@deepseek-ai/${pkg}`,
     `${process.env.LOCALAPPDATA}/Programs/DeepSeek Harness/resources/app.asar.unpacked/dsh/node_modules/@deepseek-ai/${pkg}`,
+    // 全局 CLI 树：CI runner 上**唯一**存在的那个（workflow 既不装 profile，也没有
+    // 桌面端副本）。漏掉它，A–D 四条契约断言在 CI 上全部 skip，而 `node --test`
+    // 把 skip 记为 pass —— 一条从不跑的门禁看起来永远是绿的。
+    ...(cli === undefined ? [] : [`${cli}/@deepseek-ai/${pkg}`]),
   ]
   return candidates.find((path) => existsSync(path))
 }
