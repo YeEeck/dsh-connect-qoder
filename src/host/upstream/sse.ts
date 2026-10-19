@@ -394,6 +394,26 @@ export async function* streamChat(
     if (!response.ok) {
       const text = (await response.text()).slice(0, 500)
 
+      // A non-2xx reply carries the same nested envelope as an in-band error
+      // frame, so it is unwrapped the same way: the outer status is often a
+      // bare 403 whose real meaning (`10605`, queued) lives two JSON strings
+      // deeper. It is unwrapped BEFORE the transient-status branch below,
+      // because the status is not a reliable signal for the terminal verdicts a
+      // body can carry — see the daily-limit check.
+      const failure = readFailure({ code: String(response.status), message: text }, String(response.status))
+
+      // A spent daily allowance is checked ahead of the transient branch, at
+      // every status, for the same reason the frame path checks it ahead of its
+      // queue branch: it carries queue markers and a multi-hour hint, and it
+      // must not become a sleep. Reading the status FIRST is what let the newer
+      // gateway's `429` + `daily_limit_exceeded` reply run the escalation ladder
+      // for its full two-minute budget and twelve attempts, then hand DSH a
+      // `rate_limit` it retried five more times (docs/issues/23-upstream-429-daily-limit.md);
+      // the failure does not become less final by arriving under a 429.
+      if (failure !== undefined && failure.kind === 'daily-limit') {
+        throw new DailyLimitRejection(failure.detail, failure.retryAfterSeconds)
+      }
+
       // Transient HTTP failures (429, 5xx) are safe to retry before the first
       // frame: the caller has seen no output yet. Honour a `Retry-After` hint
       // when present; otherwise let the escalation ladder in `queueWaitFor`
@@ -407,18 +427,9 @@ export async function* streamChat(
         throw new QueueRejection(retryAfter, `HTTP ${response.status} — ${text}`)
       }
 
-      // A non-2xx reply carries the same nested envelope as an in-band error
-      // frame, so it is unwrapped the same way: the outer status is often a
-      // bare 403 whose real meaning (`10605`, queued) lives two JSON strings
-      // deeper.
-      const failure = readFailure({ code: String(response.status), message: text }, String(response.status))
       if (failure === undefined) {
         throw new Error(`Qoder chat failed: HTTP ${response.status} ${response.statusText} — ${text}`)
       }
-      // A spent daily allowance on the non-2xx path. Ahead of the queue branch
-      // for the same reason as in the frame path: it carries queue markers and a
-      // multi-hour hint, and it must not become a sleep.
-      if (failure.kind === 'daily-limit') throw new DailyLimitRejection(failure.detail, failure.retryAfterSeconds)
       if (failure.kind === 'rate-limit') throw new QueueRejection(failure.retryAfterSeconds, failure.detail)
       const message = failureMessage(failure, region, response.status, response.statusText)
       // Same reasoning as the frame path above.
@@ -550,10 +561,25 @@ class QueueRejection extends Error {
  * retried, and no amount of waiting within the session changes the answer,
  * because the counter resets at the day boundary rather than draining.
  *
- * So it is a hard failure with an honest name. `retryable` is explicitly FALSE,
- * which is what stops both this plugin's own queue ladder and DSH's retry policy
- * from picking it up, and `resetAt` is what the UI can offer instead: "try again
- * after the day rolls over" rather than "try again in 7350 seconds".
+ * So it is a hard failure with an honest name. `retryable: false` is what stops
+ * this plugin's own queue ladder, and `retryAfterSeconds` is what the UI can
+ * offer instead: "try again after the day rolls over" rather than "try again in
+ * 7350 seconds".
+ *
+ * Stopping DSH's retry policy is a SECOND, separate job, because that policy
+ * cannot see the flag: the shim hands it an HTTP status and a message, and the
+ * host classifies on those — `classifyPiAiError` in
+ * `@deepseek-ai/dsh-llm-pi-ai/lib/index.js` tests `isQuotaExceededError`
+ * (`@deepseek-ai/dsh-llm/lib/types/error.js`) BEFORE its `\b429\b|rate.?limit`
+ * rule. A message that only says the allowance "is used up" matches neither
+ * wording, so it fell through to `RATE_LIMIT`, which IS in the host's retryable
+ * set (`DEFAULT_RETRYABLE_CODES` in `@deepseek-ai/dsh-llm/lib/types/retry-policy.js`)
+ * — and the request was retried five more times. That is why the sentence below
+ * says "daily quota exhausted": the phrase is load-bearing, it is the wording
+ * the host's quota predicate looks for, and dropping it silently reinstates
+ * those retries. The old claim here was that the flag alone did this; it never
+ * could. `probe/host-retry-classification-probe.mjs` asserts the contract
+ * against the installed host, and `test/daily-limit.test.js` pins the phrase.
  *
  * The message names the cause in the user's terms, because the upstream text
  * ("Billing daily count exceeded") is a billing term and the action is none of
@@ -572,7 +598,10 @@ class DailyLimitRejection extends Error {
 
   constructor(detail: unknown, retryAfterSeconds = 0) {
     super(
-      `Qoder's daily request allowance for this account is used up` +
+      // "daily quota exhausted" is a host-classifier contract, not decoration:
+      // see the class doc. Keep the two words adjacent — the host's predicate is
+      // `(?:quota|usage limit)[\s_-]+(?:exceeded|exhausted|reached)`.
+      `Qoder's daily request allowance for this account is used up (daily quota exhausted)` +
         `${retryAfterSeconds > 0 ? ` — it resets in about ${Math.round(retryAfterSeconds / 3600)}h` : ''}. ` +
         'Waiting within the session will not help; the off-peak price (22:00–08:00 Asia/Shanghai) ' +
         'and the daily check-in both still work.',
