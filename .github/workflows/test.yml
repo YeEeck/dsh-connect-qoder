@@ -12,7 +12,15 @@ name: test
 # (Upstream had the opposite layout, where lib/*.js were themselves the committed
 # sources. Since docs/issues/17 the sources live in src/ and the artifact is rebuilt
 # from them; since docs/issues/19 the rebuilt artifact is versioned again.)
-on: [push, pull_request]
+on:
+  # Branch-filtered on purpose: a bare `push` also fires on TAG pushes, so
+  # releasing a version started a second full run of the same tree (the tag and
+  # the commit it points at are the same bytes — run 39301812153 vs 39301851697).
+  # The commit that gets tagged has already been gated; the tag itself does not
+  # change a single file. Same shape as the four sibling repos.
+  push:
+    branches: [main]
+  pull_request:
 
 jobs:
   test:
