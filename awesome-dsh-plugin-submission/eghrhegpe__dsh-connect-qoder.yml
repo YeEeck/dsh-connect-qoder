@@ -15,9 +15,14 @@
 #     (Qoder CN / 国内版 and 国际版, com.qoder.cn and qoder.com).
 #   "rate and off-peak window" — rateAt / offPeakState / windowLabelOf, and the
 #     countdown driven by promotion.active.
+#   "daily check-in" — CardCheckin and the check-in card
+#     (src/client/card-model.ts, src/client/card.tsx).
+#   "on-card usage pills" — the usage pill rendered beside the card
+#     (src/client/composer-usage-pill.tsx).
+#   "credit lookup" — Credits rendered via formatCredits in the card model.
 url: https://github.com/eghrhegpe/dsh-connect-qoder
 name: eghrhegpe/dsh-connect-qoder
 category: model
 description:
-  en: 'Brings models from the Qoder app already signed in on this machine into DeepSeek Harness, with no token to configure, and shows each model rate and off-peak window on its settings card.'
-  zh: '把本机已登录的 Qoder 应用中的模型接入 DeepSeek Harness，无需配置任何令牌，并在设置卡片上显示每个模型的费率与错峰窗口。'
+  en: 'Registers both Qoder CN and international models into DeepSeek Harness, showing each model''s rate that shifts with off-peak hours, plus a daily check-in, on-card usage pills, and a credit lookup — no token to configure when the Qoder app is already signed in on this machine, otherwise one browser login.'
+  zh: '注册 Qoder 中国版与国际版的语言模型到 DSH，自动获取每个模型的费率，随错峰时段变化。并提供每天签到、卡片胶囊与积分查询功能。需要本机Qoder的登录态，或浏览器登陆一次'

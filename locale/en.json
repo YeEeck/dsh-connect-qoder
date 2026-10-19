@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "DSH Connect Qoder",
-    "description": "Bring the Qoder models already signed in on this machine into DeepSeek Harness — both Qoder CN and the international edition, with zero configuration."
+    "description": "Registers both Qoder CN and international models into DeepSeek Harness, showing each model's rate that shifts with off-peak hours, plus a daily check-in, on-card usage pills, and a credit lookup — no token to configure when the Qoder app is already signed in on this machine, otherwise one browser login."
   }
 }

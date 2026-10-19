@@ -22,7 +22,7 @@ AGENTS.md 是**纪律文件**不是**教程**：它钉死红线、验证、导�
 | 排查"为什么没生效 / 报错" | `docs/howto/plugin-error-where-to-look.md` | `docs/howto/host-version-probe.md` | 先分清 Host 进程 vs Client 控制台 |
 | 动凭据 / 临时目录 / OSCrypt | 本文件红线 2 | `docs/issues/01`、`02`（越界与残留两类事故） | 改完必带越界 + 残留两类测试 |
 | 动设置激活 / 双 region 写入 | 本文件三条事实 1、红线 4 | `docs/history/0.5.0-abi-cutover.md` | 写设置带完整 map，不丢兄弟区 |
-| 发版 / 上架 | `RELEASING.md`（唯一权威） | `docs/submission/` + 根 `README`/`CHANGELOG` | 状态判定表 + 人机 handoff 契约 |
+| 发版 / 上架 | `RELEASING.md`（唯一权威） | `awesome-dsh-plugin-submission/` + 根 `README`/`CHANGELOG` | 状态判定表 + 人机 handoff 契约 |
 | 通览事故史 / 接手维护 | `docs/PLAN.md`（P0–P3 总览） | `docs/KNOWN_GAPS.md`（当前缺口） | module-mocks 在 Node 24.16 实测不可行，别再排那坑（#1/#2 已证） |
 
 下面两张大表（「去哪参考」「去哪查」）是**第二层字典**——路走了一半、要定位某个具体文件或细节
@@ -144,4 +144,4 @@ npm run verify             # typecheck + 两道 audit + build + test + host/bund
 | 排查报错去哪看（Host 进程 vs Client 控制台；本插件非"永远 200"） | `docs/howto/plugin-error-where-to-look.md` |
 | 动设置激活路径 / 宿主代际问题前 | `docs/history/0.5.0-abi-cutover.md`（0.5.0 砍 0.1.x ABI 的取证、决定与"为什么下限是 `>=0.2.0-rc.0`"） |
 | client 恢复源码的来龙去脉与旧补丁 | `docs/history/`（含 `restore-client-src.mjs`） |
-| 上架提交材料 | `docs/submission/`、根目录 `README.md` / `CHANGELOG.md` |
+| 上架提交材料 | `awesome-dsh-plugin-submission/`、根目录 `README.md` / `CHANGELOG.md` |
