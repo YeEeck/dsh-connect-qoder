@@ -163,36 +163,46 @@ test('the peers outside the hosts check keep their own ranges', () => {
   // The host does not block installation on these — the ranges are this
   // plugin's own contract about what it imports.
   //
-  // pi-ai is the one that changed: the `^0.87.1` chosen at the 0.5.0 cut
-  // refused the version every host actually bundles. Measured on this
-  // machine (2026-10-03) both the desktop build and the standalone
-  // `dsh` 0.2.0-rc.1 CLI ship `@earendil-works/pi-ai@0.85.1`, so a plugin
-  // whose host entry imports pi-ai at module scope cannot even load —
-  // and with it every loopback card route 404s (the symptom that sent
-  // the 0.5.0 field down). The range spans 0.85.x through 0.87.x because
-  // the two imports this plugin makes (`createProvider`,
-  // `openAICompletionsApi`) both exist in 0.85.1.
+  // pi-ai is the one that changed twice. The `^0.87.1` chosen at the 0.5.0
+  // cut refused the version every host actually bundles; the 0.5.1 fix
+  // declared `>=0.85.0 <0.88.0` against the desktop build and the
+  // standalone `dsh` 0.2.0-rc.1 CLI, both of which shipped
+  // `@earendil-works/pi-ai@0.85.1` when measured on 2026-10-03. That lid
+  // expired the same way: the 0.2 host line now bundles pi-ai 1.x, which
+  // `<0.88.0` refuses on paper. Widened to `<2.0.0` — the next major is
+  // still outside, which is the whole point of keeping a lid at all.
+  //
+  // The two imports this plugin makes (`createProvider`, `openAICompletionsApi`)
+  // are unchanged across 0.85.1 → 1.1.0: `dist/models.js` still exports
+  // `createProvider(input)`, and `dist/api/openai-completions.lazy.js` still
+  // exports `openAICompletionsApi()` (a `lazyApi` wrapper whose result carries
+  // `stream`, which is exactly what `createProvider`'s single-api fast path
+  // looks for). The 1.1.0 exports map covers `./api/*` and `./models`, so both
+  // specifiers resolve.
   const { peerDependencies: peers } = JSON.parse(readFileSync(`${REPO_ROOT}package.json`, 'utf8'))
   assert.equal(peers['@deepseek-ai/cordis'], '>=4.0.4 <5.0.0')
   assert.equal(peers['@deepseek-ai/schemastery'], '^3.18.3')
-  assert.equal(peers['@earendil-works/pi-ai'], '>=0.85.0 <0.88.0')
+  assert.equal(peers['@earendil-works/pi-ai'], '>=0.85.0 <2.0.0')
 })
 
 test('the pi-ai range admits what the hosts bundle and refuses the next gen', () => {
   // Golden values from semver 7.8.5 with the host's own includePrerelease:true,
-  // re-measured after the 0.5.1 range fix. The admission list is what the
-  // host actually ships today; the refusal list is the line the plugin has
-  // never been tested on.
+  // re-measured after each range change. The admission list is what hosts
+  // actually ship today; the refusal list is the line the plugin has never
+  // been tested on.
   const { peerDependencies: peers } = JSON.parse(readFileSync(`${REPO_ROOT}package.json`, 'utf8'))
   const range = peers['@earendil-works/pi-ai']
   for (const [version, why] of [
     ['0.85.1', 'bundled by the desktop build and the standalone dsh 0.2.0-rc.1 CLI'],
     ['0.86.0', 'the minor between the two known floors'],
     ['0.87.1', 'the version the 0.5.0 cut was validated against'],
+    ['0.88.0', 'the lid the 0.5.1 fix drew, now inside the range'],
+    ['1.0.0', 'the next generation, now what the 0.2 host line bundles'],
+    ['1.1.0', 'shipped inside the desktop build the field runs on'],
   ]) {
     assert.ok(satisfies(version, range), `${range} rejects pi-ai ${version} (${why})`)
   }
-  for (const version of ['0.84.9', '0.88.0', '1.0.0']) {
+  for (const version of ['0.84.9', '2.0.0', '2.1.0']) {
     assert.ok(!satisfies(version, range), `${range} now admits pi-ai ${version} (next generation)`)
   }
 })
