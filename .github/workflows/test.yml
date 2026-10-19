@@ -25,7 +25,15 @@ jobs:
         # Windows is not redundant: the shim binds a loopback listener, the
         # catalog store relies on rename-over-existing, and the credential
         # reader shells out to PowerShell. Those behave differently elsewhere.
-        os: [ubuntu-latest, windows-latest]
+        #
+        # It runs on ONE node line only. The platform difference is what this
+        # axis buys; a second Windows job re-ran the same ~14-minute install and
+        # the same 1270 assertions to re-learn the same fact. Node coverage is
+        # still both lines — it just lives on ubuntu.
+        os: [ubuntu-latest]
+        include:
+          - node: '22.19'
+            os: windows-latest
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -34,6 +42,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+          # `package-lock.json` is committed here, so the download cache has a
+          # key that only moves when a dependency actually moves.
+          cache: npm
 
       # `.npmrc` sets legacy-peer-deps: the `@deepseek-ai/*` peers are supplied
       # by the host at runtime and are not on the public registry, so npm's
@@ -42,14 +53,56 @@ jobs:
       # renders the shipped card with them.
       - run: npm install --no-audit --no-fund
 
+      # The global install below pulls dozens of `@deepseek-ai/dsh-*` packages —
+      # thousands of files — and on windows-latest it took 773 s of an 1108 s
+      # job (run 39277257312). Nothing in that tree changes between runs of the
+      # same host version, so it is cached per (OS, node, host version).
+      #
+      # The prefix is moved off the runner image's own `node_modules` so the
+      # cache holds ONLY the runtime we installed; restoring over npm/corepack
+      # would tie this cache to a runner image revision. `npm root -g` follows
+      # the prefix, which is exactly the probe `test/composer-pill.test.js`
+      # uses, so the anchor the test reads moves with it.
+      - name: Point npm's global prefix at a cacheable directory
+        shell: bash
+        run: |
+          PREFIX="$(node -p "require('node:path').join(process.env.RUNNER_TEMP, 'dsh-global')")"
+          npm config set prefix "$PREFIX"
+          echo "npm root -g -> $(npm root -g)"
+
+      # The key carries the resolved host version, not a pinned constant: a new
+      # upstream release invalidates the cache on its own, so the gate keeps
+      # testing the host a fresh install would have given it.
+      - name: Resolve the host version the slot-gate reads
+        id: dsh-version
+        shell: bash
+        run: echo "version=$(npm view @deepseek-ai/dsh version)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/dsh-global
+          key: dsh-runtime-${{ runner.os }}-node${{ matrix.node }}-${{ steps.dsh-version.outputs.version }}
+
       # The slot-gate assertions in `test/composer-pill.test.js` (A–D) read the
       # HOST's own client bundles, which a bare runner does not have: the
       # `@deepseek-ai/*` peers come from the DSH runtime, not the public registry.
       # Without this step all four skip, and `node --test` counts a skip as a
       # pass — the gate would be green on CI while verifying nothing. The test
       # resolves this tree via `npm root -g`, so a global install is what it needs.
+      #
+      # Guarded on the anchor the test actually reads, NOT on `cache-hit`: the
+      # cache is an optimisation, and a half-restored entry must not be able to
+      # skip this step while the four assertions quietly go back to passing as
+      # skips. If the anchor is missing, we install.
       - name: Install the DSH runtime the slot-gate reads
-        run: npm install -g @deepseek-ai/dsh || echo "dsh CLI not installable here; the slot-gate assertions will name the missing peer"
+        shell: bash
+        run: |
+          ANCHOR="$(npm root -g)/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-base"
+          if node -e "process.exit(require('node:fs').existsSync(process.argv[1]) ? 0 : 1)" "$ANCHOR"; then
+            echo "cached runtime already present: $ANCHOR"
+          else
+            npm install -g @deepseek-ai/dsh || echo "dsh CLI not installable here; the slot-gate assertions will name the missing peer"
+          fi
 
       # A bare checkout now carries the committed lib/ (docs/issues/19), but the
       # build still runs first: the tests that read lib/client.js assert against
@@ -85,7 +138,12 @@ jobs:
       # an honest module split does not. A percentage still cannot say whether a
       # specific regression is defended — docs/KNOWN_GAPS.md remains the real
       # register, and raising a threshold is a one-line review, not a redesign.
+      #
+      # One job measures it. The floors are global numbers and the instrumented
+      # run is a second full pass over the same 1270 assertions (~144 s each),
+      # so repeating it per platform measured the same percentage four times.
       - name: Coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '24'
         run: npm run test:coverage
 
   # Separate job: proves the artifact is reproducible from a clean install, and
@@ -107,6 +165,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.19'
+          cache: npm
 
       - run: npm install --no-audit --no-fund
 
