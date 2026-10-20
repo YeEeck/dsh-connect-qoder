@@ -37,7 +37,6 @@
     "host-range:update": "node scripts/update-host-range.mjs",
     "host-range:check": "node scripts/update-host-range.mjs --check",
     "verify": "npm run typecheck && npm run audit:any && npm run audit:explicit:any && npm run build && npm test && npm run verify:host && npm run verify:bundle",
-    "verify:deploy": "node scripts/check-deploy-drift.mjs",
     "audit:any": "node scripts/audit-implicit-any.mjs",
     "audit:explicit:any": "node scripts/audit-explicit-any.mjs",
     "verify:host": "node scripts/verify-host-bundle.mjs",

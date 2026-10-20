@@ -69,7 +69,7 @@
 | P2-3 | 债 | dispose 两条尾巴（在途刷新、路由未注销） | [index.js:738-754](../lib/index.js#L738-L754) | M | 需先确认宿主语义 |
 | P2-4 | 债 | 设置命名空间四套说法 | 见 §5 | S | P0-3① |
 | P2-5 | 纪律 | 新增失败分支不得静默（issue 16 门禁） | 见 §5 | S | — |
-| P3-1 | 交付 | 两份 0.2.0 内容不同，靠事后漂移检查发现 | `npm run verify:deploy` | S | — |
+| P3-1 | 交付 | 两份 0.2.0 内容不同，靠事后漂移检查发现 | 漂移检查已于 2026-10-20 删除（见 §6） | S | — |
 | P3-2 | 文档 | 零配置=Windows、基线数字、缺口未登记 | README / KNOWN_GAPS | S | — |
 | P3-3 | 功能 | 默认不策展（31 项含别名）、PAT 恒判 ok | 见 §6 | M | — |
 
@@ -419,7 +419,12 @@ card 正则推导已改为精确候选（`|| /qoder/i.test(...)` 那种子串匹
   `pnpm-lock.yaml` 里带 registry 的 `integrity: sha512-6kDkwQmU…`——也就是说
   **下一次 `pnpm install` / 市场更新会把内容静默还原成发布版**（版本号一样，看不出区别）。
   根治办法是在 app 关闭时把依赖改成 link：`dsh plugin add <本仓库路径> --profile desktop`
-  （web profile 就是这么装的，`verify:deploy` 认它是 `dev link`）。
+  （web profile 就是这么装的，是符号链接）。
+
+  **收尾（2026-10-20）**：`verify:deploy`（`scripts/check-deploy-drift.mjs` 及其测试）**已删除**，
+  理由是"开发只在 web 端跑"——web profile 是符号链接、永远与本仓库一致，desktop 副本的漂移
+  不影响开发质量，而这项检查从来不在 `npm run verify` 与 CI 里（不是任何门禁的一环）。
+  保留的只有一句可操作的事实：桌面端要跟上本仓库，跑 `dsh plugin add <本仓库路径> --profile desktop`。
 - **P3-2 文档**（S）：零配置 = Windows-only（凭据链只有 PowerShell + DPAPI，其它平台只剩 `QODER_PAT`）；
   README 里两处 503 是两件事；`KNOWN_GAPS:171-173` 的基线（branches 87.38）与实测（86.37）不符，
   安全垫被夸大约 43%；把凭据层的实测缺口登记进去；把账号封禁/条款风险写显眼。

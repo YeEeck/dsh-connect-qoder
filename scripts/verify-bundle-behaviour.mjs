@@ -379,7 +379,7 @@ for (let i = 0; i < Math.max(oldPrint.length, newPrint.length); i++) {
 /**
  * The off-peak gate is checked separately from the fingerprints: it is the one
  * line whose loss is silent (the card shows a discount the user is never
- * charged), and it is the needle `check-deploy-drift.mjs` looks for too.
+ * charged), so it is checked on its own instead of only as a fingerprint.
  */
 const gateOld = OLD.includes('promo.active !== true')
 const gateNew = NEW.includes('promo.active !== true')

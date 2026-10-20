@@ -111,7 +111,8 @@ CI 侧新增**独立** build job（`build` → `git diff --exit-code lib/client.
 | `desktop` profile 的副本 | **刻意未同步**，见下 |
 | 之后的清理 | 独立于 A/B/C，见下 |
 
-`npm run verify:deploy` 现在报 1 处漂移：`desktop` profile 的副本 `lib/client.js` 与 checkout 不同（版本同为 0.2.0，正是那个版本陷阱）。**没同步它是有意的**——它是本机唯一还在跑旧产物的地方，冒烟期间留作安全网。`web` 是 link，已自动加载新产物。冒烟通过后再决定：复制新产物过去，或把 `desktop` 也改成 link（后者能让这个 profile 永不漂移）。
+`npm run verify:deploy` 当时报 1 处漂移：`desktop` profile 的副本 `lib/client.js` 与 checkout 不同（版本同为 0.2.0，正是那个版本陷阱）。**没同步它是有意的**——它是本机唯一还在跑旧产物的地方，冒烟期间留作安全网。`web` 是 link，已自动加载新产物。冒烟通过后再决定：复制新产物过去，或把 `desktop` 也改成 link（后者能让这个 profile 永不漂移）。
+（2026-10-20：`verify:deploy` 这个检查本身已删除——"开发只在 web 端跑"，它从不在 `npm run verify` 与 CI 里。desktop 副本要跟上本仓库用 `dsh plugin add <本仓库路径> --profile desktop`。）
 
 之后（独立于 A/B/C）的清理：
 

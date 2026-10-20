@@ -356,11 +356,10 @@ dsh plugin --profile web add <本仓库路径>
 ## 测试
 
 ```sh
-npm run verify          # 下面五条串起来，全过才算过
+npm run verify          # typecheck + 两道 any 审计 + build + test + 产物核验，全过才算过
 npm run typecheck       # tsc -p tsconfig.json，源码全量类型检查（0 error）
 npm test                # node --test "test/*.test.js"
 npm run test:coverage   # 同上 + 覆盖率门槛（行 68 / 分支 82 / 函数 66，跌破即失败）
-npm run verify:deploy   # 比对已部署副本与本仓库，报告漂移
 npm run build           # 从 src/ 重建 lib/（宿主 bundle + 卡片产物）
 ```
 
@@ -436,12 +435,12 @@ React、不碰 DOM、不发 `fetch`。这不是顺手为之，是为了让测它
 `@deepseek-ai/*`，由宿主在运行时提供，不在公共 registry 上，npm 自动安装 peer 会在装到
 devDependencies 之前就失败。
 
-`verify:deploy` 存在的理由和上面那些测试一样：**一台机器上可以同时装着好几个版本的本插件**。
-`link:` 安装是指向本仓库的符号链接、永远最新；市场安装是**复制**，停在安装那一刻，
-而且两边 `package.json` 的 `version` 一样——任何按版本判断新旧的升级路径都会认为「已是最新」。
-该脚本比对 `lib/**` 的内容哈希、文件清单，以及三个由真实缺陷换来的标记
-（错峰 `active` 门、账号状态模块、账号路由），并把「版本号相同但内容不同」单独标出来。
-`test/deploy-drift.test.js` 用假目录树钉住这套判定。
+**本机同时装着两份本插件时，它们不会自己同步**：`web` profile 是指向本仓库的符号链接（永远
+最新），`desktop` profile 是**复制**（停在 `dsh plugin add` 那一刻），而两边 `package.json` 的
+`version` 一样——任何按版本判断新旧的升级路径都会认为「已是最新」。桌面端要跟上本仓库，跑一次
+`dsh plugin add <本仓库路径> --profile desktop` 即可（只在 web 端开发时不必管它）。
+（曾经有个 `npm run verify:deploy` 专门比对这两份副本，2026-10-20 按「开发只在 web 端跑」的
+决定删掉了——它不在 `npm run verify` 与 CI 里，从来不是开发质量的一道门禁。）
 
 CI 在 Node 22.19 / 24 × Ubuntu / Windows 上跑（`.github/workflows/test.yml`）——
 Windows 不是冗余：shim 绑定回环监听、目录缓存依赖 rename 覆盖、凭据读取要调
