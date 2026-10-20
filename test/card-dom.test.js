@@ -1069,3 +1069,80 @@ test('an unrecognised device state is named, never rendered as fine', async () =
   assert.ok(block !== null, 'an unknown state is still a state worth stating')
   assert.match(text(block), /状态未知/, 'an unknown state must say so')
 })
+
+// ---------------------------------------------------------------------------
+// The remedies offered when the DESKTOP sign-in cannot be read.
+//
+// This is the macOS / Linux case: the client IS installed and signed in, the
+// plugin just cannot read that platform's keychain, and the host says so —
+// "this plugin can only read the Qoder sign-in on Windows; darwin has no
+// supported keychain path yet". The old copy sent such a user to a PAT, which
+// is a second-best path that needs a token minted in a web console first. The
+// plugin's OWN browser sign-in is the one way in that holds on every platform,
+// desktop client or not, so the copy leads with it.
+//
+// Two directions, because the button is not always there: a host that reports
+// no `device` entry (an older build) renders no sign-in block at all, and a
+// pointer at a button that is not on the screen is the same lie in a new shape.
+// ---------------------------------------------------------------------------
+
+/** The host's own wording for "this platform has no readable keychain". */
+const PLATFORM_DETAIL =
+  'this plugin can only read the Qoder sign-in on Windows; darwin has no supported keychain path yet'
+
+/**
+ * The region list with the desktop sign-in unreadable, with or without the
+ * plugin's own credential reported beside it.
+ *
+ * `device: undefined` is dropped by the JSON round-trip, which is exactly what
+ * an older host sends: no `device` key at all.
+ */
+const regionsNeedingApp = (device) => [
+  { ...REGIONS[0], state: 'needs-app', detail: PLATFORM_DETAIL, device },
+  { ...REGIONS[1] },
+]
+
+/** The account note that reports the unreadable desktop sign-in, or null. */
+const unreadableNote = (container) =>
+  [...container.querySelectorAll('.dsm-qoder-account-note-error')]
+    .map((n) => text(n))
+    .find((body) => body.includes(PLATFORM_DETAIL)) ?? null
+
+test('an unreadable desktop sign-in points at the browser sign-in first', async () => {
+  const { container } = await mount({
+    accountRegions: regionsNeedingApp({ state: 'none' }),
+  })
+
+  const note = unreadableNote(container)
+  assert.ok(note !== null, 'an unreadable sign-in must say so')
+  assert.match(note, /浏览器登录/, 'the browser sign-in must be named')
+  // It LEADS: a PAT first would send the user to mint a token for a path that
+  // is not the easiest one, and the browser sign-in is the only one that works
+  // on a machine whose desktop sign-in cannot be read at all.
+  assert.ok(
+    note.indexOf('浏览器登录') < note.indexOf('PAT'),
+    `the browser sign-in must lead the remedies, got: ${note}`,
+  )
+  // The PAT stays as the second way in — it is still the only one that needs
+  // no browser round-trip at all.
+  assert.match(note, /PAT/, 'the PAT fallback must stay available')
+  // And the button the copy points at is really on the card.
+  const block = deviceBlock(container)
+  assert.ok(block !== null, 'the sign-in block must be on the card')
+  assert.ok(deviceButtons(block).includes('浏览器登录'), 'the way in must be offered')
+})
+
+test('an older host gets the PAT-only wording, never a pointer to a missing button', async () => {
+  // The host that reports no `device` entry renders no sign-in block at all
+  // (the block's own test above). Pointing at "Sign in with a browser" there
+  // would be a dangling pointer, so that host keeps the remedy it does have.
+  const { container } = await mount({
+    accountRegions: regionsNeedingApp(undefined),
+  })
+
+  const note = unreadableNote(container)
+  assert.ok(note !== null, 'an unreadable sign-in must say so')
+  assert.match(note, /PAT/, 'the PAT fallback must be offered')
+  assert.doesNotMatch(note, /浏览器登录/, 'no pointer to a button that is not there')
+  assert.equal(deviceBlock(container), null, 'this host has no sign-in block at all')
+})

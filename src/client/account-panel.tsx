@@ -16,7 +16,7 @@
  */
 import * as react from "react"
 import type { CardAccountEntry, TranslateFn, CheckboxEvent } from "./card-model.ts"
-import { withDate, describeThrown } from "./card-model.ts"
+import { withDate, describeThrown, deviceLoginNotice } from "./card-model.ts"
 import { QODER_ACCOUNT_PATH, QODER_ACCOUNT_RELOAD_PATH, QODER_ACCOUNT_CONFIRM_PATH } from "./paths.ts"
 import { getJson, postJson } from "./http.ts"
 import { writeSettingsField } from "./settings-write.ts"
@@ -214,6 +214,14 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 	// helper does not accept, and a missing label must read as an empty string
 	// rather than the word "undefined".
 	const activeEdition = activeEntry?.regionName ?? activeRegionId ?? "";
+	// Whether the card can actually OFFER the browser sign-in. The device
+	// block renders nothing unless the host reported a `device` entry AND that
+	// entry carries a state the card knows how to name — so a pointer at
+	// "Sign in with a browser" has to be gated by the very same question the
+	// block asks. Otherwise the copy points at a button that is not on the
+	// screen: an older host that reports no `device` at all, or a newer one
+	// whose state this build cannot read.
+	const deviceSignInOffered = activeRegionId !== undefined && deviceLoginNotice(activeEntry?.device) !== undefined;
 	const activeOffered = activeEntry !== undefined && activeRegionId !== undefined && enabledRegions[activeRegionId] !== false;
 	const activeResult = activeEntry !== undefined && activeRegionId !== undefined ? confirmState[activeRegionId] : undefined;
 	// Bound once and tested once: `activeHasIdentity` is a boolean, so it cannot
@@ -382,7 +390,16 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 								) : null}
 								{activeEntry.state === "needs-app" ? (
 									<p className="dsm-qoder-account-note dsm-qoder-account-note-error">
-										{t("account.readFail", { detail: activeEntry.detail ?? "" })}
+										{t(
+											// Where the browser sign-in is on the card, it leads: it is
+											// the one way in that works on EVERY platform, desktop
+											// client or not — which is the whole point of the plugin
+											// holding a credential of its own. A host that reports
+											// no `device` entry has no such button, and gets the
+											// PAT-only wording instead of a dangling pointer.
+											deviceSignInOffered ? "account.readFailDevice" : "account.readFail",
+											{ detail: activeEntry.detail ?? "" },
+										)}
 									</p>
 								) : null}
 								{activeEntry.state === "expired" ? (

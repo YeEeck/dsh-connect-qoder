@@ -23,9 +23,22 @@ export const zhAccount = {
 	// previous wording ("make sure a signed-in Qoder client is on this machine")
 	// is exactly wrong for a macOS or Linux user: they HAVE one, the plugin just
 	// cannot read that platform's keychain yet, and the host now says so in
-	// `detail`. A PAT is the one fallback that works everywhere, so it is what
-	// this points at; "re-read" only helps if the cause really was a stale read.
+	// `detail`.
+	//
+	// TWO variants, because the remedies are not the same on every host. Where
+	// the host reports the plugin's OWN credential (`device`), the browser
+	// sign-in leads: it is the one way in that holds on every platform, desktop
+	// client or not, which is the whole point of the plugin having a credential
+	// of its own. The environment PAT is second (it needs a token minted in a
+	// web console first) and "re-read" third (it only helps when the cause
+	// really was a stale read).
+	//
+	// Where the host reports NO `device` entry (an older build), the browser
+	// sign-in is not on the card at all — pointing at a button that does not
+	// exist would be the dangling-pointer version of the same lie. That host
+	// keeps the PAT-only wording.
 	"account.readFail": "本地登录信息读不到：{detail}。可改用环境变量 PAT（QODERCN_PAT / QODER_PAT），或点「重新读取登录状态」",
+	"account.readFailDevice": "本地登录信息读不到：{detail}。可点「浏览器登录」用插件自有登录（不装桌面端也能用），或改用环境变量 PAT（QODERCN_PAT / QODER_PAT），或点「重新读取登录状态」",
 	"account.download": "没装 Qoder 客户端？到「下载」区安装 {edition}，装好后登录",
 	"account.downloadLink": "下载 {edition}",
 	"account.error": "读取账号状态失败",
@@ -85,8 +98,12 @@ export const enAccount = {
 	"account.expiresAt": "Valid until {date}",
 	"account.unsigned": "No Qoder client for this edition is installed on this machine",
 	"account.expiredHint": "Sign-in has lapsed — sign in again in the Qoder client ({app}), then click Re-read sign-in",
-	// See the zh note above: the remedy has to be valid everywhere, and a PAT is.
+	// See the zh note above: the remedy has to be valid everywhere, and the
+	// browser sign-in is the one that is valid on a machine with no readable
+	// desktop sign-in at all. It is offered only where the host reported the
+	// plugin's own credential, because that is where the button is.
 	"account.readFail": "Could not read the local credential: {detail}. Either set an environment PAT (QODERCN_PAT / QODER_PAT), or press Re-read sign-in",
+	"account.readFailDevice": "Could not read the local credential: {detail}. Either press Sign in with a browser (the plugin's own sign-in, which works without the desktop client), or set an environment PAT (QODERCN_PAT / QODER_PAT), or press Re-read sign-in",
 	"account.download": "The Qoder client is missing — install {edition} from the Download section, then sign in",
 	"account.downloadLink": "Download {edition}",
 	"account.confirmExpired": "Confirmed: sign-in expired — sign in again in the Qoder client, then re-read",
