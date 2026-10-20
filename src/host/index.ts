@@ -357,6 +357,68 @@ function deviceSourceFor(region: Region, ctx: HostContext): DeviceCredentialSour
 }
 
 /**
+ * One region's credential cache: the desktop store, the plugin's own
+ * credential and the PAT, in that order, with the PAT exchange and its
+ * throttle.
+ *
+ * Built here rather than inside {@link RegionRuntime} so the confirm route can
+ * resolve a credential for a region that has no runtime yet, through the SAME
+ * cache that runtime would use — one store read, one PAT exchange and one
+ * invalidation per region, instead of two caches over one credential.
+ */
+function credentialCacheFor(
+  region: Region,
+  ctx: HostContext,
+  device: DeviceCredentialSource,
+): CredentialCache {
+  return new CredentialCache({
+    // The ASYNC reader: a miss here spawns the DPAPI child, which measured
+    // ~0.5 s of event-loop freeze per region on the success path and up to the
+    // 30 s timeout on failure. `CredentialCache.resolve` is already async, so
+    // awaiting costs nothing and removes the freeze from DSH's request paths
+    // entirely. The synchronous `loadCredential` remains for the startup
+    // sweep and the probes, which are not on anyone's latency budget.
+    loadApp: () => loadCredentialAsync(region, appDataRootFor()),
+    // Third source, and deliberately THIRD: the desktop application keeps its
+    // own login fresh while it runs, so wherever it answers it is the newest
+    // credential on the machine and must win. The vault is only reached when
+    // the app has nothing to say — which is the machine that has no app
+    // installed, or whose app is not signed in. That ordering is also why
+    // this is safe to ship: on every machine that works today the answer is
+    // unchanged, and the vault is not even read.
+    loadDevice: () => device.load(),
+    loadEnv: () => loadEnvCredential(region),
+    exchangePat: async (credential) => exchangePat(region, credential.token),
+    // The PAT exchange throttle is persisted so a platform-stated rate-limit
+    // window survives a DSH restart. Without it the first poll after a restart
+    // would re-POST an exchange the platform had just locked out, extending a
+    // transient lockout toward permanent — the runaway the gate exists to
+    // break. A parked dead-credential refusal is deliberately NOT written; a
+    // restart is that refusal's release valve, and only a deliberate re-read
+    // inside a live process clears it. See `throttle-store.ts`.
+    throttleStore: new FileThrottleStore({
+      path: qoderCatalogPath(`.qoder-exchange-throttle.${region.id}.json`),
+      logger: ctx.logger,
+    }),
+  })
+}
+
+/**
+ * The per-region sources a runtime starts from.
+ *
+ * One map, built once per plugin instance, so the runtime and the routes that
+ * read the same region are guaranteed to be talking about the same two
+ * objects — a second device source over one file would mean two failure
+ * windows and two stale caches of the same credential.
+ */
+interface RegionSources {
+  /** The plugin's own credential for this region — the file the browser sign-in writes. */
+  device: DeviceCredentialSource
+  /** The credential cache: the desktop store, then the plugin's own credential, then the PAT. */
+  credentials: CredentialCache
+}
+
+/**
  * Owns one region: its credential, catalog, shim, adapter, and registration.
  */
 class RegionRuntime {
@@ -418,7 +480,12 @@ class RegionRuntime {
    */
   invalidate?: () => void
 
-  constructor(region: Region, ctx: HostContext, device?: DeviceCredentialSource) {
+  constructor(
+    region: Region,
+    ctx: HostContext,
+    device?: DeviceCredentialSource,
+    credentials?: CredentialCache,
+  ) {
     this.region = region
     this.ctx = ctx
     this.logger = ctx.logger
@@ -440,37 +507,13 @@ class RegionRuntime {
      * The credential cache, holding the app-store reader, the PAT fallback and
      * the exchange. It carries the "a re-sign-in needs no restart" rule, which
      * lives in its own module so it can be tested without a Cordis context.
+     *
+     * Handed in for the same reason the device source is: the confirm route
+     * resolves a credential for a region that has not started, and it must go
+     * through the SAME cache — one PAT exchange and one invalidation per
+     * region, not two caches over one credential.
      */
-    this.credentials = new CredentialCache({
-      // The ASYNC reader: a miss here spawns the DPAPI child, which measured
-      // ~0.5 s of event-loop freeze per region on the success path and up to the
-      // 30 s timeout on failure. `CredentialCache.resolve` is already async, so
-      // awaiting costs nothing and removes the freeze from DSH's request paths
-      // entirely. The synchronous `loadCredential` remains for the startup
-      // sweep and the probes, which are not on anyone's latency budget.
-      loadApp: () => loadCredentialAsync(this.region, appDataRootFor()),
-      // Third source, and deliberately THIRD: the desktop application keeps its
-      // own login fresh while it runs, so wherever it answers it is the newest
-      // credential on the machine and must win. The vault is only reached when
-      // the app has nothing to say — which is the machine that has no app
-      // installed, or whose app is not signed in. That ordering is also why
-      // this is safe to ship: on every machine that works today the answer is
-      // unchanged, and the vault is not even read.
-      loadDevice: () => this.device.load(),
-      loadEnv: () => loadEnvCredential(this.region),
-      exchangePat: async (credential) => exchangePat(this.region, credential.token),
-      // The PAT exchange throttle is persisted so a platform-stated rate-limit
-      // window survives a DSH restart. Without it the first poll after a restart
-      // would re-POST an exchange the platform had just locked out, extending a
-      // transient lockout toward permanent — the runaway the gate exists to
-      // break. A parked dead-credential refusal is deliberately NOT written; a
-      // restart is that refusal's release valve, and only a deliberate re-read
-      // inside a live process clears it. See `throttle-store.ts`.
-      throttleStore: new FileThrottleStore({
-        path: qoderCatalogPath(`.qoder-exchange-throttle.${region.id}.json`),
-        logger: ctx.logger,
-      }),
-    })
+    this.credentials = credentials ?? credentialCacheFor(region, ctx, this.device)
     this.refreshTimer = undefined
     /** Last usage reading and when it was taken; see {@link RegionRuntime.readUsage}. */
     this.usage = undefined
@@ -772,11 +815,11 @@ async function startRegion(
   region: Region,
   ctx: HostContext,
   enabledIdsFor: (regionId: string) => string[],
-  device: DeviceCredentialSource | undefined,
+  sources: RegionSources | undefined,
   requestCounter: RequestCounter,
   tokenCounter: TokenCounter,
 ): Promise<{ region: Region; runtime: RegionRuntime; shim: ShimHandle } | undefined> {
-  const runtime = new RegionRuntime(region, ctx, device)
+  const runtime = new RegionRuntime(region, ctx, sources?.device, sources?.credentials)
 
   // A region is published only when it can actually answer; the three refusals
   // and their log levels are decided in lib/region-gate.js so they can be
@@ -963,17 +1006,24 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
   }
 
   /**
-   * Every region's device credential, built once and shared with its runtime.
+   * Every region's sources, built once and shared with its runtime.
    *
    * Built here rather than inside {@link RegionRuntime} because the sign-in
    * routes must be able to WRITE a credential for a region that has not started
    * — which is the whole point: a machine with no desktop app has no started
    * region, and signing in is what creates one. A source owned by the runtime
    * would not exist yet at the moment the credential arrives.
+   *
+   * The credential cache lives in the same map for the same reason: the confirm
+   * route resolves a credential for a region that has no runtime, and it has to
+   * go through the SAME cache — one store read, one PAT exchange and one
+   * invalidation per region, instead of two caches over one credential.
    */
-  const deviceSources = new Map<string, DeviceCredentialSource>(
-    REGIONS.map((region) => [region.id, deviceSourceFor(region, ctx)]),
-  )
+  const regionSources = new Map<string, RegionSources>()
+  for (const region of REGIONS) {
+    const device = deviceSourceFor(region, ctx)
+    regionSources.set(region.id, { device, credentials: credentialCacheFor(region, ctx, device) })
+  }
   /**
    * The sign-in conversation, driven by the card.
    *
@@ -982,7 +1032,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
    */
   const loginFlow = new DeviceLoginFlow({
     onAuthorized: async (regionId, payload, machineID) => {
-      const source = deviceSources.get(regionId)
+      const source = regionSources.get(regionId)?.device
       // Cannot happen through a route (they validate the region first), but the
       // flow's contract is to report a storage failure rather than assume one.
       if (source === undefined) throw new Error(`no device credential source for region ${regionId}`)
@@ -1001,8 +1051,8 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
   const deviceDeps: DeviceLoginDeps = {
     regions: REGIONS,
     flow: loginFlow,
-    forget: async (regionId) => (await deviceSources.get(regionId)?.forget()) ?? false,
-    status: (regionId) => deviceSources.get(regionId)?.status ?? { state: 'none' },
+    forget: async (regionId) => (await regionSources.get(regionId)?.device.forget()) ?? false,
+    status: (regionId) => regionSources.get(regionId)?.device.status ?? { state: 'none' },
     logger: ctx.logger,
   }
 
@@ -1034,7 +1084,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
   // 多日历史的进程内缓存（usage 路由轮询时复用），与计数器同生命周期。
   const globalTokenHistoryCache = createTokenHistoryCache()
   for (const region of REGIONS) {
-    const entry = await startRegion(region, ctx, enabledIdsFor, deviceSources.get(region.id), globalRequestCounter, globalTokenCounter)
+    const entry = await startRegion(region, ctx, enabledIdsFor, regionSources.get(region.id), globalRequestCounter, globalTokenCounter)
     if (entry !== undefined) started.push(entry)
   }
   if (started.length === 0) {
@@ -1458,7 +1508,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
       pendingStarts.add(region.id)
       let entry: Awaited<ReturnType<typeof startRegion>>
       try {
-        entry = await startRegion(region, ctx, enabledIdsFor, deviceSources.get(region.id), globalRequestCounter, globalTokenCounter)
+        entry = await startRegion(region, ctx, enabledIdsFor, regionSources.get(region.id), globalRequestCounter, globalTokenCounter)
       } finally {
         // Cleared on both paths, so a failed start does not wedge the region
         // out of every future reload — that would trade a leak for a region
@@ -1568,6 +1618,17 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
         handler: (req: IncomingMessage, res: ServerResponse) => confirmHandler(req, res, {
           regions: REGIONS,
           started,
+          // A region with no running runtime still has a credential to check.
+          // The shared per-region cache resolves it the way a runtime does —
+          // the desktop store, then the plugin's own sign-in, then the PAT — so
+          // a user who only ever signed in through the browser is not told
+          // "there is nothing to confirm" for a region that has not started.
+          //
+          // Before this was wired, this branch read the desktop store and the
+          // PAT only: the plugin's own credential was invisible to it, and a
+          // browser-only user pressing "confirm" got "there is no sign-in" for
+          // an edition that had one.
+          readCredential: async (region) => regionSources.get(region.id)?.credentials.resolve(),
         }),
       },
     ], routeReleases, ctx.logger)

@@ -1020,6 +1020,31 @@ test('confirm: a region with no running runtime is read through the ASYNC unwrap
   assert.equal(lastJson({ bodies }).confirmed, true, 'a region can come back without a restart')
 })
 
+test('confirm: a stopped region signed in by the plugin itself is confirmed', async () => {
+  // The plugin's own sign-in (browser sign-in) is a first-class credential, so
+  // a region that never produced a runtime can still be checked. The host
+  // wires the reader to the shared per-region cache, which resolves
+  // desktop -> plugin-owned -> PAT; the route must not insist on the desktop
+  // credential being the one that answers.
+  const req = fakeReq({ method: 'POST', url: '/plugins/dsh-connect-qoder/account/confirm' })
+  const { res, out, bodies } = fakeRes(req)
+  const pending = confirmHandler(req, res, {
+    regions: REGIONS,
+    started: [],
+    readCredential: async () => ({ token: 'device-token', source: 'device' }),
+    confirmUserInfo: async (region, credential) => {
+      assert.equal(credential.source, 'device', 'the plugin-owned credential is the one being checked')
+      return { name: 'alice', email: 'alice@example.com' }
+    },
+  })
+  post(req, { region: 'qoder-cn' })
+  await pending
+  assert.equal(out.status, 200)
+  const body = lastJson({ bodies })
+  assert.equal(body.available, true)
+  assert.equal(body.confirmed, true)
+})
+
 test('confirm: a throwing read for a stopped region is "unavailable" with the reason', async () => {
   // The same posture as a runtime's own resolve failure, and the reason the
   // 200-with-detail answer exists at all: a bare catch-all 400 would tell the

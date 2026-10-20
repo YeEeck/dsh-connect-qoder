@@ -725,9 +725,18 @@ export interface ConfirmDeps {
    */
   confirmUserInfo?: (region: Region, credential: LoadedCredential) => Promise<{ name: unknown; email: unknown }>
   /**
-   * Read a credential for a region that has no running runtime. Defaults to the
-   * real `loadCredentialAsync`; injectable so that branch is assertable without
-   * decrypting anything on the machine running the suite.
+   * Read a credential for a region that has no running runtime.
+   *
+   * The host wires the shared per-region cache here, so this branch resolves
+   * the credential the way a runtime does — the desktop store, then the
+   * plugin's own sign-in, then the PAT — instead of reading the desktop store
+   * and the PAT only. Without the plugin's own source in that chain, a user
+   * who only ever signed in through the browser was told "there is no sign-in
+   * to confirm" for an edition that had one.
+   *
+   * Defaults to the real `loadCredentialAsync` (the desktop store alone), and
+   * is injectable so that branch is assertable without decrypting anything on
+   * the machine running the suite.
    */
   readCredential?: (region: Region) => Promise<LoadedCredential | undefined>
 }

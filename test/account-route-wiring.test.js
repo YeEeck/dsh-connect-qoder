@@ -208,6 +208,26 @@ test('the two account routes hand their handlers the SAME payload builder', () =
   )
 })
 
+test('the confirm route resolves through the shared per-region cache', () => {
+  // "确认登录" asks the upstream who the sign-in belongs to. The credential it
+  // checks must come from the SAME three sources a runtime uses — desktop
+  // store, then the plugin's own browser sign-in, then the PAT — and the
+  // fallback for a region that has not started must not stop at the desktop
+  // store: on a machine with no desktop client that is exactly the branch that
+  // reported "no sign-in" for an edition that had one.
+  const handler = handlerFor('QODER_ACCOUNT_CONFIRM_PATH')
+  assert.match(
+    handler,
+    /confirmHandler\(/,
+    'POST /account/confirm must delegate to src/host/handlers.ts confirmHandler',
+  )
+  assert.match(
+    handler,
+    /readCredential: async \(region\) => regionSources\.get\(region\.id\)\?\.credentials\.resolve\(\)/,
+    'the confirm route must resolve through the shared per-region credential cache',
+  )
+})
+
 test('a zero-region activation keeps the card routes registered', () => {
   // "No region started" is the NORMAL state of a fresh install — nobody has
   // signed in yet. It used to `return` from `apply` right where the routes are

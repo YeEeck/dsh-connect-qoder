@@ -53,19 +53,35 @@ test('every region resolves through the one source the routes also use', () => {
   const at = source.indexOf('this.device = device ??')
   assert.notStrictEqual(at, -1, 'the runtime must take the shared source, not build its own')
   assert.match(source.slice(at, at + 120), /this\.device = device \?\? deviceSourceFor\(region, ctx\)/)
-  assert.match(source, /const deviceSources = new Map<string, DeviceCredentialSource>/)
+  assert.match(source, /const regionSources = new Map<string, RegionSources>\(\)/)
   assert.match(source, /onAuthorized: async \(regionId, payload, machineID\) => \{/)
   assert.match(source, /await source\.remember\(payload, machineID\)/)
-  assert.match(source, /forget: async \(regionId\) => \(await deviceSources\.get\(regionId\)\?\.forget\(\)\) \?\? false/)
+  assert.match(source, /forget: async \(regionId\) => \(await regionSources\.get\(regionId\)\?\.device\.forget\(\)\) \?\? false/)
 })
 
 test('the vault is handed to the cache as the third source', () => {
-  const cache = blockAfter(source, 'this.credentials = new CredentialCache(')
-  assert.match(cache, /loadDevice: \(\) => this\.device\.load\(\)/)
+  // The cache is built by one factory, so the runtime and the confirm route
+  // share ONE cache per region instead of two over one credential.
+  const cache = blockAfter(source, 'function credentialCacheFor(')
+  assert.match(cache, /loadDevice: \(\) => device\.load\(\)/)
   // Same constructor call as the other two sources: a second, unused cache
   // would satisfy a looser check while resolving nothing.
   assert.match(cache, /loadApp:/)
   assert.match(cache, /loadEnv:/)
+  assert.match(cache, /new CredentialCache\(/)
+})
+
+test('the runtime takes the shared cache, and the confirm route resolves through it', () => {
+  // The confirm route answers for a region that has no runtime, so it needs a
+  // credential from the same three sources the runtime would use — desktop
+  // app, then the plugin's own, then the PAT. A route that read only the
+  // desktop store would report "no sign-in" on exactly the machines that
+  // signed in through the browser.
+  assert.match(source, /this\.credentials = credentials \?\? credentialCacheFor\(region, ctx, this\.device\)/)
+  assert.match(
+    source,
+    /readCredential: async \(region\) => regionSources\.get\(region\.id\)\?\.credentials\.resolve\(\)/,
+  )
 })
 
 test('a rejection clears the device source too, so signing in again is not ignored', () => {

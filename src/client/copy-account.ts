@@ -17,6 +17,17 @@ export const zhAccount = {
 	"account.state.expired": "已过期",
 	"account.state.needs-app": "读不到",
 	"account.state.signed-out": "未登录",
+	// The plugin's OWN credential is the sign-in in use. The host reports the
+	// desktop application's sign-in and the plugin's credential side by side
+	// and deliberately does not merge them (two credentials, two lifetimes) —
+	// but the card answers one question, "am I signed in for this edition?",
+	// and on a machine whose desktop sign-in cannot be read the answer is yes
+	// whenever the plugin's own credential is there. Without this state the
+	// macOS user who signed in through the browser read "读不到" next to
+	// "插件已登录" and had to guess which of the two was true.
+	"account.state.device": "已登录",
+	"account.deviceActive": "当前用的是插件自有登录（浏览器登录）——不需要桌面端客户端。",
+	"account.deviceFrom": "来自插件自有登录",
 	"account.envPat": "来自环境变量 PAT",
 	"account.appFrom": "来自 {app}",
 	"account.expiresAt": "有效期至 {date}",
@@ -99,6 +110,11 @@ export const enAccount = {
 	"account.state.expired": "Expired",
 	"account.state.needs-app": "Unreadable",
 	"account.state.signed-out": "Not signed in",
+	// See the zh note above: the plugin's own credential IS the sign-in in use
+	// whenever the desktop application's cannot be read.
+	"account.state.device": "Signed in",
+	"account.deviceActive": "You are signed in with the plugin's own sign-in (browser sign-in) — the desktop client is not needed.",
+	"account.deviceFrom": "from the plugin's own sign-in",
 	"account.envPat": "from an environment PAT",
 	"account.appFrom": "from {app}",
 	"account.expiresAt": "Valid until {date}",

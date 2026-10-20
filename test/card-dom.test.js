@@ -1232,3 +1232,114 @@ test('an unreadable desktop sign-in claims no credential source', async () => {
     'an unreadable sign-in must not claim a credential source',
   )
 })
+
+// ---------------------------------------------------------------------------
+// Which credential is actually SERVING a region.
+//
+// The host reports the desktop application's sign-in in `state` and the
+// plugin's own credential in `device`, and it deliberately does not merge them
+// (see `account-payload.ts`): two credentials, two lifetimes. But the card
+// answers ONE question — "am I signed in for this edition?" — and on a machine
+// that cannot read the desktop app's keychain the answer is yes whenever the
+// plugin's own credential is there. Before this, the same card could say
+// "Unreadable" in the state label and "Signed in to the plugin" two lines
+// below, which is the contradiction this section exists to end.
+// ---------------------------------------------------------------------------
+
+/** The state the region strip shows for one region, as its tab tooltip. */
+const regionStateLabel = (container, index = 0) =>
+  container.querySelectorAll('.dsm-qoder-region-tab')[index]?.getAttribute('title') ?? ''
+
+/** The tone of one region's status dot. */
+const regionDotClass = (container, index = 0) =>
+  container.querySelectorAll('.dsm-qoder-region-dot')[index]?.getAttribute('class') ?? ''
+
+test('a region served by the plugin\'s own credential reads as signed in', async () => {
+  // The macOS / Linux shape: the desktop application's sign-in cannot be read,
+  // the plugin's own credential is there and is what actually serves the
+  // region. The card must say so, and must not keep the "unreadable" complaint
+  // next to a green dot.
+  const { container } = await mount({
+    accountRegions: [
+      {
+        ...REGIONS[0],
+        state: 'needs-app',
+        source: undefined,
+        detail: PLATFORM_DETAIL,
+        device: { state: 'ok' },
+      },
+      { ...REGIONS[1] },
+    ],
+  })
+
+  const label = regionStateLabel(container, 0)
+  assert.match(label, /已登录/, `the region must read as signed in, got: ${label}`)
+  assert.doesNotMatch(label, /读不到/, 'a region that is signed in must not read as unreadable')
+  assert.match(regionDotClass(container, 0), /dsm-qoder-region-dot-ok/, 'the dot must be the good one')
+
+  // The complaint about the DESKTOP credential is not shown any more: it is
+  // not this region's sign-in, and the remedy it offered (sign in with a
+  // browser) is the state the region is already in.
+  assert.equal(unreadableNote(container), null, 'the desktop complaint must not contradict the sign-in')
+
+  // And the card says WHICH credential is serving, instead of the source the
+  // host read (here: none — the desktop store was unreadable).
+  const meta = container.querySelector('.dsm-qoder-account-meta')
+  assert.ok(meta !== null, 'the serving credential must be named')
+  assert.match(text(meta), /来自插件自有登录/, 'the plugin\'s own credential must be named as the one in use')
+  assert.doesNotMatch(text(meta), /来自 Qoder/, 'the desktop application is not serving this region')
+  assert.doesNotMatch(text(meta), /来自环境变量 PAT/, 'neither is the environment PAT')
+
+  const notes = [...container.querySelectorAll('.dsm-qoder-account-note')].map((n) => text(n))
+  assert.ok(
+    notes.some((body) => body.includes('当前用的是插件自有登录')),
+    'the card must say that the desktop client is not needed',
+  )
+})
+
+test('the confirmation is offered for a region signed in only by the plugin', async () => {
+  // The host reports the plugin's own credential BESIDE the region's sign-in,
+  // not as its `source` — so a browser-only user had no way to check that
+  // sign-in at all. The button must be there for exactly that case.
+  const { container } = await mount({
+    accountRegions: [
+      { ...REGIONS[0], state: 'signed-out', source: undefined, appName: undefined, device: { state: 'ok' } },
+      { ...REGIONS[1] },
+    ],
+  })
+
+  const buttons = [...container.querySelectorAll('button')].map((n) => text(n))
+  assert.ok(
+    buttons.includes('在线校验登录'),
+    'a region with a plugin credential must be able to check that credential',
+  )
+})
+
+test('a desktop sign-in that is really serving keeps the card to itself', async () => {
+  // The other direction: when the desktop application's credential is the one
+  // in use, the plugin's own credential must not take over the card. It is a
+  // separate account (the device block still shows it), but the account row
+  // describes the credential serving THIS region.
+  const { container } = await mount({
+    accountRegions: [
+      { ...REGIONS[0], state: 'ok', source: 'app', appName: 'Qoder', device: { state: 'ok' } },
+      { ...REGIONS[1] },
+    ],
+  })
+
+  const label = regionStateLabel(container, 0)
+  assert.match(label, /正常/, `the desktop state must stand, got: ${label}`)
+  assert.doesNotMatch(label, /已登录/, 'the plugin\'s own credential must not take over the state label')
+
+  const meta = container.querySelector('.dsm-qoder-account-meta')
+  assert.ok(meta !== null, 'the serving credential must be named')
+  assert.match(text(meta), /来自 Qoder/, 'the desktop application must be named as the one in use')
+  assert.doesNotMatch(text(meta), /来自插件自有登录/, 'only the credential in use is named')
+
+  const notes = [...container.querySelectorAll('.dsm-qoder-account-note')].map((n) => text(n))
+  assert.equal(
+    notes.some((body) => body.includes('当前用的是插件自有登录')),
+    false,
+    'the desktop credential is serving, so the card must not claim otherwise',
+  )
+})

@@ -125,6 +125,14 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 	const autoReloaded = react.useRef(false);
 	react.useEffect(() => {
 		if (status !== "ready" || autoReloaded.current) return;
+		// A re-read can only find what the DESKTOP stores hold, so the question
+		// it asks is about the desktop sign-in and nothing else. A region whose
+		// desktop sign-in is not `ok` may have gained one since the plugin
+		// started (the user signed in to the app while it was running), and that
+		// is what this pick-up is for. The plugin's own credential is not
+		// affected by a re-read — it changes nothing here — so it must not
+		// stand in for the desktop's answer and suppress the pick-up: a Windows
+		// user who signs in to the desktop app afterwards would never see it.
 		if (!accounts.some((entry) => entry.state !== "ok")) return;
 		autoReloaded.current = true;
 		void reload();
@@ -206,8 +214,37 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 	// red or amber, and "not installed" stays neutral — the absence of
 	// an app is not a fault of this machine. The same tones drive the
 	// status dots on the region strip.
-	const dotClassOf = (state: string | undefined) => state === "ok" ? " dsm-qoder-region-dot-ok" : state === "expired" ? " dsm-qoder-region-dot-expired" : state === "needs-app" ? " dsm-qoder-region-dot-needs" : "";
-	const stateLabelOf = (entry: CardAccountEntry) => t(`account.state.${entry.state}`);
+	const dotClassOf = (state: string | undefined) => state === "ok" || state === "device" ? " dsm-qoder-region-dot-ok" : state === "expired" ? " dsm-qoder-region-dot-expired" : state === "needs-app" ? " dsm-qoder-region-dot-needs" : "";
+	// Whether the DESKTOP application's credential is the one serving this
+	// region.
+	//
+	// The host reports the desktop application's sign-in in `state` and the
+	// plugin's own credential in `device`, and it deliberately does not merge
+	// them (see `account-payload.ts`): two credentials, two lifetimes. The
+	// host resolves them in one order — the desktop store, then the plugin's
+	// own, then the PAT (see `credential-cache.ts`) — and the card has to
+	// answer about the credential that order actually picks.
+	//
+	// `source` is the host's own statement of where the sign-in it read came
+	// from: `app` for the desktop store, `env-pat` for the environment
+	// variable. A host that names no source at all is believed when the state
+	// says a sign-in WAS read, which is the older-host shape.
+	const desktopInUse = (entry: CardAccountEntry) =>
+		entry.state === "ok" && (entry.source === "app" || entry.source === undefined);
+	// The EFFECTIVE sign-in state of one region.
+	//
+	// The card has to answer ONE question — "am I signed in for this edition?" —
+	// and on a machine that cannot read the desktop app's keychain the answer
+	// is yes whenever the plugin's own credential is there. Without this, a
+	// macOS user who signed in through the browser read "Unreadable" in the
+	// state label and "Signed in to the plugin" two lines below.
+	//
+	// The desktop's own credential keeps the region when it is the one in use
+	// (a region that reads the desktop store says `ok` and keeps saying so);
+	// otherwise the plugin's own credential serves the region and says so.
+	const effectiveStateOf = (entry: CardAccountEntry): string =>
+		entry.device?.state === "ok" && !desktopInUse(entry) ? "device" : String(entry.state);
+	const stateLabelOf = (entry: CardAccountEntry) => t(`account.state.${effectiveStateOf(entry)}`);
 	// The strip shows every known region; the detail below it shows
 	// only the one the strip has selected. A selection that no longer
 	// exists should not happen — the host always answers with both
@@ -233,6 +270,13 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 	// screen: an older host that reports no `device` at all, or a newer one
 	// whose state this build cannot read.
 	const deviceSignInOffered = activeRegionId !== undefined && deviceLoginNotice(activeEntry?.device) !== undefined;
+	// The state the CARD acts on for this region — the desktop application's
+	// own state, unless the plugin's own credential is the sign-in in use.
+	const activeEffectiveState = activeEntry !== undefined ? effectiveStateOf(activeEntry) : "";
+	// Whether the plugin's own credential is the sign-in in use here. It is a
+	// different question from `deviceSignInOffered` (can the card offer a
+	// browser sign-in?), and it is what makes this region signed in.
+	const deviceActive = activeEntry?.device?.state === "ok";
 	const activeOffered = activeEntry !== undefined && activeRegionId !== undefined && enabledRegions[activeRegionId] !== false;
 	const activeResult = activeEntry !== undefined && activeRegionId !== undefined ? confirmState[activeRegionId] : undefined;
 	// Bound once and tested once: `activeHasIdentity` is a boolean, so it cannot
@@ -245,19 +289,31 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 	// app name, and the sign-in's expiry date — now for one region.
 	const activeMeta = [];
 	if (activeEntry !== undefined) {
-		if (activeEntry.source === "env-pat") activeMeta.push(t("account.envPat"));
-		// The app chip names where the credential CAME FROM, so it may only
-		// appear when a credential was actually read. In the `needs-app` state
-		// the host reports the app DIRECTORY's name — it found Qoder
-		// installed but could not read a sign-in out of it — so "from Qoder"
-		// there claims a sign-in this machine does not have. A host that names
-		// no source at all is believed only when the state says the sign-in
-		// WAS read.
-		const appCredentialRead =
-			activeEntry.source === "app" ||
-			(activeEntry.source === undefined && (activeEntry.state === "ok" || activeEntry.state === "expired"));
-		if (appCredentialRead && typeof activeEntry.appName === "string" && activeEntry.appName !== "") {
-			activeMeta.push(t("account.appFrom", { app: activeEntry.appName }));
+		// ONE source chip, for the credential that is actually serving this
+		// region. Two of them at once ("from Qoder · from the plugin's own
+		// sign-in") reads as a contradiction, and the second one is the truth
+		// whenever the first names a credential the host could read but the
+		// runtime does not use: the plugin's own credential is resolved BEFORE
+		// the PAT and after a lapsed desktop one, so it is the credential
+		// serving the region in exactly the cases where the desktop's own
+		// state is not "ok".
+		if (activeEffectiveState === "device") {
+			activeMeta.push(t("account.deviceFrom"));
+		} else {
+			if (activeEntry.source === "env-pat") activeMeta.push(t("account.envPat"));
+			// The app chip names where the credential CAME FROM, so it may only
+			// appear when a credential was actually read. In the `needs-app` state
+			// the host reports the app DIRECTORY's name — it found Qoder
+			// installed but could not read a sign-in out of it — so "from Qoder"
+			// there claims a sign-in this machine does not have. A host that names
+			// no source at all is believed only when the state says the sign-in
+			// WAS read.
+			const appCredentialRead =
+				activeEntry.source === "app" ||
+				(activeEntry.source === undefined && (activeEntry.state === "ok" || activeEntry.state === "expired"));
+			if (appCredentialRead && typeof activeEntry.appName === "string" && activeEntry.appName !== "") {
+				activeMeta.push(t("account.appFrom", { app: activeEntry.appName }));
+			}
 		}
 		if (activeHasIdentity && Number(activeIdentity.expiresAt) > 0) activeMeta.push(withDate(t("account.expiresAt"), activeIdentity.expiresAt));
 	}
@@ -305,14 +361,22 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 									title={`${entry.regionName ?? regionId} · ${stateLabelOf(entry)}`}
 									onClick={() => {
 										if (typeof onRegionChange === "function") onRegionChange(regionId);
-										// Choosing a not-ok region is also the
-										// moment the user has just signed in
-										// over there: run the pick-up for it,
+										// Choosing a region whose DESKTOP sign-in is not
+										// ok is also the moment the user may have just
+										// signed in over there: run the pick-up for it,
 										// dots included.
+										//
+										// The question is the DESKTOP one, not "is this region
+										// signed in somehow": a re-read reads the desktop store,
+										// so it can only ever change the desktop answer. A region
+										// signed in through the plugin's own credential still
+										// deserves the pick-up — the user may have signed in to
+										// the desktop app as well, and that is the credential the
+										// card would report afterwards.
 										if (entry.state !== "ok") void reload();
 									}}
 								>
-								<span aria-hidden="true" className={`dsm-qoder-region-dot${dotClassOf(entry.state)}`} />
+								<span aria-hidden="true" className={`dsm-qoder-region-dot${dotClassOf(effectiveStateOf(entry))}`} />
 								<span className="dsm-qoder-region-name">{entry.regionName ?? regionId}</span>
 							</button>
 							{/* No switch here any more. The pill used to carry
@@ -395,7 +459,15 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 										<span>{t("account.offer")}</span>
 									</label>
 								) : null}
-								{activeEntry.source !== undefined && activeRegionId !== undefined ? (
+								{/* The confirmation is offered for every region that HAS a
+							    sign-in to check — including one that only has the
+							    plugin's own credential, which the host reports
+							    beside the desktop sign-in rather than as the
+							    region's `source`. Gating on `source` alone left
+							    every browser-only user without the button, even
+							    though the host can check that sign-in perfectly
+							    well. */}
+							{(activeEntry.source !== undefined || deviceActive) && activeRegionId !== undefined ? (
 										<button
 											type="button"
 											className="dsm-qoder-button"
@@ -411,7 +483,17 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 								{!activeOffered ? (
 									<p className="dsm-qoder-account-note">{t("account.offerOff")}</p>
 								) : null}
-								{activeEntry.state === "needs-app" ? (
+								{/* The plugin's own credential is the sign-in in use: the
+							    desktop application's state is a separate account
+							    (two credentials, two lifetimes), and on a machine
+							    that cannot read the desktop store it must not
+							    be reported as "unreadable" next to "signed in
+							    to the plugin". One sentence says which credential
+							    is serving this region. */}
+							{activeEffectiveState === "device" ? (
+								<p className="dsm-qoder-account-note">{t("account.deviceActive")}</p>
+							) : null}
+							{activeEffectiveState === "needs-app" ? (
 									<p className="dsm-qoder-account-note dsm-qoder-account-note-error">
 										{t(
 											// Where the browser sign-in is on the card, it leads: it is
@@ -425,7 +507,13 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 										)}
 									</p>
 								) : null}
-								{activeEntry.state === "expired" ? (
+								{/* The desktop application's own session, and only
+							    while it is the one this region is running on. When
+							    the plugin's own credential is in use, "open the
+							    client and sign in again" is advice about a path
+							    that is not this region's sign-in — the same class
+							    of dead-end advice this card already avoids. */}
+							{activeEffectiveState === "expired" ? (
 									<p className="dsm-qoder-account-note">
 										<span>
 											{t("account.expiredHint", {
@@ -451,7 +539,7 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 										</span>
 									</p>
 								) : null}
-								{activeEntry.state === "signed-out" ? (
+								{activeEffectiveState === "signed-out" ? (
 									<p className="dsm-qoder-account-note">
 										<span>{t("account.unsigned")}</span>
 										<br />

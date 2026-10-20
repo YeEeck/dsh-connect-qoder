@@ -54,6 +54,14 @@ Qoder 不是 OpenAI 兼容端点，所以需要三样东西：
 
 无论走哪一条，**都不写入应用的文件**：桌面端的凭据文件始终以只读方式打开。
 
+**卡片按"真正在服务这个版本的是谁"说话**（2026-10-20）：宿主把桌面端登录与插件自有登录**并列**
+上报（两条凭据两种寿命，不合并），但账号卡要回答的其实只有一个问题——"这个版本登录了吗"。
+所以当插件自有凭据在服务、而桌面端那条不在服务（过期、读不到、或只是环境变量 PAT 在服务）时，
+这个版本读作**"已登录"**，并配一句"当前用的是插件自有登录（浏览器登录）——不需要桌面端
+客户端"；此时那条"本地登录信息读不到"的红字不再出现——它描述的是桌面端，不是这个版本能不能用。
+只签浏览器登录的用户也因此第一次有了「在线校验登录」按钮可点（以前按钮只在 `source` 有值时
+出现，而插件自有登录在账号行里没有 `source`）。
+
 Qoder 把登录信息放在 Chromium OSCrypt 格式的凭据文件里（`v10` + nonce + 密文 + tag，AES-256-GCM）。
 新版（0.3.x）的凭据直接保存在 `<userData>/auth.v1.dat`，旧版（0.2.x 及更早）则放在
 VS Code 风格的 `state.vscdb` SQLite 数据库里。两种布局都支持，新版优先尝试。
@@ -291,7 +299,7 @@ dsh plugin --profile web add <本仓库路径>
 | `src/host/http-utils.ts` | 回环路由共用的 JSON / OpenAI 形状错误响应（`no-store`，卡片轮询读不到陈旧数据；无 peer 依赖） |
 | `src/host/domain.ts` | 各宿主模块标注时共用的领域词表（`Region` / `CatalogEntry` / `Promotion` / `CatalogOutcome` 等）。**只有类型、没有运行时值**，所以不进产物、不改变任何 bundle 字节；刻意不描述任何 peer 模块的形状——那些包由宿主运行时提供、此处只有 `declare module` 空壳，凭空造一个"看起来对"的接口比 `any` 更危险，因为它不会承认自己不知道（无 peer 依赖） |
 | `src/host/routes.ts` | 每条卡片路由共用的两道闸：方法检查（405 带 `Allow`、`HEAD` 交给 GET）与**同源**来源检查（403；比对 `Host` 头，POST 路由靠它挡住本机其它端口的网页），以及带 64 KiB 上限的 JSON body 读取器（无 peer 依赖） |
-| `src/host/handlers.ts` | 七条卡片路由的 handler，`(req, res, deps) => Promise<void>` 形态：方法/来源两道闸 + 业务判定 + 应答全在这（含签到 `claimTodayFor` 与「重读登录」的失败保护），`index.ts` 只保留 `webServer.register` 与 deps 装配（从 `index.ts` 抽出以便直测，无 peer 依赖） |
+| `src/host/handlers.ts` | 七条卡片路由的 handler，`(req, res, deps) => Promise<void>` 形态：方法/来源两道闸 + 业务判定 + 应答全在这（含签到 `claimTodayFor` 与「重读登录」的失败保护），`index.ts` 只保留 `webServer.register` 与 deps 装配（从 `index.ts` 抽出以便直测，无 peer 依赖）。「在线校验登录」的兜底路径经 `deps.readCredential` 取凭据，宿主把它接到**按 region 共享的凭据缓存**上，所以没有 runtime 的 region 也能校验插件自有登录（无 peer 依赖） |
 | `src/host/publish-regions.ts` | 把当前区域集发布给宿主（`registerAdapter` + `registerConfigurableProviders`）以及失败时的三层回滚：先释放旧的一对，新注册失败则释放半注册的 adapter 并把旧的一对装回去，装不回去则如实留空而不谎称已注册（从 `index.ts` 抽出以便直测，宿主两处注册接缝靠注入，无 peer 依赖） |
 | `src/host/route-mount.ts` | 一组路由的挂载判定：**要么全挂上、要么全撤下**。三个账号路由是一个功能，宿主若只收下 `/account` 而拒了 `/account/confirm`，旧写法会留下一个"能读状态、两个按钮却不动"的半截面板，且日志写着"account routes unavailable"——那句话是假的，比没有日志更坏，因为它让人不再往下查。组内任一注册被拒即回滚已拿到的 release 并如实报失败（无 peer 依赖） |
 | `src/host/dispose-order.ts` | fiber 注销时的**次序**（次序本身就是内容）：provider 注册先撤、路由先于 runtime 拆（否则 issue 13 那条泄漏）、`disposed` 必须在 `clearInterval` **之前**置位——否则一次还在途的 `refreshCatalog().then` 会把一个全新的 interval 装到已经没人管的 runtime 上，成为活过插件的僵尸凭据解析循环。此前这条只由注释担保（无 peer 依赖） |
@@ -314,7 +322,7 @@ dsh plugin --profile web add <本仓库路径>
 | `src/client/card-model.ts` | 卡片的**浏览器无关决策层**：视图模型类型词汇 + 纯规则（`offPeakState` / `rateAt` / `windowLabelOf` / `refreshNoticeKey` / 格式化 / `describeThrown`——卡片所有 catch 块给用户看的失败文案都过它）。无 React、无 DOM、无 `fetch`，因此 Node 测试可直接 import 真规则，而非镜像副本（这是向 sensenova `snapshot.ts` 对齐的那一刀；`describeThrown` 也从 `card.tsx` 挪进来，拆掉装配层与两个容器之间的循环 import） |
 | `src/client/http.ts` | 卡片**唯一的 `fetch` 收口**：`getJson` / `postJson`，模型名册读与两台容器（用量 / 账号）共六道宿主路由 fetch 都只通过这里（向 sensenova `http.ts` 看齐）；GET / POST 失败都先取宿主的 `error` 字段（如 loopback origin 检查的 `origin-not-trusted`），无才回落 `HTTP {status}`；宿主的 `writeError` 写的是 `{error:{message,type,code}}`，故对象形状也取它的 `message`（否则每道 `writeError` 拒绝都会退化成一句没有下文的 `HTTP 500`）；GET 200 但 body 解析失败按 `unparseable JSON body` 抛出而非当空数据，避免「假 undefined 失败」 |
 | `src/client/usage-panel.tsx` | 用量容器 `QoderUsagePanel`：自有额度读 + 每日签到领取两条 fetch，渲染 `RegionUsage` / `CheckinCard`（二者留在 `card.tsx` 作为无 hook 纯展示件） |
-| `src/client/account-panel.tsx` | 账号容器 `QoderAccountPanel`：区域条 + 选中区域登录卡，四道 fetch（读 / 重读 / 确认 / 开关写），开关写仍带完整 `enabledRegions` map |
+| `src/client/account-panel.tsx` | 账号容器 `QoderAccountPanel`：区域条 + 选中区域登录卡，四道 fetch（读 / 重读 / 确认 / 开关写），开关写仍带完整 `enabledRegions` map。**按"在服务的是谁"显示**：`effectiveStateOf()` 判出这个版本真正在服务的是桌面端还是插件自有凭据，只有后者在服务时才读作"已登录"、才给「在线校验登录」按钮（桌面端那条在服务时按钮同样在） |
 | `src/client/device-login-panel.tsx` | **插件自有登录**那一块（第三个凭据来源的卡片半边）：与账号行的 `state` **并列上报、绝不合并**——桌面端登录与插件令牌是两份凭据两种寿命。两层结构（外层无 hook 做门控，`device` 缺席 = 老宿主 → 什么都不渲染、绝不报「未登录」；内层持全部 hook）。`start` → `window.open` 授权页 + 保留可点回退链接 → 每 2s 轮询一次（链式而非 interval，慢响应只会推迟下一次而不会叠请求）；`authorized` 停并回读，`expired`/`idle`/`failed` 各给不同文案；卸载时若仍在等待就 best-effort `cancel`（宿主 5 分钟 TTL 是兜底）。**每个失败都说出是哪个失败**，`t`/`onChanged` 由 ref 持有并刻意排除在轮询 effect 依赖外（否则父组件每次渲染都会重启计时器） |
 | `src/client/card.tsx` | 卡片的装配层 `QoderPluginCard`（把 `QoderAccountPanel` / `QoderUsagePanel` 与模型列表拼起来，纯规则委托 `card-model.ts`、可编辑状态委托 `controller.ts`、名册读走 `http.ts`）+ 三个无 hook 纯展示件（`RegionUsage` / `CheckinCard` / `QuotaBlock`） |
 | `src/client/pill-model.ts` | 输入框用量胶囊的**浏览器无关决策层**：区域归属门控（`isQoderRegion` / `selectedRegionOf` / `candidateOf`）、主额度选择（`primaryQuotaOf`——套餐优先，CN 免费层 plan 为 0 回落资源包）、分级（`tierOfQuota`，阈值与卡片同源 `WARN_SHARE = 0.8`）、读数格式化（`remainingOf` / `formatCredits`）。无 React、无 DOM、无 `fetch`，Node 测试直接 import 真规则 |
