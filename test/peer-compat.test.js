@@ -1,5 +1,5 @@
 /**
- * The eight @deepseek-ai/dsh-* peer ranges must admit every host the plugin
+ * The seven @deepseek-ai/dsh-* peer ranges must admit every host the plugin
  * is expected to run against, and must still refuse the NEXT generation.
  *
  * WHY HERE AND LIKE THIS
@@ -11,7 +11,7 @@
  * Every @deepseek-ai/dsh-* peer that FAILS is collected and surfaces as the
  * `incompatible-version` management failure — the plugin row goes red and the
  * host refuses to touch it. Nothing in this repository noticed when the
- * desktop app moved to 0.2.0-rc.1: the eight ranges still said `<0.2`, and a
+ * desktop app moved to 0.2.0-rc.1: the seven ranges still said `<0.2`, and a
  * pre-release runtime is not a 0.1.x runtime.
  *
  * THIS FILE HAS NO semver DEPENDENCY, DELIBERATELY
@@ -141,7 +141,7 @@ function checkedPeers() {
 
 test('every @deepseek-ai/dsh-* peer admits the host versions we run against', () => {
   const peers = checkedPeers()
-  assert.equal(peers.length, 8, `expected eight host-checked peers, found ${peers.length}`)
+  assert.equal(peers.length, 7, `expected seven host-checked peers, found ${peers.length}`)
   for (const [name, range] of peers) {
     for (const { version, why } of ADMIT) {
       assert.ok(satisfies(version, range), `${name} "${range}" rejects ${version} (${why})`)
