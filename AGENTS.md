@@ -47,8 +47,14 @@ DSH 插件：把本机已登录的 **Qoder**（国内版 `qoder-cn` / 国际版 
    解密主密钥会在 `%TEMP%` 短暂明文落盘，清理逻辑有过
    **越界删空插件目录外文件**的 P0 事故——动凭据/临时目录代码前必读 `docs/issues/01`、`02`。
 3. **client 源码是逆向恢复的**：`src/client/` 由已发布的 `lib/client.js` 机械还原
-   （`docs/issues/17`），历史形态是手写 `(0, react_jsx_runtime.jsx)(…)` 调用而非 JSX 语法，
-   2026-10 起在向 `.tsx` 迁移。看到这种写法不要当成新代码风格继续扩散。
+   （`docs/issues/17`），当时的形态是手写 `(0, react_jsx_runtime.jsx)(…)` 调用而非 JSX 语法。
+   **那段历史已经收尾**：渲染层 6 个组件现在全是 `.tsx`（`card.tsx` / `account-panel.tsx` /
+   `composer-usage-pill.tsx` / `device-login-panel.tsx` / `usage-panel.tsx` /
+   `token-history-chart.tsx`），那种调用写法在源码里只剩 `src/client/react-shim.d.ts`
+   的注释还提着一句。剩下 13 个 `.ts` 不是"没迁完"，而是**结构上不能迁**：套件用裸
+   `node --test` 直接 import `src/**/*.ts`，Node 的剥类型加载器不认 `.tsx`
+   （实测 `ERR_UNKNOWN_FILE_EXTENSION`），所以凡是测试会直接 import 的模块必须留在 `.ts`。
+   别把规则层"顺手迁回" `.tsx`，也别把还原期的写法当新代码风格扩散。
 4. **宿主 ABI 只认 0.2 代**（0.5.0 起）：`installSection`/`settingsScope` 双探测与
    `asVolatile` 退化已删——宿主 0.2.0-rc.x 实测已无这两个面。peer 下限 `>=0.2.0-rc.0`
    是刻意的（宿主用 `includePrerelease` 判兼容，`>=0.2.0` 会把 rc 挡在门外）。

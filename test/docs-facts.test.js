@@ -25,6 +25,10 @@
  * docs/PLAN.md and docs/issues/**, docs/history/** are deliberately NOT under
  * guard: they are dated audit snapshots, kept as filed. A stale claim inside
  * a dated record is a fact about the past, not a lie about the present.
+ * AGENTS.md IS under guard, unlike those archives: it is not a record of what
+ * was decided, it is the operating manual the next agent follows, and a
+ * manual that still says "we are migrating to .tsx" after the migration ended
+ * sends the next reader to work that is already done.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -56,6 +60,10 @@ function sourceFiles(area) {
 /** Live files: the ones whose statements are promises about THIS checkout. */
 const LIVE_FILES = [
   'README.md',
+  // `AGENTS.md` is the first file the next agent reads, so a drift in it is
+  // the most expensive kind: it is the one nobody re-checks, because everybody
+  // assumes the agent guide is maintained.
+  'AGENTS.md',
   'package.json',
   'docs/KNOWN_GAPS.md',
   // `lib/` is a versioned build artifact, not a live source; the live host
