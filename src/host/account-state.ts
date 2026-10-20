@@ -40,9 +40,9 @@ import {
   loadCredential,
   loadCredentialAsync,
   loadEnvCredential,
-  describeUnwrapFailure as readUnwrapFailure,
   appDataRootFor,
 } from './credentials.ts'
+import { describeUnwrapFailure as readUnwrapFailure } from './oscrypt-unwrap.ts'
 import type { Region } from './domain.ts'
 
 /** The four states {@link readAccountState} can return. */

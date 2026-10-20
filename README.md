@@ -255,7 +255,8 @@ dsh plugin --profile web add <本仓库路径>
 
 | 文件 | 作用 |
 | --- | --- |
-| `src/host/credentials.ts` | 从 Qoder 应用读取并解密登录凭据（密钥缓存与 `Local State` 绑定、失败窗口 60 s、只读缓存的变体、**不阻塞的异步解包**） |
+| `src/host/credentials.ts` | 从 Qoder 应用**读取**登录凭据的存储半边：探测候选应用目录、以只读方式打开 `state.vscdb`、解码各行（2026-10-20 从中拆出 OSCrypt 链，链在下一行） |
+| `src/host/oscrypt-unwrap.ts` | OSCrypt 链：PowerShell/DPAPI 解包主密钥、密钥缓存与 `Local State` 绑定、失败窗口 60 s、清零与启动清扫（**唯一会把密文写到进程外、唯一 spawn 子进程、唯一删东西**的一半；两个解包入口都接受注入的 spawner，因此链内环节可无 PowerShell 测） |
 | `src/host/upstream.ts` | 上游层的**门面**（26 行）：逐名 re-export `src/host/upstream/` 下的 11 个叶模块，让 20 个下游 importer 一行不动（2026-10-17 拆分，`docs/issues/22`） |
 | `src/host/upstream/crypto.ts` | RSA 公钥、置换字母表与 `Encode=1` 请求体编码（`CUSTOM_ALPHABET` / `encodeBody`）；协议事实原文注释在此文件头 |
 | `src/host/upstream/client-constants.ts` | `COSY_VERSION` / `CLIENT_TYPE` / `MACHINE_TYPE` / `DATA_POLICY` / `LOGIN_VERSION` / `MACHINE_OS` |
@@ -488,6 +489,15 @@ PowerShell，这些在别的平台上行为不同。
   `credentialKind`（`desktop` / `device` / `env`）随账号面板与 status 路由上报，
   卡片不再猜。这个文件钉住三档命名、缓存解析前后的取值，以及「宿主还没解析出凭据时
   那个键不出现」（出现了就成了另一种撒谎）。
+- `test/oscrypt-unwrap.test.js` —— OSCrypt 链（`src/host/oscrypt-unwrap.ts`）曾经
+  **只有一台装了 Qoder 的 Windows 机器能测**：解包要真 PowerShell、真 DPAPI、真登录态，
+  于是「临时目录建好 → 标记写好 → 交接文件读回 → 失败路径」这一段在覆盖率报告里长期
+  是空的。两个解包入口现在都接受注入的 spawner，测试用假 spawner 写出与真解释器同形的
+  交接文件，于是这些环节在任何机器上都能跑。这个文件钉住：子进程拿到的 key 就是调用方
+  拿到的 key、成功与**每一条失败路径**都不留临时目录（明文主密钥不能活过这一次调用）、
+  子进程永远看不到用户的 PAT、解释器是绝对路径的系统 PowerShell、非 Windows 主机
+  拿到的是「为什么读不了」而不是一句「没登录」，以及清零会覆盖字节、且拒绝清零不是
+  普通文件的目标（越界那条红线）。
 - `test/errors-classify.test.js` —— 105 与 10605 的优先级决定了「提示用户重新登录」
   还是「排队等待」，两者弄反的代价完全不同。
 - `test/settings-save.test.js` —— DSH 0.2 代上 `set()` 会静默成功而不落盘；

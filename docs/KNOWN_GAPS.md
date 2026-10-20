@@ -445,7 +445,9 @@ token_type` 6 个，访问令牌在 `device_token` 而不是 `token`，而且**�
 而卡片在失败时会说"登录流程坏了/续期被拒：<原因>"而不是"你没登录"（红线 1）；设备登录这条
 路径本身**只在 Windows 上真机跑过**，macOS / Linux 的实机验证仍属下面第 4 项。
 
-**位置**：`src/host/credentials.ts`（OS keystore 封装、`runUnwrap` 平台守卫）、
+**位置**：`src/host/oscrypt-unwrap.ts`（OS keystore 封装、`runUnwrap` 平台守卫；2026-10-20
+从 `src/host/credentials.ts` 拆出——这条链是唯一会把密文写到进程外、唯一 spawn 子进程、
+唯一删东西的一半）、
 `src/client/copy-account.ts`（`account.readFail` 文案）、`src/host/account-state.ts`（`appDataRoot` 注入）、
 `src/host/upstream/client-constants.ts`（`MACHINE_OS` darwin 回落）
 

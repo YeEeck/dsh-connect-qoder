@@ -26,10 +26,9 @@ import {
   REGIONS,
   loadCredentialAsync,
   loadEnvCredential,
-  sweepStaleOscryptDirs,
-  setCredentialDiagnosticSink,
   appDataRootFor,
 } from './credentials.ts'
+import { sweepStaleOscryptDirs, setCredentialDiagnosticSink } from './oscrypt-unwrap.ts'
 import { buildAccountPayload } from './account-payload.ts'
 import { CredentialCache } from './credential-cache.ts'
 import type { CredentialKind } from './credential-kind.ts'

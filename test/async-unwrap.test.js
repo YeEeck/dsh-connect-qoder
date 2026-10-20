@@ -306,7 +306,13 @@ test('both paths share one implementation, and differ only in the child spawn', 
   // on states reachable without a real PowerShell. What must not be possible is
   // for one path to grow its own copy of the temp-directory, zeroing or
   // failure-recording logic — that is how the two would drift, silently.
-  const source = readFileSync(new URL('../src/host/credentials.ts', import.meta.url), 'utf8')
+  //
+  // The source moved to `src/host/oscrypt-unwrap.ts` when the OSCrypt chain
+  // was split out of `credentials.ts`; this gate follows it there, and the
+  // assertions below now also pin the SEAM: both entries take the spawner as
+  // an argument, so the code between "temp dir created" and "key read back"
+  // can be exercised without a PowerShell child.
+  const source = readFileSync(new URL('../src/host/oscrypt-unwrap.ts', import.meta.url), 'utf8')
   assert.equal(
     (source.match(/function runUnwrap\(/g) ?? []).length,
     1,
@@ -320,17 +326,49 @@ test('both paths share one implementation, and differ only in the child spawn', 
   // the test is actually about — is still pinned exactly.
   assert.match(
     source,
-    /export function oscryptKeyFor\([^)]*\)[^{]*\{[\s\S]*?return runUnwrap\(appDir, options, spawnUnwrapSync\)/,
+    /export function oscryptKeyFor\([^)]*\)[^{]*\{[\s\S]*?return runUnwrap\(appDir, options, spawn\)/,
     'the sync entry must delegate to the shared body',
   )
   assert.match(
     source,
-    /export async function oscryptKeyForAsync\([^)]*\)[^{]*\{[\s\S]*?return runUnwrap\(appDir, options, spawnUnwrapAsync\)/,
+    /export async function oscryptKeyForAsync\([^)]*\)[^{]*\{[\s\S]*?return runUnwrap\(appDir, options, spawn\)/,
     'the async entry must delegate to the SAME body',
+  )
+  // The two entries differ ONLY in the spawner they fall back to: the sync one
+  // blocks, the async one does not. A future edit that gave either entry its
+  // own spawner default would break the equivalence this file exists to keep.
+  assert.match(
+    source,
+    /export function oscryptKeyFor\([^)]*spawn: UnwrapSpawn = spawnUnwrapSync[^)]*\)/,
+    'the sync entry must default to the blocking spawner',
+  )
+  assert.match(
+    source,
+    /export async function oscryptKeyForAsync\([^)]*spawn: UnwrapSpawn = spawnUnwrapAsync[^)]*\)/,
+    'the async entry must default to the non-blocking spawner',
   )
   // `execFileSync` must not survive anywhere on the async path.
   assert.match(source, /function spawnUnwrapAsync/)
   assert.match(source, /execFile\(powershell, args, options/)
+})
+
+test('the OSCrypt chain does not import the store half back', () => {
+  // The split is only worth anything if it is a split: `oscrypt-unwrap.ts` is
+  // the half that can write a secret outside the process, and it must not
+  // depend on the half that opens the user's sign-in store. A cycle here
+  // would also mean the two files could never be read on their own.
+  const chain = readFileSync(new URL('../src/host/oscrypt-unwrap.ts', import.meta.url), 'utf8')
+  assert.doesNotMatch(
+    chain,
+    /from '\.\/credentials\.ts'/,
+    'the OSCrypt chain must not import the store half',
+  )
+  const store = readFileSync(new URL('../src/host/credentials.ts', import.meta.url), 'utf8')
+  assert.doesNotMatch(
+    store,
+    /from '\.\/oscrypt-unwrap\.ts'\s*;\s*\n\s*import[^;]*from '\.\/oscrypt-unwrap\.ts'/,
+    'the store half must import the chain exactly once',
+  )
 })
 
 test('the hand-off file is removed on both paths, and never survives a failure', async () => {
