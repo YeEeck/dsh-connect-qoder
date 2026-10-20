@@ -1,47 +1,12 @@
 /**
  * What one catalog refresh does with its answer.
  *
- * WHY THIS IS A MODULE
+ * Pure decision logic extracted from `RegionRuntime.doRefreshCatalog`
+ * (lib/index.js), which a test checkout cannot import (Cordis peer deps).
  *
- * `RegionRuntime.doRefreshCatalog` (lib/index.js) is the code this file exists
- * to test, and it cannot be imported: lib/index.js pulls in the Cordis peer
- * dependencies, which a test checkout does not install. It was extracted for
- * the same reason and with the same method as `lib/credential-cache.js` and
- * `lib/catalog-entry.js` — the decision is pure, so it belongs somewhere the
- * suite can reach, while the surrounding runtime keeps only the I/O.
- *
- * THE BUG THIS KEEPS FROM COMING BACK
- *
- * The original was three lines:
- *
- * ```js
- * const entries = raw.map(normalizeEntry)
- * if (entries.length > 0) {          // <-- the freeze (issue 04)
- *   this.catalog.replace(entries)
- *   this.invalidate?.()
- * }
- * ```
- *
- * That guard merged two answers that must not be merged. Upstream returning
- * zero models is a *result* — the account was narrowed, or the models were
- * retired — and it has to reach the disk, because an empty model group is how
- * DSH hides a provider and how the card tells the user there is nothing. But
- * with the guard in place, an empty result and a thrown fetch were the same
- * silent no-op: the last good roster stayed in place forever, the card and the
- * picker kept offering models the account no longer has, and pressing
- * "刷新计费" could not possibly change anything, because the only thing the
- * code path could do was nothing.
- *
- * So the rule this module states is: **an answer is committed even when it is
- * empty; only a failure keeps the previous catalog.** A failure also records
- * why, and records it per-reason — because "the plugin is out of date" and
- * "the network hiccuped" both keep the old rows, and the card must not tell a
- * user to update the plugin when the truth is to try again in a minute.
- *
- * Committed is not the same as persisted: the store swallows disk-write
- * failures by design, so a committed answer whose write was swallowed is
- * reported as a `persist` failure — the rows on screen are the newest answer,
- * but they will not survive a restart, and that has to be visible.
+ * The rule: an answer is committed even when EMPTY — only a failure keeps the
+ * previous catalog, and each failure names its own reason. Committed is not
+ * persisted: a swallowed disk write is reported as a `persist` failure.
  *
  * @module dsh-connect-qoder/catalog-refresh
  */

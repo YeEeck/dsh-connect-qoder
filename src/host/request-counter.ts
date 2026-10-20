@@ -1,33 +1,13 @@
 /**
- * 本地请求计数器 — 本客户端经本插件发往上游的每日对话轮计数。
+ * The local daily count of conversation turns this client sends upstream.
  *
- * 背景与边界（为什么只能本地自计）：
- *
- * 上游的 `UsageSnapshot`（见 `upstream/fetch-usage.ts`）只含 Credits 口径的额度
- * （套餐 / 资源包 / 专属包），**从不**返回「今日已发 N 次 / 上限 N 次」。命中
- * 每日限流时上游只报「用完了」（`daily_limit_exceeded`），不给剩余。所以每日
- * 请求计数**只能本地自计**——和魔搭社区兄弟插件「今日本地调用 N 次」是同一类
- * 本地口径：只统计本客户端经本插件的调用（桌面端与 Web 端各记各的），直连上游
- * 的其它客户端不计入，也不画「N / 上限」比例条（那等于发明上游没公布的口径）。
- *
- * 落盘契约（踩红线 1 / 凭据清理那套纪律）：
- *
- * - 一个 JSON 文件、按 region + 本地日期（Asia/Shanghai 日历日）命名，落在
- *   `$DSH_HOME/.qoder-request-count.<region>.<YYYY-MM-DD>.json`。沿用
- *   `throttle-store.ts` 的「写临时文件再 rename 覆盖」原子套路，崩溃中途不留半截
- *   JSON（Windows 上 rename 覆盖是 MoveFileEx，已测可用）。
- * - 计数发生在每次对话轮（`chatCompletions` 调 `runChat` 之前）——重试是同一轮
- *   内部的事，计数只算一发，不重复计。
- * - **零点翻页**：每次读/写都重新算本地日期 key，落到不同文件，旧文件不再被写
- *   但仍按 GC 策略清理（见 `gc`）。不跨日累加。
- * - **越界防护**：`path` 由 `qoderCatalogPath` 注入，永远落在 `$DSH_HOME` 内；
- *   文件名里的 region 与日期都经过 `sanitizeComponent` 白名单校验，任何带路径
- *   分隔符 / 非预期字符的输入都被拒为 `null`（不计数、不写盘），绝不拼出一个
- *   指向插件目录外的路径（issue 01 越界删空目录外文件的同款事故在此堵住）。
- * - **永不抛**：读不到 / 写失败一律降级为「计数不可用」（`count === null`），
- *   不阻塞对话、不给用户假的成功读数。写失败的临时文件残留由 `clearStale`
- *   在 GC 时回收，覆盖失败不裸抛。
- *
+ * Upstream never publishes "sent today / limit", so the count is local only:
+ * this client's calls through this plugin, desktop and web counted apart. One
+ * JSON file per region and local date (Asia/Shanghai) under `$DSH_HOME`,
+ * written atomically; the date key is recomputed on every read/write, so a day
+ * rollover starts a new file instead of accumulating. Never throws: a failed
+ * read or write degrades to `count === null`; the path is injected and the name
+ * components whitelist-checked, so it stays inside `$DSH_HOME` (docs/issues/01-sweep-junction-zeroing.md).
  * @module dsh-connect-qoder/request-counter
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'

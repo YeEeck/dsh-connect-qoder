@@ -34,30 +34,9 @@ import { regionEnabledFor } from './preferences.ts'
 import type { Preferences } from './preferences.ts'
 
 /**
- * Build the account panel's answer for every region.
- *
- * Each record is one region's sign-in state PLUS `enabled` — whether that
- * region's provider is offered to DSH right now — and the response also carries
- * the whole `enabledRegions` map, because the panel's per-region switch posts a
- * complete map back on every flip. Both are resolved live so a save through the
- * settings pipeline shows up at the next render without a restart.
- *
- * `force` is what distinguishes the two callers: the GET reads with
- * `cachedOnly` (no unwrap — see issue 07; without it every panel render would
- * run a PowerShell child and stall the host on exactly the machines this panel
- * exists to explain), while "重读登录" reads for real. The SHAPE is identical
- * either way, which is why both share this function: a narrower reload body
- * once made the card follow every re-read with a second GET.
- *
- * @param options.regions - the region descriptors to report on.
- * @param options.settings - the live preferences snapshot.
- * @param options.force - read the store for real instead of from the key cache.
- * @param options.readAccountState - injected for tests; defaults to the async
- *   read this module imports.
- * @param options.appDataRoot - injected for tests; defaults to the resolved
- *   per-platform application-data root.
- * @param options.regionEnabled - injected for tests; defaults to the shared
- *   opt-out predicate.
+ * Build the account panel's answer for all regions: one record per region
+ * (sign-in state plus `enabled`) and the whole `enabledRegions` map, which the
+ * per-region switch posts back complete; both are read live, `force` reads for real.
  * @returns a promise of `{ regions, enabledRegions }`.
  */
 export interface BuildAccountPayloadOptions {

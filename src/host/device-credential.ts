@@ -2,19 +2,13 @@
  * The plugin's own credential source: a token this plugin obtained by device
  * login, kept in a vault it owns, renewed with a refresh token it holds.
  *
- * Two other sources already exist — the desktop application's login (read out
- * of its store, machine-bound, and never renewable by us) and a PAT the user
- * exported from the web console and put in the environment (portable, but
- * manual). This is the third: zero-configuration AND portable, which is the one
- * combination neither of the others offers. The evidence that the service
- * actually honours such a token, and that it drives this plugin's existing
- * signed request path unchanged, is in
- * `docs/issues/21-device-login-credential-source.md`.
+ * The third source, and the only one that is both zero-configuration and
+ * portable: the desktop login is machine-bound, a PAT is manual. Evidence:
+ * docs/issues/21-device-login-credential-source.md
  *
- * The module is a class rather than a function for one reason: it has to
- * remember two things between calls — the last outcome, which the panel renders
- * as a sentence, and the fact that a renewal was just refused, which keeps a
- * doomed refresh from being re-attempted on every single request.
+ * A class because it must remember two things between calls: the last outcome
+ * (the panel renders it) and that a renewal was just refused, which keeps a
+ * doomed refresh from being retried on every request.
  */
 import type { LoadedCredential } from './credentials.ts'
 import type { CredentialVault, VaultRecord } from './credential-vault.ts'

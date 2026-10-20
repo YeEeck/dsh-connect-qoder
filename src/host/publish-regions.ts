@@ -1,31 +1,14 @@
 /**
  * Publishing a region set to the host, and rolling it back when that fails.
+ * A reload republishes the whole region set; if the new registration fails
+ * halfway the previous pair has already been released, so the plugin would
+ * silently lose the regions it was serving (docs/issues/16-silent-failure-policy.md).
  *
+ * The decision core is pure with respect to the host: given what is published,
+ * what was published before, and how each attempt failed, it computes the
+ * surviving state and the release order; the two host calls are injected, so
+ * a test can fail each independently (docs/issues/11-coverage-denominator.md).
  * @module dsh-connect-qoder/publish-regions
- *
- * WHY THIS EXISTS
- *
- * This is the one piece of provider wiring that was still only textually
- * guarded. `publishRegions` used to live inline in `activate()`, where it
- * closed over eleven mutable bindings, so no test could execute it — the
- * rollback path was covered by a regex that checked nothing but its presence
- * (test/account-route-wiring.test.js).
- *
- * The rollback is the part that matters. A reload republishes the whole region
- * set; if the new registration fails halfway, the previous pair has already
- * been released, and the naive outcome is a plugin that has silently lost the
- * regions it was serving — with no adapter, no settings rows, and no error
- * anywhere the user can see. That is the exact shape of this plugin's incident
- * history (docs/issues/16: no new silent-failure branches).
- *
- * WHAT IS DECISION AND WHAT IS EFFECT
- *
- * Everything that decides *which* registration survives a failure is here, and
- * it is pure with respect to the host: given "what we are publishing", "what
- * was published before", and "how each registration attempt failed", it works
- * out the resulting state and the order releases must happen in. The two host
- * calls are injected, so a test can make each one fail independently and assert
- * the surviving state without a live host.
  */
 
 /**

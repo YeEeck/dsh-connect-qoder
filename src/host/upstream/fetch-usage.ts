@@ -1,15 +1,14 @@
 /**
- * fetch-usage — 自 src/host/upstream.ts 原文搬迁
+ * fetch-usage — the account's usage and campaign snapshot.
  *
- * 拆分依据 docs/issues/22-upstream-split.md；本文件代码逐字来自拆分前的
- * upstream.ts（见 git 历史里拆分前的那一版），只做 import/export 整理与
- * 文件头标注。协议事实的原文注释在 crypto.ts 头部。
+ * Moved verbatim from `src/host/upstream.ts` when the protocol was split
+ * (docs/issues/22-upstream-split.md); only imports and exports were tidied. The
+ * protocol facts' original notes live at the head of `upstream/crypto.ts`.
  *
- * 唯一一处有意改逻辑：`fetchUsage` 里 campaigns 读失败原本被静默吞掉
- * （整改 #4，违 AGENTS.md 红线 1）。现在失败不再被吞，而是记进返回快照的
- * `campaignsError` 字段，由卡片渲染出来——配额数字照旧不受影响（campaigns
- * 本就是附属信息），但"促销行和签到卡都消失"不再与"今天确实没有活动"
- * 无法区分。见 docs/issues/22-upstream-split.md 的整改清单 #4。
+ * One deliberate behaviour change: `fetchUsage` used to swallow a failed
+ * campaigns read (AGENTS.md red line 1); the failure now lands in the snapshot's
+ * `campaignsError` field and the card renders it, so a vanished promo row is
+ * distinguishable from a day with no campaign.
  */
 
 import { openApiHeaders } from './headers.ts'

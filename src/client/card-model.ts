@@ -563,34 +563,23 @@ export function rateAt(model: CardModelRow, now: Date): number | undefined {
 /**
  * The one refresh verdict this card should show, from the host's report.
  *
- * A pure function of `value` so the decision can be tested against the shipped
- * bundle (see test/protocol-shape-card.test.js) rather than only by reading JSX.
+ * The host sends `{ refreshedAt, refreshFailures }`; five outcomes, kept apart
+ * on purpose:
  *
- * The host sends `{ refreshedAt, refreshFailures }`. Four outcomes, kept apart
- * on purpose — collapsing them is the bug this replaces:
- *
- * - **no failure** → `null`: the rows shown are the last upstream answer, and
- *   the "已更新（time）" stamp is honest.
+ * - **no failure** → `null`: the rows are the last upstream answer, and the
+ *   "已更新（time）" stamp is honest.
  * - **a transient failure** (`fetch` / `credential` / `no-credential`) → the
- *   stamp still shows, marked stale, because the rows on screen are real, just
- *   old. The user's next move is to retry.
- * - **`daily-limit`** → upstream refused the model list because the account's
- *   daily allowance is spent. The rows are as real as a transient failure's, but
- *   "retry" is the one thing that cannot help, so it does not reuse the stale
- *   wording: it names the allowance and its reset (docs/issues/24).
- * - **`persist`** → the rows on screen are the newest answer, but the disk
- *   write was swallowed, so they will not survive a restart. Nothing is wrong
- *   with the data being shown — only with its durability — so this gets its
- *   own wording instead of a misleading "stale" or a confident "updated".
+ *   stamp still shows, marked stale: the rows on screen are real, just old.
+ * - **`daily-limit`** → the rows are just as real, but retrying cannot help, so
+ *   it names the allowance and its reset instead of reusing the stale wording
+ *   (docs/issues/24).
+ * - **`persist`** → the rows are the newest answer but the disk write was
+ *   swallowed, so only their durability is wrong; it gets its own wording.
  * - **`protocol-shape-changed`** → the envelope moved and the plugin is out of
- *   date. This is the case that used to be indistinguishable from a queue: the
- *   user was told to re-sign, or waited out a retry ladder that could not
- *   possibly help. Neither appears here — the copy points at a plugin update.
+ *   date; the copy points at a plugin update, never at a re-sign.
  *
- * The protocol verdict wins over a transient one in the same payload, since it
- * is the one that cannot resolve on its own; `persist` outranks a transient
- * one because it names a different, actionable condition; and `daily-limit`
- * outranks a transient one because it is the one failure retrying cannot fix.
+ * The protocol verdict wins over a transient one (it cannot resolve on its own);
+ * `persist` and `daily-limit` each outrank a transient one.
  */
 export function refreshNoticeKey(value: unknown): string | null {
 	const failures = Array.isArray((value as { refreshFailures?: unknown } | null | undefined)?.refreshFailures) ? (value as { refreshFailures: unknown[] }).refreshFailures : [];
@@ -604,14 +593,12 @@ export function refreshNoticeKey(value: unknown): string | null {
 /**
  * The copy key for a region whose usage the host could not read.
  *
- * A protocol-shape change is NOT "try again later": the upstream answer no
- * longer has the shape this plugin reads, and only an update fixes it. Reusing
- * the generic "unavailable" wording would leave the user retrying a read that
- * cannot succeed — the silent failure this triage exists to end, and the same
- * split `refreshNoticeKey` already makes for the model list. A spent daily
- * allowance is the second such case (docs/issues/24): the read is refused until
- * the day rolls over, so "unavailable" would invite a retry that must fail. A
- * host older than the `unavailableReason` field degrades to the old copy.
+ * A protocol-shape change is NOT "try again later": only an update fixes it,
+ * and a spent daily allowance cannot be retried either (docs/issues/24).
+ * Reusing the generic "unavailable" wording would leave the user retrying a
+ * read that cannot succeed — the same split `refreshNoticeKey` already makes
+ * for the model list. A host older than the `unavailableReason` field degrades
+ * to the old copy.
  */
 export function usageUnavailableKey(entry: CardUsageRegion | null | undefined): string {
 	if (entry?.unavailableReason === "protocol-shape-changed") return "usage.protocolChanged";
@@ -634,26 +621,16 @@ export function campaignsNoticeKey(entry: CardUsageRegion | null | undefined): s
 /**
  * The provider-registration failure the models envelope carried, or `null`.
  *
- * The card's half of the fact the host publishes on `QODER_STATUS_PATH` and
- * folds into the roster payload. Since docs/issues/20 a failed registration no
- * longer unwinds activation: every card route mounts and the roster arrives
- * normally, so the card renders a complete, tickable list of models the chat
- * picker will not offer — because no provider was registered to offer them.
- * Nothing on screen said so, and the explanation lived on a route no client code
- * ever called. This is that gap: the card reads the verdict from the payload it
- * already fetches and names the failure in the host's own words.
+ * The card's half of the fact the host publishes on `QODER_STATUS_PATH`: since
+ * docs/issues/20 a failed registration no longer unwinds activation, so every
+ * card route mounts and the roster arrives normally.
  *
  * `null` covers BOTH "registration succeeded" and "this payload does not report
- * it". A host from before this field, or a stand-in fixture, sends no
- * `providerRegistration` at all, and inventing a warning out of a missing field
- * would be the false-alarm twin of the silent failure this closes. Only an
- * explicit `{ ok: false }` becomes a warning; anything unreadable is silence.
+ * it" — a host from before this field sends no `providerRegistration` at all,
+ * and inventing a warning out of a missing field would be the false-alarm twin
+ * of the silent failure this closes. Only an explicit `{ ok: false }` warns.
  *
- * The name is never empty. The host already narrows a missing or non-string
- * `name` to `'Error'` (`host/errors.ts#providerRegistrationState`) and this
- * narrows again rather than trusting it, because a host from another version is
- * not a contract. A warning that renders "注册失败（）" names nothing, which is
- * the failure mode `docs/KNOWN_GAPS.md` item 8（国际版 campaigns 端点按 umid 机器身份门控每日签到）exists to prevent.
+ * The name is never empty: a missing or non-string name narrows to `'Error'`.
  *
  * @param value - the parsed models payload.
  * @returns the host's non-empty error name, or `null` when there is nothing

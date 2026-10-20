@@ -1,41 +1,12 @@
 /**
- * Qoder credential acquisition.
+ * Qoder credential acquisition — the store half: probe the candidate app
+ * directories, open the VS Code style SQLite sign-in store (`state.vscdb`)
+ * read-only, decode the secret rows.
  *
- * The Qoder desktop apps (Qoder CN, Qoder, QoderWork CN) keep their sign-in in
- * a VS Code style SQLite store (`state.vscdb`) whose secret rows are Chromium
- * OSCrypt blobs: `"v10" || nonce(12) || ciphertext || tag(16)`, encrypted with
- * an AES-256-GCM key that is itself wrapped by the OS keystore and kept in the
- * app's `Local State` under `os_crypt.encrypted_key`.
- *
- * On Windows that wrapper is DPAPI scoped to the current user, which is why any
- * process running as the same user can unwrap it — that is the property this
- * module relies on. The unwrap is delegated to PowerShell because Node has no
- * built-in DPAPI binding, and the result is exchanged through a temp file
- * rather than a pipe so the call also works under a sandbox that forbids
- * piped stdio.
- *
- * That temp file is the weakest link of the design, so it is hardened: the
- * key is written through an exclusive handle whose ACL is restricted to the
- * current user, the interpreter is invoked by absolute system path with a
- * minimal whitelisted environment (a user-supplied `QODER_PAT` never reaches
- * the child), the file is zeroed before unlink on the normal path, and
- * {@link sweepStaleOscryptDirs} reclaims the orphans a crashed or killed run
- * leaves behind at the next startup. Each temp dir carries an identity marker
- * file so the sweep never acts on a name-prefix collision with someone else's
- * directory (issue 01).
- *
- * WHAT THIS MODULE IS, NOW THAT THE CHAIN IS SPLIT OUT
- *
- * The paragraphs above describe the whole credential story; the CODE here is
- * only the store half of it. The OSCrypt chain — the PowerShell unwrap, the
- * key cache, the zeroing, the startup sweep — moved to `oscrypt-unwrap.ts`,
- * because it is the only part of credential acquisition that writes a secret
- * outside the process, spawns a child and deletes things, and a reader
- * reviewing THAT deserves a file that contains nothing else. What stays here
- * is the part that can only read: probing the candidate app directories,
- * opening the store read-only, and decoding the rows.
- *
- * Nothing here writes to the Qoder apps' files: the store is opened read-only.
+ * The OSCrypt unwrap, key cache, zeroing and startup sweep live in
+ * `oscrypt-unwrap.ts`: that half is the only part of credential acquisition
+ * that writes a secret outside the process, spawns a child and deletes things.
+ * Nothing here writes to the Qoder apps' files — the store is opened read-only.
  *
  * @module dsh-connect-qoder/credentials
  */

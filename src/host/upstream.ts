@@ -1,14 +1,13 @@
 /**
  * The Qoder wire protocol — facade.
  *
- * 2026-10-17 拆分：本文件原 2,335 行按职责拆为 upstream/ 下的 11 个叶模块
- * （docs/issues/22-upstream-split.md）。门面逐名 re-export 现名导出，
- * 下游 12 个测试 + 5 个 probe + 3 个 src importer 一行不改；用逐名
- * re-export 而非 `export *`，删除一个导出时门面必须显式表态（TS 当场报错）。
+ * The protocol was split into 11 leaf modules under `upstream/`
+ * (docs/issues/22-upstream-split.md); this facade re-exports the current names
+ * one by one, so dropping an export has to be stated here explicitly (TypeScript
+ * errors on the spot) rather than slipping through `export *`.
  *
- * 协议事实的原文注释（COSY 签名头 / 置换字母表 base64 / 双层 SSE）随代码
- * 迁往 upstream/crypto.ts 头部，见该文件。
- *
+ * The protocol facts' original notes (COSY signature header, permuted-alphabet
+ * base64, two-layer SSE) moved with the code to `upstream/crypto.ts`.
  * @module dsh-connect-qoder/upstream
  */
 

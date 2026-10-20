@@ -1,9 +1,7 @@
 /**
- * api-calls — 自 src/host/upstream.ts 原文搬迁，未改逻辑
- *
- * 拆分依据 docs/issues/22-upstream-split.md；本文件代码逐字来自拆分前的
- * upstream.ts（见 git 历史里拆分前的那一版），只做 import/export 整理与
- * 文件头标注。协议事实的原文注释在 crypto.ts 头部。
+ * api-calls — moved verbatim from `src/host/upstream.ts` during the protocol
+ * split (docs/issues/22-upstream-split.md); only imports and exports were
+ * tidied. The protocol facts live in the header of `crypto.ts`.
  */
 
 import { authHeaders } from './cosy-sign.ts'
@@ -161,41 +159,16 @@ export async function claimCampaign(
 }
 
 /**
- * Read the model list's product-surface groups and return the `chat` one.
- *
- * WHY THIS EXISTS — measured, not inferred
- *
- * The model list is the plugin's cheapest, most frequent request, so it is also
- * the one that reports protocol drift. Its real envelope was probed on both
- * regions (`probe/model-shape.mjs`): a top-level object keyed by product
- * surface, each value an **array** of model rows. CN answers with 11 groups
- * (`chat` 14 rows, `developer` 14, `byok_teams` 0); the global edition answers
- * with 10 and has **no `developer` group at all**. Two facts from that probe
- * decide this function:
- *
- * 1. **A missing sibling group is normal.** Keying the shape on "all the groups
- *    I saw on CN" would classify every global-edition reply as drift.
- * 2. **An empty group is expressed as `[]`, not as an absent key** — the
- *    `byok_teams` / `byok_enterprise` groups came back with length 0. So
- *    `chat: []` is the genuine, trustworthy answer "this account has no models
- *    on this surface", and it must NOT be confused with drift.
- *
- * Before this, both cases collapsed into `return []`: a renamed group, a new
- * wrapper object, or an HTML SSO page answered 200 and were read as "no models".
- * That is the failure this plugin is worst at — the user is shown an empty
- * picker, the last good catalog is kept forever (issue 04's freeze), and nothing
- * says the plugin itself is out of date. The three states this returns are kept
- * apart on purpose:
- *
- * - an array (possibly empty) → the `chat` group, meaning what it says;
- * - a plain object → a wrapper this code has never seen → drift;
- * - `chat` absent → the group was renamed or the envelope regrouped → drift.
- *
+ * Read the model list's product-surface groups and return the `chat` one. A missing
+ * sibling group is normal (the global edition has no `developer` group), so only `chat`
+ * is keyed on; an empty group is `[]`, not an absent key: `chat: []` is the honest "no
+ * models on this surface", not drift. The three states stay apart: an array is the
+ * `chat` group, a plain object an unknown wrapper, an absent `chat` a renamed group —
+ * either drift (docs/issues/04-empty-catalog-freeze.md).
  * @param data - the parsed 200 body.
  * @param region - the region descriptor, for the error message only.
  * @returns the `chat` array of raw rows.
- * @throws {ProtocolShapeChangedError} for either drift shape.
- */
+ * @throws {ProtocolShapeChangedError} for either drift shape. */
 export function readModelCatalogShape(
   data: unknown,
   _region: { displayName: string } = { displayName: 'Qoder' },

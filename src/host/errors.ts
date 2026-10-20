@@ -70,32 +70,12 @@ export function thrownFlag(error: unknown, key: ThrownFlag): unknown {
 /** The flag names {@link thrownFlag} will read. A literal union, so typos fail to compile. */
 export type ThrownFlag = 'name' | 'message' | 'cause' | 'code' | 'retryable' | 'dailyLimit' | 'signInExpired' | 'protocolShapeChanged' | 'retryAfterSeconds' | 'status' | 'upstreamKind'
 
-/**
- * The provider-registration verdict, in the shape the browser is allowed to see.
- *
- * Since docs/issues/20 a registration failure is RECORDED rather than allowed to
- * unwind `activate()`, so every card route still mounts and the card still
- * renders — which means the failure has to be published somewhere or it is
- * invisible. Two surfaces need this one fact: the always-mounted `/status` route
- * (which answers it even when a card route is a 404, separating "this host does
- * not serve that path" from "this plugin failed to activate") and the models
- * payload the card actually reads. Shaping it once here is what keeps those two
- * from drifting into two vocabularies for one condition.
- *
- * Only the error's `name` is published, never its `message`: an arbitrary thrown
- * value can carry a credential-bearing URL, and this is a browser-visible body.
- * The whole error goes to the host log, where the recording block in `activate()`
- * put it. That split is deliberate — log the whole thing, publish the shape.
- *
- * `errorName` is never empty, even when the thrown value has no usable `name`:
- * the card renders it inside a sentence, and a warning that names nothing is the
- * exact failure mode `docs/KNOWN_GAPS.md` item 8（国际版 campaigns 端点按 umid 机器身份门控每日签到）exists to
- * prevent. Absent, non-string and empty names all become `'Error'`.
- *
- * @param error - the recorded registration error, or `undefined` when the
- *   host-side registration succeeded.
- * @returns `{ ok: true }`, or `{ ok: false, errorName }` with a non-empty name.
- */
+/** The provider-registration verdict, in the shape the browser may see: a failure is
+ * recorded rather than thrown (docs/issues/20-llm-handoff-detached.md), so it must be published
+ * or it is invisible; only `name` is published, never `message` (a thrown value can carry a
+ * credential-bearing URL), and `errorName` is never empty.
+ * @param error - the recorded registration error, or `undefined` on success.
+ * @returns `{ ok: true }`, or `{ ok: false, errorName }` with a non-empty name. */
 export function providerRegistrationState(
   error: unknown,
 ): { ok: true } | { ok: false; errorName: string } {
@@ -271,33 +251,14 @@ export interface HttpRefusal {
   retryAfterSeconds: number
 }
 
-/**
- * The verdict for one non-2xx reply from a one-shot JSON endpoint.
- *
- * The stream path has always known what a failure body means (see
- * {@link classifyUpstreamError}); the one-shot readers — model list, usage,
- * userinfo, campaigns, check-in — did not, and threw a plain
- * `new Error('… HTTP 500 …')` with the body discarded. Two verdicts were lost
- * with it, both recorded in docs/issues/24: a spent daily allowance arrived as a
- * generic "refresh failed" and never marked the local exhausted badge, and a
- * sign-in rejection was indistinguishable from a network blip.
- *
- * The body is classified FIRST, exactly as docs/issues/23 settled for the
- * stream: a `daily_limit_exceeded` carried on a 429 is a spent allowance, not a
- * rate limit, and the status alone cannot tell the two apart. The status is only
- * consulted when the body says nothing at all.
- *
- * 403 is deliberately NOT a sign-in rejection, even though the credential-vault
- * exchange treats it as one: the international campaigns endpoint is gated on
- * machine identity and answers 403 for a perfectly good login, so reading that
- * as a dead credential would invalidate a working token. Only 401, which is
- * about the credential itself, means the sign-in is gone.
- *
+/** The verdict for one non-2xx reply from a one-shot JSON endpoint. The body is
+ * classified FIRST, as docs/issues/23-upstream-429-daily-limit.md settled for the stream:
+ * a `daily_limit_exceeded` on a 429 is a spent allowance, not a rate limit, so the
+ * status is read only when the body says nothing; 403 is NOT a sign-in rejection
+ * (the campaigns endpoint is machine-identity gated), so only 401 means the sign-in is gone.
  * @param status - the HTTP status of the reply.
  * @param bodyText - the reply body as text, possibly empty or not JSON.
- * @returns the verdict, plus any wait the BODY stated (the `Retry-After` header
- *   is the caller's to prefer; this function never sees headers).
- */
+ * @returns the verdict, plus any wait the BODY stated. */
 export function classifyHttpRefusal(status: number, bodyText: string): HttpRefusal {
   // Purity is the point of this module: no imports, so both the shim and the
   // one-shot readers can reach the same rules and a test can feed them directly.
@@ -463,29 +424,12 @@ export function isProtocolShapeChangedError(error: unknown): boolean {
   return (error as { protocolShapeChanged?: unknown } | null | undefined)?.protocolShapeChanged === true
 }
 
-/**
- * A refusal from a one-shot OpenAPI read (model list, usage, userinfo,
- * campaigns, check-in), carrying the verdict the stream path already computes.
- *
- * Before this class those five readers threw a plain `Error` whose message was
- * the only thing that survived: the status and body were dropped, so a spent
- * daily allowance reached the card as "上次更新：{time}（刷新失败）" instead of
- * naming the allowance, and — worse than cosmetic — the local exhausted badge
- * (`RequestCounter.markExhausted`, said "疑似已用尽，仅供参考" on the card) was
- * never set, because the only signal it listens for is a flag no plain `Error`
- * carries. See docs/issues/24.
- *
- * The message is byte-identical to the plain `Error` this replaces: it is what
- * the card shows and what several tests pin, so the classification rides
- * alongside the wording in flags rather than changing it.
- *
- * The flags are fields (not the class name) for the same reason
- * {@link ProtocolShapeChangedError}'s are: a caught value that lost its
- * prototype — a cross-realm throw, a re-wrap — still reads correctly through
- * `thrownFlag`. There is no `retryable: false` here on purpose: these reads run
- * through no queue ladder, and if one ever did, an absent flag already answers
- * "do not wait" (`queueWaitFor` gates on `retryable === true`).
- */
+/** A refusal from a one-shot OpenAPI read (docs/issues/24-terminal-failure-status-codes.md),
+ * carrying the verdict the stream path already computes. The message is byte-identical to
+ * the plain `Error` it replaces, so the classification rides in flags, not in the wording;
+ * the flags are fields, not the class name, so a prototype-less value still reads
+ * through `thrownFlag`; no `retryable: false`: no queue ladder runs here, so an absent
+ * flag already answers "do not wait". */
 export class UpstreamRefusalError extends Error {
   /** The HTTP status of the reply, kept for callers that want to re-derive a verdict. */
   status: number

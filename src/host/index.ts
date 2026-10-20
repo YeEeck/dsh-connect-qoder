@@ -216,17 +216,11 @@ const QODER_MODELS_PATH = '/plugins/dsh-connect-qoder/models'
  * Plugin-owned read-only route that answers "did this plugin finish coming up,
  * and if not, at which step".
  *
- * Exists because activation has more than one way to be half-alive, and before
- * this route every one of them presented identically: the card's other routes
- * 404, which reads as "this plugin serves no such route" rather than "this
- * plugin failed while activating". A route that always exists and always
- * answers is what makes those two states distinguishable — see docs/issues/20,
- * where a failed `llm` registration produced exactly that ambiguity.
- *
- * It reports the provider-registration step only, because that is the one step
- * whose failure does NOT stop the card from being available (activation
- * continues and these routes mount). Steps that fail before any route can be
- * registered have nothing to report through here by construction.
+ * It always exists and always answers, so "still activating" and "this plugin
+ * serves no such route" stay distinguishable — a failed `llm` registration used
+ * to look like the latter (docs/issues/20). It reports the provider-registration
+ * step only: the one step whose failure does not stop the card from being
+ * available.
  */
 const QODER_STATUS_PATH = '/plugins/dsh-connect-qoder/status'
 
@@ -571,12 +565,12 @@ class RegionRuntime {
      * Why the last refresh did not produce a catalog, or `undefined` when the
      * current catalog IS the last upstream answer.
      *
-     * It exists because "the fetch failed" and "the plugin is out of date" are
-     * different facts that used to render as the same thing — an unchanged
-     * model list — and one of them (issue 05) also let the card announce a
-     * fresh "已更新" time for a refresh that never happened. `reason` is one of
-     * `credential` / `no-credential` / `fetch` / `protocol-shape-changed`; the
-     * card maps the last of those to "update the plugin", never to "sign in".
+     * "the fetch failed" and "the plugin is out of date" are different facts
+     * that used to render alike — and one of them (docs/issues/05) let the card
+     * announce a fresh "已更新" for a refresh that never happened. `reason` is
+     * one of `credential` / `no-credential` / `fetch` /
+     * `protocol-shape-changed`; the card maps the last to "update the plugin",
+     * never to "sign in".
      *
      * @type {{ reason: string, error?: unknown } | undefined}
      */
@@ -1292,18 +1286,14 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
 
   for (const { runtime } of started) wireRuntime(runtime)
 
-  // Provider registration is attempted once here, and its outcome is
-  // RECORDED, not obeyed as a reason to unwind. That distinction is the whole
-  // lesson of docs/issues/20: this call used to `return` on failure — after
-  // closing every shim — which skipped every card route below it, so a failed
-  // `llm` registration presented to the user as seven 404s with no way to see
-  // why. The regions started, their catalogs are readable and the account and
-  // usage panels need no adapter at all; taking those down with the adapter
-  // destroyed the only surface that can explain the failure. Red line 1
-  // (`AGENTS.md`) forbids exactly that: a new failure path must be visible, not
-  // silent. So a failure keeps everything alive, is logged, and is published on
-  // the status route below for the card to show. The shims stay open for the
-  // same reason — `disposeFiber` owns their teardown.
+  // Provider registration is attempted once here, and its outcome is RECORDED,
+  // not obeyed as a reason to unwind. Unwinding used to close every shim and
+  // skip every card route below, so a failed `llm` registration presented as
+  // seven 404s with no way to see why (docs/issues/20). The regions started and
+  // their account and usage panels need no adapter at all; a failure keeps
+  // them alive, is logged, and is published on the status route for the card
+  // to show. Red line 1 forbids the opposite: a new failure path must be
+  // visible, not silent.
   const initial = publishRegions()
   let providerRegistrationError: unknown
   if (initial.ok !== true) {
@@ -1411,44 +1401,31 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
     refreshPicker()
   }
 
-  // The account panel: which sign-in drives each region, and in which state
-  // it is — all from local evidence, so reading it costs no network. It is
-  // where a "this region shows no models" stops being a mystery: the panel
-  // says whether the app is not installed, the sign-in expired, or the store
-  // cannot be read and why (the recorded unwrap cause, see
-  // `lib/account-state.js`).
+  // The account panel: which sign-in drives each region, and in which state it
+  // is — all from local evidence, so reading it costs no network. It is where
+  // "this region shows no models" stops being a mystery: the panel says whether
+  // the app is not installed, the sign-in expired, or the store cannot be read
+  // and why (the recorded unwrap cause). The three routes share one mount
+  // block: same loopback-only rule, same failure posture — registration
+  // trouble logs and the card simply has no account panel, exactly like the
+  // usage route.
   //
-  // The three routes share one mount block: same loopback-only rule, same
-  // failure posture — registration trouble logs and the card simply has no
-  // account panel, exactly like the usage route.
-
-  // Every region record carries `enabled` — is that region's provider offered
-  // to DSH right now (the account panel's switch state) — and the top level
-  // carries the fully-resolved `enabledRegions` map so the card can post a
-  // complete one back when the switch flips. Resolved live from `current()` on
-  // each request, so a save made through the settings pipeline is visible to
-  // the next panel render without a restart.
+  // Every region record carries `enabled` (is that region's provider offered to
+  // DSH right now) and the top level carries the fully-resolved
+  // `enabledRegions` map, so the card can post a complete one back; resolved
+  // live from `current()` on each request.
   //
-  // `cachedOnly` here (issue 07): this runs on EVERY panel render, and the
-  // underlying store read would otherwise unwrap — an OSCrypt unwrap is a
-  // PowerShell child that measured ~0.5 s of event-loop freeze per region (and
-  // up to the 30 s timeout on failure), so without this the host would stall on
-  // a machine that cannot unwrap, which is exactly the state this panel is
-  // supposed to be able to display. Reading from the key cache keeps the answer
-  // honest (`needs-app` with the recorded reason) and the UI responsive;
-  // "重读登录" is the explicit, user-driven moment that re-reads for real.
-  //
-  // `force` is the opposite end, for that one user-initiated request, and the
-  // SHAPE is the same either way — see the reload route, which used to answer
-  // with a narrower body and made the card follow up with a second GET.
-  //
-  // Async because the forced path DOES unwrap, and the handler awaits this
-  // rather than blocking DSH's event loop for half a second while a user waits
-  // to see whether their re-sign-in worked.
-  // Named for what it does, not for where its dependencies live: the state read
-  // it performs belongs to `lib/account-payload.js`, which a test can import.
-  // Keeping it as a closure here once meant the panel's whole read path ran
-  // outside every gate in this repository. See that module's header.
+  // The read is cached-only by default: this runs on EVERY panel render, and
+  // the store read would otherwise unwrap — a PowerShell child that freezes the
+  // event loop (~0.5 s per region, up to the 30 s timeout on failure), and the
+  // host must stay responsive on a machine that cannot unwrap, which is exactly
+  // the state this panel has to display (docs/issues/07). "重读登录" is the
+  // explicit, user-driven moment that re-reads for real; `force` is that other
+  // end, and the response SHAPE is the same either way — see the reload route.
+  // It is async because the forced path DOES unwrap.
+  // The read itself lives in `src/host/account-payload.ts`, a directly
+  // importable module, so the panel's read path stays behind this repository's
+  // gates.
   const accountPayload = (options: { force?: boolean } = {}) =>
     buildAccountPayload({
       regions: REGIONS,

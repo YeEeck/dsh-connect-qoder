@@ -1,45 +1,31 @@
 /**
  * The card's only `fetch` surface.
  *
- * Every host-route read the card performs — the two containers'
- * (`QoderUsagePanel`, `QoderAccountPanel`) fetches and the model-roster read
- * the assembly layer keeps in `card.tsx` — goes through here, so the request
- * contract lives in exactly one place. The host routes serve the plugin's own
- * `lib/`, so they are same-origin and answer JSON; this wraps that contract
- * once.
+ * Every host-route read the card performs goes through here, so the request
+ * contract lives in one place. The routes serve the plugin's own `lib/`, so they
+ * are same-origin and answer JSON.
  *
- * Every call sends `accept: application/json` and `credentials:
- * "same-origin"` — the routes are behind the loopback origin check in
- * `src/host/routes.ts`, so the credential must travel. POSTs that carry a
- * body stringify to JSON and advertise `content-type: application/json`.
+ * Every call sends `accept: application/json` and `credentials: "same-origin"`
+ * — the routes sit behind the loopback origin check in `src/host/routes.ts`.
  *
  * The shape of a failed response is decided here and nowhere else: a non-OK
  * status throws with the host's own `error` field when present, so the card's
- * catch blocks can show the real reason instead of a fabricated one (the
- * "undefined" failure message that issue 06 was about is what this prevents).
- * A `POST` body that will not parse degrades to an empty answer (`undefined`),
- * never a throw — a write that the host did not echo back is "no data". A
- * `GET` that will not parse THROWS instead: the reads that use it (roster,
- * accounts, quotas) have no "no data" state to fall back to, and a caller
- * that asked for a fact must be told the fact did not arrive.
+ * catch blocks show the real reason (docs/issues/06). A `POST` body that will
+ * not parse degrades to `undefined`, never a throw; a `GET` that will not parse
+ * THROWS — the reads that use it have no "no data" state to fall back to.
  */
 
 /**
  * The reason to report for a refused response.
  *
  * The host answers refusals in three shapes and all must reach the reader:
- * route-level gates write `{ error: "origin-not-trusted" }` (a bare string),
- * the device-login handlers write `{ error: "sign-out-failed", detail: "…" }`
- * (a machine code plus a human sentence), and `writeError` writes
- * `{ error: { message, type, code } }`. Reading only the first would turn
- * every `writeError` refusal — including "the credential file could not be
- * removed, so it is still in use" — into a bare `HTTP 500`, and dropping the
- * `detail` of the second is the same accident again: the code alone names the
- * failure without saying what happened. That is the silent-failure shape
- * issue 06 was about, one layer down.
- *
- * A shape neither branch recognises still yields the status code; naming the
- * failure is the floor, never a fabricated reason.
+ * route gates write `{ error: "origin-not-trusted" }` (a bare string), the
+ * device-login handlers write `{ error: "sign-out-failed", detail: "…" }`, and
+ * `writeError` writes `{ error: { message, type, code } }`. Reading only the
+ * first would turn every `writeError` refusal into a bare `HTTP 500`, and
+ * dropping the second's `detail` names the failure without saying what happened
+ * (docs/issues/06). A shape neither branch recognises still yields the status
+ * code: naming the failure is the floor, never a fabricated reason.
  */
 function failureMessage(value: unknown, status: number): string {
 	const error = (value as { error?: unknown } | undefined)?.error;

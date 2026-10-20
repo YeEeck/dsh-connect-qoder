@@ -2,47 +2,11 @@
  * The OSCrypt key chain: unwrap the desktop app's master key, decrypt its
  * secret rows with it, and reclaim what a crash left in the temp dir.
  *
- * The Qoder desktop apps (Qoder CN, Qoder, QoderWork CN) keep their sign-in in
- * a VS Code style SQLite store (`state.vscdb`) whose secret rows are Chromium
- * OSCrypt blobs: `"v10" || nonce(12) || ciphertext || tag(16)`, encrypted with
- * an AES-256-GCM key that is itself wrapped by the OS keystore and kept in the
- * app's `Local State` under `os_crypt.encrypted_key`.
- *
- * On Windows that wrapper is DPAPI scoped to the current user, which is why any
- * process running as the same user can unwrap it — that is the property this
- * module relies on. The unwrap is delegated to PowerShell because Node has no
- * built-in DPAPI binding, and the result is exchanged through a temp file
- * rather than a pipe so the call also works under a sandbox that forbids
- * piped stdio.
- *
- * That temp file is the weakest link of the design, so it is hardened: the
- * key is written through an exclusive handle whose ACL is restricted to the
- * current user, the interpreter is invoked by absolute system path with a
- * minimal whitelisted environment (a user-supplied `QODER_PAT` never reaches
- * the child), the file is zeroed before unlink on the normal path, and
- * {@link sweepStaleOscryptDirs} reclaims the orphans a crashed or killed run
- * leaves behind at the next startup. Each temp dir carries an identity marker
- * file so the sweep never acts on a name-prefix collision with someone else's
- * directory (issue 01).
- *
- * WHY IT IS ITS OWN MODULE
- *
- * This chain is the only part of credential acquisition that touches a secret
- * OUTSIDE the process (a plaintext key on disk), that spawns a child process,
- * and that deletes things. It used to live inside `credentials.ts` next to the
- * store reading, where the two halves shared one file: 1600 lines in which the
- * part that can leak a key and the part that cannot were equally hard to
- * review, and every reader of the store had to skip past the PowerShell script
- * to find the row query.
- *
- * Splitting it out gives the store half a module whose import list is short
- * enough to read at a glance, and gives this half a surface that can be
- * exercised WITHOUT a real PowerShell child: both unwrap entries take the
- * spawner as an argument, so a test can hand them a fake that writes the
- * hand-off file exactly as the real interpreter would. Before that seam
- * existed, everything between "the temp dir was created" and "the key was read
- * back" was only reachable on a Windows machine with a signed-in Qoder — which
- * is why the coverage report kept showing these lines as untested.
+ * On Windows the wrapper is DPAPI scoped to the current user. Node has no
+ * DPAPI binding, so the unwrap runs through PowerShell and hands the key over
+ * in a temp file (a sandbox may forbid piped stdio). That file is the weakest
+ * link: exclusive handle, user ACL, absolute interpreter path, whitelisted
+ * child env (a `QODER_PAT` never reaches the child), zero before unlink, sweep.
  *
  * @module dsh-connect-qoder/oscrypt-unwrap
  */
@@ -205,58 +169,18 @@ try {
 `
 
 /**
- * Per-app OSCrypt key cache; the DPAPI unwrap is not free, so do it once.
- *
- * Only a **successful** unwrap is remembered. A failure is transient far more
- * often than it is permanent — a cold PowerShell that blows the 30 s timeout, an
- * antivirus that swallows the `Add-Type` compile, a `%TEMP%` on a network share
- * — and caching the `undefined` would pin that one failure for the life of the
- * process: `has()` would hit, the unwrap would never be attempted again, and the
- * user would see "not signed in" (or a provider that silently never appears) with
- * nothing to explain it. A missed unwrap costs one subprocess, so retrying is
- * the cheap side of the trade.
- *
- * WHAT THE KEY IS AND WHAT INVALIDATES IT
- *
- * The entry is keyed by app directory and remembers the identity of the
- * `Local State` it was unwrapped from, so a key is only ever reused while that
- * file is unchanged. This is the fix for a permanent, self-inflicted `needs-app`
- * (issue 08): the cache was keyed by directory alone, so a Qoder reinstall or a
- * profile reset — which rewrites `Local State` with a fresh
- * `os_crypt.encrypted_key` — left the process decrypting with the OLD key. Every
- * subsequent read failed, no code path could ever retry, and the region stayed
- * "unreadable" until DSH was restarted. Binding the cache to the file's identity
- * turns that into an ordinary cache miss.
- *
- * The identity is `mtimeMs` + `size` rather than a hash of the contents, which
- * is a deliberate trade: hashing means reading the whole file (tens of KB) on
- * every credential resolution, and `Local State` is written atomically by a
- * replace, so any content change lands with a new mtime. A same-millisecond
- * rewrite of identical size is the one case this cannot see, and it is also the
- * one case where the old key is still correct.
+ * Per-app OSCrypt key cache; the unwrap is not free, so do it once. Only a
+ * successful unwrap is remembered — a failure is usually transient, and caching
+ * it would pin "not signed in" for the life of the process. An entry is bound to
+ * the `Local State` identity, so a rewrite invalidates it (docs/issues/08-keycache-staleness.md).
  */
 const keyCache = new Map<string, CachedOscryptKey>()
 
 /**
- * The reason the most recent unwrap of one app directory failed, and when.
- *
- * The diagnostic sink is a one-way street to a logger; the card's account
- * route (see `lib/account-state.js`) also needs to READ the cause back so a
- * region stuck at "encrypted but unreadable" can say *why*. The reason is
- * remembered per directory here, and cleared whenever that directory next
- * unwraps successfully — the recorded value always describes the present,
- * not a past incident.
- *
- * The timestamp is what makes a remembered failure safe to ACT on (issue 07).
- * The original rule was "a failure is never cached", chosen so a transient
- * fault could not pin a region as unusable for the life of the process. But the
- * unwrap is `execFileSync` with a 30 s timeout, reached from the card's account
- * route on every render, so the same choice made an un-unwrappable app cost a
- * blocking subprocess every single time the panel was opened — exactly the
- * state the panel exists to explain. The TTL keeps the original intent (a
- * transient fault is retried, not remembered forever) while capping the cost at
- * one attempt per window. A user who fixes the machine and immediately retries
- * waits at most {@link UNWRAP_FAILURE_TTL_MS}.
+ * The reason the most recent unwrap of one app directory failed, and when: the
+ * card's account route reads the cause back, so a stuck region can say why. It
+ * is cleared on the next successful unwrap, and blocks retries only for
+ * {@link UNWRAP_FAILURE_TTL_MS} — a transient fault is retried, not remembered.
  */
 const lastUnwrapFailure = new Map<string, UnwrapFailure>()
 
@@ -366,24 +290,8 @@ function localStateIdentity(statePath: string): string | undefined {
 }
 
 /**
- * Whether a cached key may be reused for a given `Local State` identity.
- *
- * Extracted so the rule can be tested without a PowerShell child: the unwrap
- * itself needs DPAPI and a live app, but "is this cache entry still about the
- * file on disk" is a pure question, and it is the question issue 08 turns on.
- * A test that had to launch the real unwrap to check it would either be skipped
- * on CI or be too slow to run often, which is how the original unbounded cache
- * survived this long.
- *
- * The strict comparison is deliberate: an entry recorded before this rule
- * existed (a bare Buffer, or a `{ key }` with no identity) fails it, so a hot
- * reload of an older module cannot leave a key in use with no provenance. For
- * the same reason a missing file (`identity === undefined`) is never a hit —
- * `undefined === undefined` would otherwise trust such a legacy entry — which is
- * also the right answer on its own terms: an app uninstalled under a running
- * host leaves a cached key that can decrypt nothing.
- *
- * @param cached - the cache entry, `{ key, identity }`, or `undefined`.
+ * Whether a cached key may be reused; both sides must be present and equal.
+ * @param cached - the cache entry `{ key, identity }`, or `undefined`.
  * @param identity - the current file identity, or `undefined` when absent.
  * @returns the reusable key, or `undefined` when a fresh unwrap is required.
  */
@@ -404,20 +312,9 @@ export function cachedKeyFor(cached: unknown, identity: string | undefined): Buf
 }
 
 /**
- * Whether a recent failure should suppress another unwrap attempt (issue 07).
- *
- * Pure and exported so the window can be tested without a PowerShell child: the
- * subprocess is the expensive, blocking thing, and the question "is the last
- * failure still inside its window" is what decides whether to spawn it.
- *
- * The check is on the failure's OWN `Local State` identity as well as its age,
- * so a user who re-signed-in and the app rewrote its state file is retried
- * immediately instead of waiting out the window — the two conditions together
- * mean "this failure describes the file as it is now".
- *
+ * Whether a recorded failure still suppresses an attempt: age AND identity.
  * @param entry - the recorded `{ reason, at, identity }`, or `undefined`.
  * @param identity - the current `Local State` identity.
- * @param now - the current instant, injectable for tests.
  * @returns true when the attempt should be skipped.
  */
 export function failureStillBlocks(
@@ -626,17 +523,12 @@ function runUnwrap(
       // the synchronous function is mirrored by the two handlers below.
       return (spawned as PromiseLike<unknown>).then(
         () => {
-          // `readUnwrappedKey` is the one step in this chain that can THROW,
-          // and a bare throw here rejects the promise without ever reaching
-          // `settle` — leaving the child's `key.b64` in `%TEMP%` and recording
-          // no failure reason, so the card reports an ordinary "not signed in"
-          // (red lines 1 and 2; docs/issues/01, 02).
-          //
-          // The synchronous tail below cannot lose that way: its read sits
-          // inside the `try` at the top of this function, so the `catch` still
-          // runs `settle(undefined)`. This catch is what makes the two paths
-          // the "identical by construction" the header claims, rather than
-          // identical only when nothing throws.
+          // `readUnwrappedKey` is the one step that can THROW, and a bare throw
+          // here would reject the promise without reaching `settle` — leaving
+          // the child's `key.b64` in `%TEMP%` and recording no failure reason,
+          // so the card would report an ordinary "not signed in". The sync tail
+          // cannot lose that way: its read sits inside the `try` above, so its
+          // `catch` still runs `settle(undefined)`.
           let read: UnwrappedKeyRead
           try {
             read = readUnwrappedKey(outFile)
@@ -971,41 +863,9 @@ export function cachedOscryptKeyFor(appDir: string): Buffer | undefined {
 }
 
 /**
- * Reclaim the `qoder-oscrypt-*` directories a crash left in the temp dir.
- *
- * The unlink in {@link oscryptKeyFor} runs in a `finally`, so it catches only
- * faults at the JS level: a killed process, a power loss, or a crashed host
- * leaves `%TEMP%\qoder-oscrypt-*\key.b64` behind — the app's 32-byte master
- * key as plain base64, readable by anyone who can read the temp directory.
- * Call this at startup to reclaim it.
- *
- * Only directories whose last write is at least `maxAgeMs` old are touched: a
- * fresh one may belong to another DSH instance unwrapping right now, and its
- * key file is held open (exclusive) for the duration of the call. The default
- * 5 minutes is safe because a live unwrap finishes within the 30 second call
- * timeout — anything older is surely orphaned.
- *
- * The name prefix only picks *candidates*; a directory is touched only after it
- * proves its identity (issue 01). A prefix collision — another tool's residue,
- * or a junction someone planted at `qoder-oscrypt-*` — must never end with this
- * module's startup code zeroing files that are not ours. Three checks, all on
- * `lstat`/`readdir`, none following links into the directory's contents:
- *
- *   1. the entry is a real directory, not a symlink or junction (Node reports
- *      Windows reparse points — junctions included — as symbolic links from
- *      `lstat`, so one check covers both platforms);
- *   2. it carries the {@link OSCRYPT_MARKER} file our unwrap writes, and
- *      contains nothing except `key.b64` beside it;
- *   3. `key.b64` decodes as base64 to exactly 32 bytes — the size of a real
- *      OSCrypt master key (a wrong-size file is reported and left alone: it is
- *      not ours to delete, whatever its name says).
- *
- * A directory that fails check 1 is reported (planted links around a
- * credential-sweep name are worth knowing about); one that fails 2 or 3 is
- * passed over silently as a foreign object — the third-party tool that owns
- * it must get no "could not reclaim" warning from a plugin that never had a
- * claim on it.
- *
+ * Reclaim the `qoder-oscrypt-*` dirs a crash left in the temp dir; the name is only a
+ * candidate — a dir is touched only when it is a real directory (never a junction or
+ * symlink) with our marker and a 32-byte `key.b64`, and is older than `maxAgeMs`.
  * @returns the number of directories reclaimed.
  */
 export function sweepStaleOscryptDirs(maxAgeMs = 5 * 60 * 1000) {

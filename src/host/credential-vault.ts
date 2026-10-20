@@ -1,72 +1,12 @@
 /**
- * The plugin's own credential file, one per region.
+ * The plugin's own credential file, one per region — the storage half of the
+ * device-login credential source (docs/issues/21-device-login-credential-source.md).
  *
- * This is the storage half of the device-login credential source
- * (docs/issues/21-device-login-credential-source.md). The plugin has always
- * refused to store a credential — it read the Qoder app's sign-in and never
- * wrote one down — so this file is the first thing in the repository that
- * holds a secret of its own, and every rule below exists because of that.
- *
- * What it holds, and why it is worth holding:
- *
- * - The device-login token is obtained by the user scanning a code, which is
- *   the only credential path this plugin can offer that does not depend on the
- *   desktop app being installed on THIS machine. The app's sign-in is wrapped
- *   in the platform keystore (DPAPI on Windows), so its ciphertext cannot be
- *   carried to another machine; a PAT can be carried but the user has to go
- *   mint one in a web console first. A device-login token closes both gaps.
- * - It is per region, because the two regions are two parallel lines
- *   everywhere else in this plugin (see the three load-bearing facts in
- *   AGENTS.md) and their credentials are not interchangeable.
- *
- * The three defects this file is written against, all of them taken from a
- * sibling plugin's own incident write-up rather than invented here:
- *
- * 1. **A half-written file.** A crash between "create" and "fill" must never
- *    leave a readable file with no token in it, so writes go to a sibling
- *    `.tmp` and are renamed onto the target (the same shape `CatalogStore` and
- *    `FileThrottleStore` already use).
- * 2. **A read-modify-write that loses.** `read()` then `write()` is not atomic
- *    against a second writer, and the two writers of this file are genuinely
- *    concurrent: a token refresh (triggered by any request that finds the token
- *    expired) and a sign-out (triggered by the user). Interleaved, a refresh
- *    that started before the sign-out lands after it and the signed-out
- *    credential **comes back on the next restart**. `update()` below is the
- *    fix: the whole read-decide-write is serialized through one chain, so the
- *    file's final state is always some serialization of the requested writes,
- *    never a mix of two.
- *
- *    The chain only serializes writers THAT GO THROUGH IT, though — a second
- *    DSH profile (web and desktop share one Harness home, hence one vault file
- *    per region) runs its own chain in its own process, and its write can land
- *    inside this chain step's window between the read and the rename. So the
- *    step re-reads the file just before committing and refuses to write unless
- *    the disk still holds exactly the record the decision was made on: a
- *    newer record from the other profile is left standing (the caller reports
- *    a save failure and holds its rotation in memory), a record deleted by the
- *    other profile is not resurrected, and a record replaced by a foreign
- *    version is never stomped by a build that cannot even parse it. What
- *    remains is the gap between that re-read and the rename — two adjacent
- *    syscalls, no honest way to close it without a real cross-process file
- *    lock, and registered in docs/KNOWN_GAPS.md rather than papered over.
- * 3. **A damaged file that eats the good one.** A parse failure must not be
- *    treated as "empty, so write the default over it": that converts one bad
- *    sector into permanent credential loss on the next save. The unreadable
- *    file is moved aside under a unique name instead, so nothing is destroyed
- *    that a human might still recover.
- *
- * Permissions: `0o600` on the file and `0o700` on its directory. This is
- * deliberately NOT applied uniformly across the plugin's files — the catalog
- * cache and the exchange throttle hold metadata and no secret, so they do not
- * restrict anything. The rule is "tighten when the file holds a secret", and
- * this one does.
- *
- * Reads and writes here never throw: a vault that cannot be reached degrades
- * to "no device credential", which is exactly the pre-feature state. A failure
- * that the user needs to know about (a sign-in that succeeded but could not be
- * saved) is reported through the return value, so the caller can say it out
- * loud — a silent failure here would leave the panel showing a signed-in
- * account that does not survive a restart. See issue 16's rule.
+ * It is the plugin's only secret of its own: the file is `0o600` in a `0o700`
+ * directory, writes go to a sibling `.tmp` renamed onto the target, and
+ * `update()` serializes the read-decide-write and re-reads first, so another
+ * profile's record is never stomped. Nothing throws: a failure the user must
+ * see comes back through the return value (docs/issues/16-silent-failure-policy.md).
  *
  * @module dsh-connect-qoder/credential-vault
  */

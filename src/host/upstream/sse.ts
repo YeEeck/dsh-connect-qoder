@@ -1,9 +1,7 @@
 /**
- * sse — 自 src/host/upstream.ts 原文搬迁，未改逻辑
- *
- * 拆分依据 docs/issues/22-upstream-split.md；本文件代码逐字来自拆分前的
- * upstream.ts（见 git 历史里拆分前的那一版），只做 import/export 整理与
- * 文件头标注。协议事实的原文注释在 crypto.ts 头部。
+ * sse — moved verbatim from `src/host/upstream.ts` during the protocol split
+ * (docs/issues/22-upstream-split.md); only imports and exports were tidied. The
+ * protocol facts live in the header of `crypto.ts`.
  */
 
 import crypto from 'node:crypto'
@@ -552,46 +550,11 @@ class QueueRejection extends Error {
 }
 
 /**
- * The account's daily billing allowance is spent.
- *
- * NOT a queue, and the difference is the whole point. The gateway sends this
- * one with a `Retry-After` measured in hours (7350 s in the report this class
- * was written from), so a classifier that only knows "retryable with a hint"
- * turns it into a multi-hour sleep: the user was told the request would be
- * retried, and no amount of waiting within the session changes the answer,
- * because the counter resets at the day boundary rather than draining.
- *
- * So it is a hard failure with an honest name. `retryable: false` is what stops
- * this plugin's own queue ladder, and `retryAfterSeconds` is what the UI can
- * offer instead: "try again after the day rolls over" rather than "try again in
- * 7350 seconds".
- *
- * Stopping DSH's retry policy is a SECOND, separate job, because that policy
- * cannot see the flag: the shim hands it an HTTP status and a message, and the
- * host classifies on those — `classifyPiAiError` in
- * `@deepseek-ai/dsh-llm-pi-ai/lib/index.js` tests `isQuotaExceededError`
- * (`@deepseek-ai/dsh-llm/lib/types/error.js`) BEFORE its `\b429\b|rate.?limit`
- * rule. A message that only said the allowance "is used up" matched neither
- * wording, so this failure fell through to `RATE_LIMIT` and the request was
- * retried five more times. Two locks close that, and they do different jobs:
- *
- *   1. this route's policy no longer retries `RATE_LIMIT`/`SERVER`
- *      (`src/host/route-retry-policy.ts`, docs/issues/24) — that is what stops
- *      the retries, and it covers every terminal verdict, not only this one;
- *   2. the sentence below says "daily quota exhausted". The phrase is
- *      load-bearing: it is the wording the host's quota predicate looks for, so
- *      the classification is `QUOTA` — the honest name for the cause, and still
- *      right if the retryable set is ever widened back.
- *
- * The old claim here was that the flag alone did this; it never could.
- * `probe/host-retry-classification-probe.mjs` asserts both against the
- * installed host, and `test/daily-limit.test.js` pins the phrase.
- *
- * The message names the cause in the user's terms, because the upstream text
- * ("Billing daily count exceeded") is a billing term and the action is none of
- * billing's business — waiting, using the off-peak price, or claiming the daily
- * check-in.
- */
+ * The account's daily billing allowance is spent. NOT a queue: the counter resets
+ * at the day boundary rather than draining, so `retryable: false` stops this
+ * plugin's own queue ladder; the host's retries need two locks — this route's
+ * policy (src/host/route-retry-policy.ts, docs/issues/24-terminal-failure-status-codes.md)
+ * does not retry the verdict, and the message says "daily quota exhausted", the wording the host's quota predicate reads. */
 class DailyLimitRejection extends Error {
   /** Always false: waiting within the session cannot fix a daily limit. */
   retryable: boolean

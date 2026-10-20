@@ -35,23 +35,15 @@ export interface MountResult {
 /**
  * Register a GROUP of routes that are meant to stand or fall together.
  *
- * The grouping is the point, and it is what the seven separate
- * `try`/`catch` blocks in the activation path could not express. Three account
- * routes share one mount, because a card that can read its account state but
- * not re-read it or confirm it is not "the account panel is unavailable" — it
- * is a panel that looks alive and silently does nothing on two of its buttons.
- * That is the silent-failure shape this plugin keeps paying for (issue 16).
+ * The grouping is the point: a card that can read its account state but not
+ * re-read it or confirm it looks alive and silently does nothing on two of
+ * its buttons — the silent-failure shape of
+ * docs/issues/16-silent-failure-policy.md
  *
  * So a group is all-or-nothing: if any registration throws, every release the
  * group already obtained is run before returning, and the caller is told the
- * group failed. Without that, a host that accepts the first path and rejects
- * the second leaves a live `/account` route that answers with data no button can
- * act on — and the catch block's "account routes unavailable" log is then
- * simply false, which is worse than no log because it stops the search.
- *
- * Each release is run inside its own `try`, so one that throws (a host that
- * already reclaimed the registration) cannot strand the ones after it and leak
- * them: those are the ones still holding handlers.
+ * group failed. Each release runs inside its own `try`, so one that throws
+ * cannot strand the ones after it and leak them.
  *
  * @param registrar - the `webServer` service, already obtained by the caller.
  * @param routes - the routes to mount, in order.

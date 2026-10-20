@@ -63,32 +63,26 @@ export interface DisposeDeps {
 /**
  * Undo one fiber's registrations, routes, runtimes and shims, in that order.
  *
- * The order is the whole content of this function, and it is not a matter of
- * taste. Three of these steps are load-bearing against a specific failure:
+ * The order is the whole content of this function. Three steps are load-bearing:
  *
- * 1. **The provider registrations go first.** They are the only thing a user
- *    can see from the outside — until they are gone, DSH still offers two
- *    providers whose loopback ports are about to close.
- * 2. **The routes go before the runtimes are torn down.** A route left
- *    reachable while its runtime is half-closed is the leak `docs/issues/13`
- *    is about: a POST to it would start a shim and a refresh interval that
- *    nothing will ever clean up.
- * 3. **`disposed` is set BEFORE the interval is cleared.** This is the subtle
- *    one, and it was a comment rather than a test until this module existed.
- *    `beginCatalogUpdates` installs its interval from a `refreshCatalog().then`
- *    callback — a microtask. If dispose cleared the timer first and set the
- *    flag after, then a `then` that runs between the two statements installs a
- *    FRESH interval onto a runtime that no longer has one to clear: a zombie
- *    credential-resolution loop that outlives the plugin and keeps resolving
- *    credentials for a region nothing is serving. The flag is therefore set
- *    first, unconditionally, for every runtime, before anything is cleared.
+ * 1. **The provider registrations go first** — they are the only thing a user
+ *    can see: until they are gone, DSH still offers two providers whose
+ *    loopback ports are about to close.
+ * 2. **The routes go before the runtimes are torn down** — a route left
+ *    reachable while its runtime is half-closed starts a shim and a refresh
+ *    interval nothing will ever clean up.
+ * 3. **`disposed` is set BEFORE the interval is cleared** — the interval is
+ *    installed from a `refreshCatalog().then` microtask, so clearing the timer
+ *    first lets a `then` running in between install a FRESH interval on a
+ *    runtime that no longer has one to clear: a zombie credential-resolution
+ *    loop that outlives the plugin.
  *
- * A disposal that is given a rejecting `close()` still finishes: `close()` is
- * documented idempotent and swallows `ERR_SERVER_NOT_RUNNING`, and
- * `allSettled` means one failed close cannot strand the others. The port that
- * failed to release is the host's to report, not something to throw over on the
- * way out — an exception here surfaces as a failed fiber cleanup in a place
- * the user cannot act on.
+ * Background: docs/issues/13-lifecycle-dispose.md
+ *
+ * A disposal given a rejecting `close()` still finishes: `close()` is
+ * documented idempotent, swallows `ERR_SERVER_NOT_RUNNING`, and `allSettled`
+ * keeps one failed close from stranding the others — the port that failed to
+ * release is the host's to report, not something to throw over on the way out.
  *
  * @param deps - everything this needs; see {@link DisposeDeps}.
  * @returns what was undone, for the caller's own logging.

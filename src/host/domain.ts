@@ -209,20 +209,12 @@ export interface CatalogLike {
   lastSaveError?: unknown
 }
 
-/**
- * The failure a refresh left behind, per-reason.
- *
- * `credential` and `no-credential` and `fetch` are transient; a protocol shape
- * change is not, which is why the reason travels with the record instead of
- * being collapsed into a boolean. `persist` is a third class: the upstream
- * answer landed in memory, but the disk write was swallowed — the rows on
- * screen are the newest answer, yet they will not survive a restart.
- * `daily-limit` is a fourth, and the only one the user can neither fix nor
- * retry: upstream says the account's daily allowance is spent (docs/issues/24),
- * so the model list is refused until the day rolls over. It is recorded as
- * itself rather than folded into `fetch` so the card can say that instead of
- * "temporary, try again".
- */
+/** The failure a refresh left behind, per-reason. The reason travels with the
+ * record, not a boolean: `credential` / `no-credential` / `fetch` are transient,
+ * a shape change is not, `persist` means the newest answer is on screen but
+ * will not survive a restart, and `daily-limit` is the one the user can neither
+ * fix nor retry (docs/issues/24-terminal-failure-status-codes.md) — it keeps its
+ * own reason so the card can say so instead of "temporary, try again". */
 export interface RefreshFailure {
   reason: RefreshFailureReason
   error?: unknown
@@ -584,21 +576,10 @@ export interface HostContext {
   llm: {
     /**
      * Declared with an explicit `this`, because the host implementation is a
-     * `this`-bound method (`registerAdapter` runs `this.ctx.effect(...)`), not a
-     * free function.
-     *
-     * The earlier arrow-property form erased that receiver: it let
-     * `registerAdapter: ctx.llm.registerAdapter` — a detached reference —
-     * typecheck, and the resulting `this === undefined` threw
-     * `Cannot read properties of undefined (reading 'effect')` at activation,
-     * which took the card's routes down with it (docs/issues/20).
-     *
-     * `this: HostContext['llm']` (not `this: void`) is what actually guards the
-     * regression: it makes the receiver mandatory, so extracting the method and
-     * calling it detached is TS2684 rather than a runtime TypeError. `this: void`
-     * would accept exactly the buggy hand-off, since a void receiver is
-     * assignable from anything.
-     */
+     * `this`-bound method (`registerAdapter` runs `this.ctx.effect(...)`).
+     * `this: HostContext['llm']` (not `this: void`) is the guard: the receiver
+     * is mandatory, so a detached call is TS2684, not a runtime TypeError
+     * (docs/issues/20-llm-handoff-detached.md). */
     registerAdapter(
       this: HostContext['llm'],
       providerIds: string[],

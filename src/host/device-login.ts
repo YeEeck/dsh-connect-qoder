@@ -1,38 +1,11 @@
 /**
- * Qoder's device login: the authorize URL, the poll and the refresh — as a pure
- * protocol layer with no peer dependencies.
+ * Qoder's device login: authorize URL, poll, refresh — a pure protocol layer.
  *
- * This is the protocol half of the device-login credential source
- * (docs/issues/21-device-login-credential-source.md); the storage half is
- * `credential-vault.ts`. It was lifted out of `probe/qoder-device-login.mjs`,
- * the instrument that ran the whole closure against both live regions, and every
- * constant, URL shape and error rule below is copied from it rather than
- * re-derived from a specification, because this protocol is reverse-engineered
- * from a shipping client and not documented anywhere.
+ * The protocol is reverse-engineered from a shipping client: every constant,
+ * URL shape and error rule is copied from `probe/qoder-device-login.mjs`.
  *
- * Split out for one reason: `lib/index.js` pulls in the Cordis peer
- * dependencies, so nothing reachable from the plugin entry can be exercised by
- * a bare `node --test` run or imported by a `probe/` script. This file imports
- * `node:crypto` and nothing else, so both can.
- *
- * What is deliberately NOT here:
- *
- * - **The loop.** One call, one request. The 1 s poll cadence, the 300 s
- *   whole-login budget and the sleep between attempts belong to the caller,
- *   because they are policy (how long a human gets to click "approve") rather
- *   than protocol. The only budget that is a property of the request itself —
- *   the 30 s per-request timeout — does live here.
- * - **Persistence.** Nothing in this file writes a credential down; the caller
- *   hands a payload to the vault.
- * - **A credential in an error.** The failure names are stable literals so that
- *   nothing derived from a response body can travel out of a parse failure: V8
- *   embeds a slice of its input in a JSON syntax error, and on a success
- *   response that input is the access token. The probe learned that by leaking
- *   a live device token into its own log (`43edbd7`).
- *
- * The one thing to read twice is {@link mergeRotation}: a refresh response is
- * NOT a credential, and substituting it for the one it rotated is a measured
- * 403 on both regions.
+ * The loop, the persistence and the request budget belong to the caller.
+ * Background: docs/issues/21-device-login-credential-source.md
  *
  * @module dsh-connect-qoder/device-login
  */

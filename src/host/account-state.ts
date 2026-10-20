@@ -125,33 +125,9 @@ function probeDirs(region: AccountRegion, appDataRoot: string): Array<{ name: st
 
 /**
  * Read one region's sign-in state from local evidence.
- *
- * @param region - one entry of `REGIONS`.
- * @param appDataRoot - the application-data root the region's app directories
- *   live under; `undefined` falls back to `appDataRootFor()` (per-platform:
- *   `%APPDATA%`, `~/Library/Application Support`, or `$XDG_CONFIG_HOME`/`~/.config`),
- *   and `''` when none can be determined, which reads as "no app present".
- * @param options - dependency overrides, all optional:
- *   `loadCredential` / `loadEnvCredential` (the store readers) and
- *   `describeUnwrapFailure` (the recorded-cause reader).
- * @param options.cachedOnly - when true, the store reader is asked NOT to
- *   unwrap a new OSCrypt key. This is what the card's account route uses: the
- *   route runs on every panel render, and an unwrap is a synchronous PowerShell
- *   child with a 30 s timeout, so a machine that cannot unwrap would block the
- *   host's event loop once per render instead of showing the `needs-app` state
- *   the panel exists to explain (issue 07). The consequence is deliberate and
- *   visible: until something else unwraps the key — the startup refresh, the
- *   periodic catalog refresh, or the user pressing "重读登录" — the panel reads
- *   `needs-app`. That is the same state it would have shown anyway, reached
- *   without the freeze.
- * @param options.force - when true, bypass the unwrap failure window and read
- *   the store for real. This is the counterpart to `cachedOnly`, for the one
- *   request that IS a user-initiated re-read; without it, pressing "重读登录"
- *   inside the window would silently do nothing.
- * @returns a state record shaped as
- *   `{ region, displayName, manageUrl, downloadUrl, state, source, appName, identity, detail }`,
- *   where `identity` is `{ name, email, expiresAt? }` or `undefined`, and
- *   carries no credential material of any kind.
+ * @param options.cachedOnly - no OSCrypt unwrap: the route runs on every render.
+ * @param options.force - read for real, bypassing the unwrap failure window.
+ * @returns the `AccountStateRecord` for the region, carrying no credential material.
  */
 export interface ReadAccountStateOptions {
   force?: boolean
