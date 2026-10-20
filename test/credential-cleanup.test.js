@@ -46,8 +46,17 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
-import { sweepStaleOscryptDirs, setCredentialDiagnosticSink } from '../src/host/credentials.ts'
+// The module under test can be pointed at a COPY of the source: that is how
+// `test/mutation-gates.test.js` checks whether the sweep's guards are
+// load-bearing — it deletes a guard in the copy and requires the assertions
+// below to notice. With no override this is the checked-in module.
+const CredentialsModule = process.env.DSH_CREDENTIALS_MODULE
+  ? pathToFileURL(process.env.DSH_CREDENTIALS_MODULE).href
+  : new URL('../src/host/credentials.ts', import.meta.url).href
+
+const { sweepStaleOscryptDirs, setCredentialDiagnosticSink } = await import(CredentialsModule)
 
 /** A fixed, obviously-fake 32-byte key body, base64'd — the sweep's content
  *  check demands exactly a master key's size, so a wrong-length body would be
@@ -407,6 +416,62 @@ test(
       rmSync(victim, { recursive: true, force: true })
       setCredentialDiagnosticSink(undefined)
     }
+  },
+)
+
+test(
+  'a junction wearing our name AND our exact shape is refused, and its victim keeps its key',
+  () => {
+    // The junction test above plants a victim that is NOT ours, so even a sweep
+    // that followed the link would have been stopped by the directory-shape
+    // guard. This one plants OUR shape behind the link — a 32-byte `key.b64`
+    // and the identity marker, exactly two entries, nothing else — so the
+    // ONLY thing standing between the sweep and a deleted victim is the
+    // `lstat` check itself. Follow the link the way the pre-fix sweep did
+    // (`statSync`) and the victim's key file is zeroed and its directory
+    // removed; refuse the link and the victim is byte-for-byte intact.
+    //
+    // This is issue 01's exact failure mode, with the shape that makes it
+    // reachable: the guard that used to do the work was the file-name
+    // prefix, and a directory wearing the prefix is not ours.
+    withTempRoot(() => {
+      const victim = mkdtempSync(join(tmpdir(), 'dsh-victim-'))
+      const victimKey = join(victim, 'key.b64')
+      writeFileSync(victimKey, KEY_BODY)
+      writeFileSync(join(victim, MARKER), '')
+      const before = readFileSync(victimKey)
+      const linkDir = join(tmpdir(), 'qoder-oscrypt-planted-shape')
+      rmSync(linkDir, { recursive: true, force: true })
+      const messages = captureDiagnostics()
+      try {
+        makeDirLink(linkDir, victim)
+        const reclaimed = sweepStaleOscryptDirs(0)
+        assert.equal(reclaimed, 0, 'a planted link is never counted as reclaimed')
+        assert.equal(existsSync(victimKey), true, "the victim's key file must survive the sweep")
+        assert.equal(
+          Buffer.compare(readFileSync(victimKey), before),
+          0,
+          'and it must be byte-for-byte unchanged — not zeroed, not rewritten',
+        )
+        assert.ok(existsSync(victim), 'the victim directory itself must survive')
+        assert.ok(
+          messages.some((m) => /symbolic link|not a credential temp dir/.test(m)),
+          `the link collision must be reported; got ${JSON.stringify(messages)}`,
+        )
+      } finally {
+        try {
+          if (process.platform === 'win32') {
+            rmSync(linkDir, { force: true })
+          } else {
+            unlinkSync(linkDir)
+          }
+        } catch {
+          /* best effort */
+        }
+        rmSync(victim, { recursive: true, force: true })
+        setCredentialDiagnosticSink(undefined)
+      }
+    })
   },
 )
 

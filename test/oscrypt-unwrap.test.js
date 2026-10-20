@@ -40,15 +40,25 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
-import {
+// The module under test can be pointed at a COPY of the source. That is how
+// `test/mutation-gates.test.js` asks whether the guards in this chain are
+// load-bearing: it deletes a guard in the copy and requires the assertions
+// below to notice. With no override this is the checked-in module, so an
+// ordinary run still tests the real thing.
+const OSCryptModule = process.env.DSH_OSCRYPT_MODULE
+  ? pathToFileURL(process.env.DSH_OSCRYPT_MODULE).href
+  : new URL('../src/host/oscrypt-unwrap.ts', import.meta.url).href
+
+const {
   describeUnwrapFailure,
   oscryptKeyFor,
   oscryptKeyForAsync,
   setCredentialDiagnosticSink,
   sweepStaleOscryptDirs,
   zeroOutFile,
-} from '../src/host/oscrypt-unwrap.ts'
+} = await import(OSCryptModule)
 
 /** The 32 bytes a real OSCrypt master key has. */
 const KEY = Buffer.from('0123456789abcdef0123456789abcdef', 'utf8')
