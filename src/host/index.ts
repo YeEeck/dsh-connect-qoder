@@ -78,7 +78,7 @@ import {
   deviceLoginSignOutHandler,
   createTokenHistoryCache,
 } from './handlers.ts'
-import type { DeviceLoginDeps } from './handlers.ts'
+import type { DeviceLoginDeps, TokenHistoryCache } from './handlers.ts'
 import { DeviceLoginFlow } from './device-login-flow.ts'
 import { regionPublishDecision, unreadableSignInDecision } from './region-gate.ts'
 
@@ -416,6 +416,24 @@ interface RegionSources {
   device: DeviceCredentialSource
   /** The credential cache: the desktop store, then the plugin's own credential, then the PAT. */
   credentials: CredentialCache
+}
+
+/**
+ * One region that came up: the runtime that owns it, and the shim serving it.
+ *
+ * Named because the activation, the card routes and the reload route all talk
+ * about the same three things — an inline anonymous type repeated in each of
+ * them is three places for the shape to drift, and the drift would be silent:
+ * a route that expects a `shim` the activation stopped providing would answer
+ * with a model list that no longer matches what the host serves.
+ */
+interface StartedRegion {
+  /** The region descriptor this entry answers for. */
+  region: Region
+  /** The runtime that owns the region's credential, catalog and usage. */
+  runtime: RegionRuntime
+  /** The loopback shim the adapter's models are served through. */
+  shim: ShimHandle
 }
 
 /**
@@ -1056,7 +1074,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
     logger: ctx.logger,
   }
 
-  const started: Array<{ region: Region; runtime: RegionRuntime; shim: ShimHandle }> = []
+  const started: StartedRegion[] = []
   /**
    * Region ids whose start is currently in flight.
    *
@@ -1308,36 +1326,8 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
     loginFlow.clear()
   })
 
-  // Publish the settings surface. Without this the namespace a provider
-  // directory entry points at holds no schema, and no configuration surface
-  // can render a control for this route — context-window choice included.
-  // The 0.2 line serves it as an auto-form derived from the Loader entry's
-  // config schema: `configure({auto:true})` registers that presentation and
-  // nothing else — it does NOT hand the plugin a live source. The live seam
-  // is the Config object the Loader hands `apply`, whose volatile fields are
-  // updated in place after every `settings.mutate` and announced with
-  // `loader/volatile-update` (the listener below). The 0.1.6 host used to
-  // publish a hand-built section through `installSection` and hand back its
-  // own document reference through `setSource`; that line no longer exists,
-  // and with it the second registration shape this used to probe for. A
-  // host without a settings service still gets working models, just no
-  // configuration surface.
-  ctx.inject(['settings'], (settingsCtx: HostContext) => {
-    const settings = requireInjected(settingsCtx.settings, 'settings')
-    try {
-      if (typeof settings.configure === 'function') {
-        settings.configure({ auto: true }, ctx.fiber)
-      } else {
-        // The surface is present but carries no presentation API this plugin
-        // knows: the configuration surface will not render, and saying so
-        // beats a silent one.
-        ctx.logger.warn?.('dsh-connect-qoder: settings service has no configure(); the configuration surface is unavailable')
-      }
-    } catch (error) {
-      ctx.logger.warn?.('dsh-connect-qoder: settings section unavailable', error)
-    }
-  })
-
+  // The settings surface, the volatile-update listener and the seven card
+  // routes are registered from the scope below, by top-level functions.
   // The 0.2 line dispatches `loader/volatile-update` on the plugin fiber after
   // a settings write updates the live config references in place — that is
   // the live seam the configure() auto-form relies on. `current()` re-reads
@@ -1352,133 +1342,8 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
     refreshPicker()
   })
 
-  // Activation health, on a route that is mounted no matter how the provider
-  // registration above went. See QODER_STATUS_PATH for why this exists, and the
-  // recording block above for why the failure no longer unwinds activation.
-  //
-  // `started` is reported as a count rather than a region list: this is a
-  // browser-visible surface, and how many regions came up is diagnostic while
-  // which sign-ins exist is the account panel's job (and has its own route).
-  ctx.inject(['webServer'], (webCtx: HostContext) => {
-    // Injection is the guarantee: `inject(['webServer'], …)` runs this callback
-    // only once that service exists, so binding it to a local states that fact
-    // once instead of re-testing the optional at each of the registrations
-    // below. See `HostContext.webServer` / `HostService.register`.
-    const webServer = requireInjected(webCtx.webServer, 'webServer')
-    mountRouteGroup(webServer, [{
-      path: QODER_STATUS_PATH,
-      handler: (req: IncomingMessage, res: ServerResponse) => statusHandler(req, res, {
-        startedCount: started.length,
-        providerRegistrationError,
-      }),
-    }], routeReleases, ctx.logger)
-  })
-
-  // The settings card needs the live model roster to render one row per model,
-  // and it cannot read the host catalog directly. This route is the only path,
-  // so it is mounted on the optional webServer context and answers with the
-  // catalog the adapter already holds — metadata only, never a credential.
-  ctx.inject(['webServer'], (webCtx: HostContext) => {
-    // Injection is the guarantee: `inject(['webServer'], …)` runs this callback
-    // only once that service exists, so binding it to a local states that fact
-    // once instead of re-testing the optional at each of the registrations
-    // below. See `HostContext.webServer` / `HostService.register`.
-    const webServer = requireInjected(webCtx.webServer, 'webServer')
-    mountRouteGroup(webServer, [{
-      path: QODER_MODELS_PATH,
-      handler: (req: IncomingMessage, res: ServerResponse) => modelsHandler(req, res, {
-        started,
-        currentSettings: current,
-        logger: ctx.logger,
-        rates: MODEL_RATES,
-        // Read at request time, not at registration time: this route mounts
-        // after the registration above has already settled, so the captured
-        // binding is always the final verdict. Shipping it here (as well as on
-        // `QODER_STATUS_PATH`) is what puts the failure in front of the user —
-        // the roster renders either way, so a card that never mentions it shows
-        // a full list of models the picker cannot offer. See `ModelsDeps`.
-        providerRegistrationError,
-      }),
-    }], routeReleases, ctx.logger)
-  })
-
-  // The card's save button writes through this authoritative Host endpoint
-  // (same pattern as the WorkBuddy bundle's `__save`): the settings document
-  // lives in the Host process, and on the DSH 0.2 line the client-side
-  // settings scope `set()` can settle WITHOUT persisting — the Host's
-  // atomic-write retries exhaust on a locked file, the scope reloads Host
-  // state, and returns success anyway. A read-back check catches that, but
-  // the only writer that actually lands the value there is a mutate executed
-  // inside the Host process.
-  ctx.inject(['webServer'], (webCtx: HostContext) => {
-    // `webServer` alone is the point: the route mounts whether or not the
-    // settings service exists, so the service-absent 503 is a real answer the
-    // client can distinguish from a 404 (a host that does not serve this route
-    // at all) — the false-"已保存" this closed, docs/issues/06. `webServer` is
-    // guaranteed present by the injection; see the note on the other
-    // `inject(['webServer'], …)` callbacks.
-    const webServer = requireInjected(webCtx.webServer, 'webServer')
-    mountRouteGroup(webServer, [{
-      path: QODER_SAVE_PATH,
-      handler: (req: IncomingMessage, res: ServerResponse) => saveHandler(req, res, {
-        getSettings: () => webCtx.get?.('settings') as SettingsService | undefined,
-        settingsNs,
-        fallbackNs: QODER_SETTINGS_NS,
-        refreshPicker,
-      }),
-    }], routeReleases, ctx.logger)
-  })
-
-  // The usage panel needs the same treatment: the quota lives upstream behind a
-  // bearer token the browser must never hold, so the host reads it and hands the
-  // card a credential-free summary. Each region is read independently and a
-  // failing region is reported as unavailable rather than failing the panel, so
-  // one dead sign-in cannot hide the other region's numbers.
-  ctx.inject(['webServer'], (webCtx: HostContext) => {
-    // Injection is the guarantee: `inject(['webServer'], …)` runs this callback
-    // only once that service exists, so binding it to a local states that fact
-    // once instead of re-testing the optional at each of the registrations
-    // below. See `HostContext.webServer` / `HostService.register`.
-    const webServer = requireInjected(webCtx.webServer, 'webServer')
-    mountRouteGroup(webServer, [{
-      path: QODER_USAGE_PATH,
-      handler: (req: IncomingMessage, res: ServerResponse) => usageHandler(req, res, {
-        started,
-        logger: ctx.logger,
-        // Same seam the activation warn reads, so the card's explanation and
-        // the log line can never disagree about why the round is missing.
-        umidState: __dshQoderUmidState,
-        requestCounter: globalRequestCounter,
-        tokenCounter: globalTokenCounter,
-        // 7 天历史的进程内备忘录：轮询一次就重读 7 个文件再重发整份数组，
-        // 其中 6 份自从昨天起没动过。缓存按「今日读数」做 key（见
-        // handlers.ts 的 TokenHistoryCache 论证）。
-        tokenHistoryCache: globalTokenHistoryCache,
-      }),
-    }], routeReleases, ctx.logger)
-  })
-
-  // The daily check-in, from a route owned by this plugin.
-  //
-  // Nothing about it is automatic and nothing about it is guessed: the card
-  // names the region, this host re-reads Qoder's own campaign list, and only a
-  // round that is open and unclaimed is ever posted at. The card therefore
-  // cannot claim a stale round even if it were to render one.
-  ctx.inject(['webServer'], (webCtx: HostContext) => {
-    // Injection is the guarantee: `inject(['webServer'], …)` runs this callback
-    // only once that service exists, so binding it to a local states that fact
-    // once instead of re-testing the optional at each of the registrations
-    // below. See `HostContext.webServer` / `HostService.register`.
-    const webServer = requireInjected(webCtx.webServer, 'webServer')
-    mountRouteGroup(webServer, [{
-      path: QODER_CHECKIN_PATH,
-      handler: (req: IncomingMessage, res: ServerResponse) => checkinHandler(req, res, {
-        started,
-        logger: ctx.logger,
-      }),
-    }], routeReleases, ctx.logger)
-  })
-
+  // The status, models, save, usage and check-in routes are registered from
+  // the scope below, by top-level functions.
   /**
    * Start the regions that are not running yet, publishing the widened set.
    *
@@ -1573,7 +1438,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
   // it performs belongs to `lib/account-payload.js`, which a test can import.
   // Keeping it as a closure here once meant the panel's whole read path ran
   // outside every gate in this repository. See that module's header.
-  const accountPayload = (options = {}) =>
+  const accountPayload = (options: { force?: boolean } = {}) =>
     buildAccountPayload({
       regions: REGIONS,
       settings: current(),
@@ -1583,11 +1448,330 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
       ...options,
     })
 
+  /**
+   * Everything the card routes need, handed over explicitly.
+   *
+   * The seven registrations below are top-level functions, so what they touch
+   * has to be named somewhere they can see. Before this scope existed they were
+   * inline `ctx.inject` blocks inside this function, and each one closed over a
+   * different handful of the locals above — a route that needed a ninth thing
+   * had no way to say so, it just reached for it, and the set of reachable
+   * names changed with every edit above.
+   *
+   * A scope is that set, written down: a route that needs something it is not
+   * given fails to compile instead of answering with `undefined`.
+   */
+  const scope: ActivateScope = {
+    ctx,
+    settingsNs,
+    current,
+    refreshPicker,
+    regionSources,
+    started,
+    startStoppedRegions,
+    deviceDeps,
+    routeReleases,
+    // Read at request time rather than copied at scope time: the verdict is
+    // recorded before the routes mount, but a getter keeps the seam honest if
+    // that ever stops being true.
+    providerRegistrationError: () => providerRegistrationError,
+    requestCounter: globalRequestCounter,
+    tokenCounter: globalTokenCounter,
+    tokenHistoryCache: globalTokenHistoryCache,
+    accountPayload,
+  }
+
+  registerSettingsSection(scope)
+  registerStatusRoute(scope)
+  registerModelsRoute(scope)
+  registerSaveRoute(scope)
+  registerUsageRoute(scope)
+  registerCheckinRoute(scope)
+  registerAccountRoutes(scope)
+
+  // Load credentials and catalogs without blocking activation: the providers
+  // are registered either way, and an empty catalog is how DSH hides a model
+  // group until a sign-in appears.
+  for (const { runtime } of started) beginCatalogUpdates(runtime)
+}
+
+/**
+ * Start a region's first catalog fetch and its refresh timer.
+ *
+ * Extracted from the activation tail so a region that comes online later —
+ * through the account reload route, not at process start — gets exactly the
+ * same treatment, including the dispose guard:
+ *
+ * The first refresh may still be in flight when the fiber disposes (disable,
+ * hot reload, upgrade). Without this guard the timer installs onto a dead
+ * runtime and is never cleared again — a zombie credential-resolution loop
+ * that outlives the plugin.
+ */
+function beginCatalogUpdates(runtime: RegionRuntime) {
+  void runtime
+    .refreshCatalog()
+    .catch((error) => {
+      // `doRefreshCatalog` is written to be total, and `applyOutcome` no longer
+      // throws — so reaching here means a defect rather than a failed refresh.
+      // It is caught anyway because the cost of NOT catching it is this
+      // function's whole purpose: the interval below is installed in a
+      // continuation, so a rejection skips it and the region never updates
+      // again, silently, for the life of the plugin.
+      runtime.logger?.error?.(
+        `dsh-connect-qoder: ${runtime.region.displayName} catalog refresh threw out of its own error handling`,
+        error,
+      )
+    })
+    .then(() => {
+      if (runtime.disposed) return
+      runtime.refreshTimer = setInterval(() => {
+        // The interval must survive one bad tick: an unhandled rejection here
+        // would (in Node) terminate the process, and the region would lose its
+        // updates either way.
+        void runtime.refreshCatalog().catch((error) => {
+          runtime.logger?.error?.(
+            `dsh-connect-qoder: ${runtime.region.displayName} catalog refresh threw out of its own error handling`,
+            error,
+          )
+        })
+      }, CATALOG_TTL_MS)
+      runtime.refreshTimer.unref?.()
+    })
+}
+
+/**
+ * What the card routes need from the activation.
+ *
+ * The activation OWNS the state; the routes only read it. Before this
+ * interface existed, each route was an inline `ctx.inject` callback inside
+ * `activate()` and reached into the enclosing function's locals by name — seven
+ * closures over one scope, each closing over a different subset of it, and the
+ * subset was invisible from the outside. A route that needed a thing nobody
+ * handed it got `undefined` and answered with a shape that looked right.
+ *
+ * Naming the subset turns that into a compile error, and it lets the routes
+ * live at the top level of the file, where each one is a thing you can read
+ * instead of a block you have to find.
+ */
+interface ActivateScope {
+  /** The host context the routes register against. */
+  ctx: HostContext
+  /** The namespace the host serves this plugin's settings under. */
+  settingsNs: string
+  /** The live preferences, unwrapped. */
+  current: () => Preferences
+  /** Re-snapshot the model list and tell DSH the roster moved. */
+  refreshPicker: () => void
+  /** Each region's credential sources, by region id. */
+  regionSources: Map<string, RegionSources>
+  /** The regions that came up. */
+  started: StartedRegion[]
+  /** Start the regions that are not running yet — the reload route's job. */
+  startStoppedRegions: (onlyRegionId?: string) => Promise<void>
+  /** The plugin's own sign-in flow. */
+  deviceDeps: DeviceLoginDeps
+  /** Where the route releases are collected, for dispose. */
+  routeReleases: RouteRelease[]
+  /** The provider-registration failure, read when a request asks for it. */
+  providerRegistrationError: () => unknown
+  /** The local request counter, for the usage panel. */
+  requestCounter: RequestCounter
+  /** The local token counter, for the usage panel. */
+  tokenCounter: TokenCounter
+  /** The in-process token history cache. */
+  tokenHistoryCache: TokenHistoryCache
+  /** The account panel's payload builder. */
+  accountPayload: (options?: { force?: boolean }) => Promise<unknown>
+}
+
+/**
+ * Publish the settings surface.
+ *
+ * Without this the namespace a provider directory entry points at holds no
+ * schema, and no configuration surface can render a control for this route —
+ * context-window choice included. The 0.2 line serves it as an auto-form
+ * derived from the Loader entry's config schema: `configure({auto:true})`
+ * registers that presentation and nothing else — it does NOT hand the plugin a
+ * live source. The live seam is the Config object the Loader hands `apply`,
+ * whose volatile fields are updated in place after every `settings.mutate` and
+ * announced with `loader/volatile-update` (the listener in the activation).
+ * The 0.1.6 host used to publish a hand-built section through
+ * `installSection` and hand back its own document reference through
+ * `setSource`; that line no longer exists, and with it the second registration
+ * shape this used to probe for. A host without a settings service still gets
+ * working models, just no configuration surface.
+ */
+function registerSettingsSection(scope: ActivateScope): void {
+  const { ctx } = scope
+  ctx.inject(['settings'], (settingsCtx: HostContext) => {
+    const settings = requireInjected(settingsCtx.settings, 'settings')
+    try {
+      if (typeof settings.configure === 'function') {
+        settings.configure({ auto: true }, ctx.fiber)
+      } else {
+        // The surface is present but carries no presentation API this plugin
+        // knows: the configuration surface will not render, and saying so
+        // beats a silent one.
+        ctx.logger.warn?.('dsh-connect-qoder: settings service has no configure(); the configuration surface is unavailable')
+      }
+    } catch (error) {
+      ctx.logger.warn?.('dsh-connect-qoder: settings section unavailable', error)
+    }
+  })
+}
+
+/**
+ * Activation health, on a route that is mounted no matter how the provider
+ * registration went. See QODER_STATUS_PATH for why this exists, and the
+ * recording block in the activation for why the failure no longer unwinds it.
+ *
+ * `started` is reported as a count rather than a region list: this is a
+ * browser-visible surface, and how many regions came up is diagnostic while
+ * which sign-ins exist is the account panel's job (and has its own route).
+ */
+function registerStatusRoute(scope: ActivateScope): void {
+  const { ctx, started, routeReleases } = scope
   ctx.inject(['webServer'], (webCtx: HostContext) => {
     // Injection is the guarantee: `inject(['webServer'], …)` runs this callback
     // only once that service exists, so binding it to a local states that fact
     // once instead of re-testing the optional at each of the registrations
     // below. See `HostContext.webServer` / `HostService.register`.
+    const webServer = requireInjected(webCtx.webServer, 'webServer')
+    mountRouteGroup(webServer, [{
+      path: QODER_STATUS_PATH,
+      handler: (req: IncomingMessage, res: ServerResponse) => statusHandler(req, res, {
+        startedCount: started.length,
+        providerRegistrationError: scope.providerRegistrationError(),
+      }),
+    }], routeReleases, ctx.logger)
+  })
+}
+
+/**
+ * The settings card needs the live model roster to render one row per model,
+ * and it cannot read the host catalog directly. This route is the only path,
+ * so it is mounted on the optional webServer context and answers with the
+ * catalog the adapter already holds — metadata only, never a credential.
+ */
+function registerModelsRoute(scope: ActivateScope): void {
+  const { ctx, started, current, routeReleases } = scope
+  ctx.inject(['webServer'], (webCtx: HostContext) => {
+    const webServer = requireInjected(webCtx.webServer, 'webServer')
+    mountRouteGroup(webServer, [{
+      path: QODER_MODELS_PATH,
+      handler: (req: IncomingMessage, res: ServerResponse) => modelsHandler(req, res, {
+        started,
+        currentSettings: current,
+        logger: ctx.logger,
+        rates: MODEL_RATES,
+        // Read at request time, not at registration time: this route mounts
+        // after the registration attempt has already settled, so the captured
+        // binding is always the final verdict. Shipping it here (as well as on
+        // `QODER_STATUS_PATH`) is what puts the failure in front of the user —
+        // the roster renders either way, so a card that never mentions it shows
+        // a full list of models the picker cannot offer. See `ModelsDeps`.
+        providerRegistrationError: scope.providerRegistrationError(),
+      }),
+    }], routeReleases, ctx.logger)
+  })
+}
+
+/**
+ * The card's save button writes through this authoritative Host endpoint
+ * (same pattern as the WorkBuddy bundle's `__save`): the settings document
+ * lives in the Host process, and on the DSH 0.2 line the client-side
+ * settings scope `set()` can settle WITHOUT persisting — the Host's
+ * atomic-write retries exhaust on a locked file, the scope reloads Host
+ * state, and returns success anyway. A read-back check catches that, but
+ * the only writer that actually lands the value there is a mutate executed
+ * inside the Host process.
+ */
+function registerSaveRoute(scope: ActivateScope): void {
+  const { ctx, settingsNs, refreshPicker, routeReleases } = scope
+  ctx.inject(['webServer'], (webCtx: HostContext) => {
+    // `webServer` alone is the point: the route mounts whether or not the
+    // settings service exists, so the service-absent 503 is a real answer the
+    // client can distinguish from a 404 (a host that does not serve this route
+    // at all) — the false-"已保存" this closed, docs/issues/06. `webServer` is
+    // guaranteed present by the injection; see the note on the other
+    // `inject(['webServer'], …)` callbacks.
+    const webServer = requireInjected(webCtx.webServer, 'webServer')
+    mountRouteGroup(webServer, [{
+      path: QODER_SAVE_PATH,
+      handler: (req: IncomingMessage, res: ServerResponse) => saveHandler(req, res, {
+        getSettings: () => webCtx.get?.('settings') as SettingsService | undefined,
+        settingsNs,
+        fallbackNs: QODER_SETTINGS_NS,
+        refreshPicker,
+      }),
+    }], routeReleases, ctx.logger)
+  })
+}
+
+/**
+ * The usage panel needs the same treatment: the quota lives upstream behind a
+ * bearer token the browser must never hold, so the host reads it and hands the
+ * card a credential-free summary. Each region is read independently and a
+ * failing region is reported as unavailable rather than failing the panel, so
+ * one dead sign-in cannot hide the other region's numbers.
+ */
+function registerUsageRoute(scope: ActivateScope): void {
+  const { ctx, started, routeReleases } = scope
+  ctx.inject(['webServer'], (webCtx: HostContext) => {
+    const webServer = requireInjected(webCtx.webServer, 'webServer')
+    mountRouteGroup(webServer, [{
+      path: QODER_USAGE_PATH,
+      handler: (req: IncomingMessage, res: ServerResponse) => usageHandler(req, res, {
+        started,
+        logger: ctx.logger,
+        // Same seam the activation warn reads, so the card's explanation and
+        // the log line can never disagree about why the round is missing.
+        umidState: __dshQoderUmidState,
+        requestCounter: scope.requestCounter,
+        tokenCounter: scope.tokenCounter,
+        // 7 天历史的进程内备忘录：轮询一次就重读 7 个文件再重发整份数组，
+        // 其中 6 份自从昨天起没动过。缓存按「今日读数」做 key（见
+        // handlers.ts 的 TokenHistoryCache 论证）。
+        tokenHistoryCache: scope.tokenHistoryCache,
+      }),
+    }], routeReleases, ctx.logger)
+  })
+}
+
+/**
+ * The daily check-in, from a route owned by this plugin.
+ *
+ * Nothing about it is automatic and nothing about it is guessed: the card
+ * names the region, this host re-reads Qoder's own campaign list, and only a
+ * round that is open and unclaimed is ever posted at. The card therefore
+ * cannot claim a stale round even if it were to render one.
+ */
+function registerCheckinRoute(scope: ActivateScope): void {
+  const { ctx, started, routeReleases } = scope
+  ctx.inject(['webServer'], (webCtx: HostContext) => {
+    const webServer = requireInjected(webCtx.webServer, 'webServer')
+    mountRouteGroup(webServer, [{
+      path: QODER_CHECKIN_PATH,
+      handler: (req: IncomingMessage, res: ServerResponse) => checkinHandler(req, res, {
+        started,
+        logger: ctx.logger,
+      }),
+    }], routeReleases, ctx.logger)
+  })
+}
+
+/**
+ * The account panel, and the plugin's own sign-in.
+ *
+ * The account panel answers "which sign-in drives each region, and in which
+ * state" — all from local evidence, so reading it costs no network. It is
+ * where a "this region shows no models" stops being a mystery: the panel says
+ * whether the app is not installed, the sign-in expired, or the store cannot
+ * be read and why.
+ */
+function registerAccountRoutes(scope: ActivateScope): void {
+  const { ctx, started, startStoppedRegions, deviceDeps, regionSources, accountPayload, routeReleases } = scope
+  ctx.inject(['webServer'], (webCtx: HostContext) => {
     const webServer = requireInjected(webCtx.webServer, 'webServer')
     // These three are ONE feature, so they mount as one group: a card that can
     // read its account state but not re-read it or confirm it looks alive and
@@ -1656,53 +1840,4 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
       },
     ], routeReleases, ctx.logger)
   })
-
-  // Load credentials and catalogs without blocking activation: the providers
-  // are registered either way, and an empty catalog is how DSH hides a model
-  // group until a sign-in appears.
-  for (const { runtime } of started) beginCatalogUpdates(runtime)
-}
-
-/**
- * Start a region's first catalog fetch and its refresh timer.
- *
- * Extracted from the activation tail so a region that comes online later —
- * through the account reload route, not at process start — gets exactly the
- * same treatment, including the dispose guard:
- *
- * The first refresh may still be in flight when the fiber disposes (disable,
- * hot reload, upgrade). Without this guard the timer installs onto a dead
- * runtime and is never cleared again — a zombie credential-resolution loop
- * that outlives the plugin.
- */
-function beginCatalogUpdates(runtime: RegionRuntime) {
-  void runtime
-    .refreshCatalog()
-    .catch((error) => {
-      // `doRefreshCatalog` is written to be total, and `applyOutcome` no longer
-      // throws — so reaching here means a defect rather than a failed refresh.
-      // It is caught anyway because the cost of NOT catching it is this
-      // function's whole purpose: the interval below is installed in a
-      // continuation, so a rejection skips it and the region never updates
-      // again, silently, for the life of the plugin.
-      runtime.logger?.error?.(
-        `dsh-connect-qoder: ${runtime.region.displayName} catalog refresh threw out of its own error handling`,
-        error,
-      )
-    })
-    .then(() => {
-      if (runtime.disposed) return
-      runtime.refreshTimer = setInterval(() => {
-        // The interval must survive one bad tick: an unhandled rejection here
-        // would (in Node) terminate the process, and the region would lose its
-        // updates either way.
-        void runtime.refreshCatalog().catch((error) => {
-          runtime.logger?.error?.(
-            `dsh-connect-qoder: ${runtime.region.displayName} catalog refresh threw out of its own error handling`,
-            error,
-          )
-        })
-      }, CATALOG_TTL_MS)
-      runtime.refreshTimer.unref?.()
-    })
 }
