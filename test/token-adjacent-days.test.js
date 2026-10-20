@@ -16,6 +16,8 @@
  * Europe/Berlin 2026: DST starts Sun 2026-03-29 (that day is 23h long),
  * ends Sun 2026-10-25 (that day is 25h long).
  */
+// @ts-check
+
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 

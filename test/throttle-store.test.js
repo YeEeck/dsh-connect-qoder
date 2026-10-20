@@ -19,14 +19,17 @@
  * refusal's one release), and a window that closed while the process was down
  * is dropped on read rather than honoured past its deadline.
  */
+// @ts-check
+
 import { test, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { FileThrottleStore, THROTTLE_FORMAT_VERSION } from '../src/host/throttle-store.ts'
 
+/** @type {string[]} */
 const created = []
 
 /** A fresh temporary directory, removed after the test. */
@@ -38,7 +41,9 @@ function tempDir() {
 
 afterEach(() => {
   while (created.length > 0) {
-    rmSync(created.pop(), { recursive: true, force: true })
+    const dir = created.pop()
+    if (dir === undefined) break
+    rmSync(dir, { recursive: true, force: true })
   }
 })
 

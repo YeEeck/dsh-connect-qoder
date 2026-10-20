@@ -13,6 +13,8 @@
  * 先例：`createQoderAdapter` 需要真的 pi-ai peer 才能构造，只为读一个字段不值得把 peer
  * 拉进测试。
  */
+// @ts-check
+
 import { strict as assert } from 'node:assert'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'

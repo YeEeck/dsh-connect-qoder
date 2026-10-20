@@ -656,3 +656,30 @@ CN 与 PAT 凭据不受影响。二进制每进程只跑一次（`umidInfo` 缓�
   客户端？到「下载」区安装"）在读不到桌面端凭据的平台上是死路。重新校准后不成立：带这句的
   只有 `signed-out`（"应用目录不存在"，建议装客户端完全成立）与 `expired`（只有**读得到**桌面端
   凭据才可能出现，而解密链只有 Windows 有，所以这条分支在 macOS/Linux 上根本到不了）。
+
+---
+
+## 10. 测试树的类型检查只覆盖 13 个文件，其余 90 个只被解析
+
+**位置**：`test/`、`tsconfig.test.json`、`scripts/audit-test-types.mjs`
+
+**为什么没测**：2026-10-20 之前，测试文件完全不在任何编译器程序里——主 `tsconfig.json` 的
+`exclude` 写着 `test`、`allowJs` 是 `false`，而套件是经 Node 的剥类型加载器 import
+`src/**/*.ts` 的，注解被抹掉、一个都没查。测试树现在有了自己的程序（`tsconfig.test.json`），
+但 `checkJs` 是关的：没有 `// @ts-check` 的文件只被解析、不被检查。
+
+**还差多少**：2026-10-20 实测，103 个测试文件里 13 个 opt-in（`npm run audit:test-types` 的
+棘轮下限），其余 90 个只过了解析。把 `checkJs` 打开会得到 **2014 条**错误（`probe/` 目录占
+64 条），按错误码排是 `TS7006`（隐式 any）457 条、`TS2345` 303 条、`TS2339` 233 条、
+`TS7005` 169 条、`TS18048` 148 条、`TS7034` 93 条、`TS2379` 89 条；最重的几个文件是
+`test/handlers.test.js` 161 条、`test/shim.test.js` 136 条、`test/route-mount.test.js` 60 条。
+**这需要一次有预算的迁移，不是一次翻开关**：把 `checkJs: true` 写进 `tsconfig.test.json` 会让
+门禁立刻红，而那 2014 条里绝大多数是测试文件自己没标注的参数类型，逐条改是 90 个文件的工程。
+
+**已经做到哪一步**：`npm run audit:test-types` 盯住三件会静默失守的事——opt-in 集合的棘轮
+下限（摘掉一个 pragma 就红）、编译器真的报了 opt-in 文件的错误（自探针：往 `test/` 里写一个
+带类型错误的临时文件，门禁要求这条错误被报出来）、以及 opt-in 的文件真的在程序里
+（`tsc --listFiles` 逐个点名）。pragma 的语义是实测出来的、不是猜的：只有 `//` 行注释算，
+块注释里的 `@ts-check` 编译器根本不看；token 必须出现在注释开头；最后一个 pragma 赢。
+六种故意破坏（摘 pragma、塞类型错误、把 `test` 加回 `exclude`、前导区加 `@ts-nocheck`、
+把 pragma 放到 import 之后、往未 opt-in 的文件里塞 pragma）都实测会红。

@@ -29,6 +29,8 @@
  * The bundle is not imported — it is a Node entry with side effects. The two
  * hand-off lines are located in its text and asserted textually.
  */
+// @ts-check
+
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'

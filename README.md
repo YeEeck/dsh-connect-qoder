@@ -366,18 +366,20 @@ dsh plugin --profile web add <本仓库路径>
 ## 测试
 
 ```sh
-npm run verify          # typecheck + 两道 any 审计 + build + test + 产物核验，全过才算过
+npm run verify          # typecheck + 两道 any 审计 + 测试树类型门禁 + build + test + 产物核验，全过才算过
 npm run typecheck       # tsc -p tsconfig.json，源码全量类型检查（0 error）
+npm run audit:test-types # 测试树自己的类型程序：tsc -p tsconfig.test.json（13 个测试文件已 opt-in）
 npm test                # node --test "test/*.test.js"
 npm run test:coverage   # 同上 + 覆盖率门槛（行 68 / 分支 82 / 函数 66，跌破即失败）
 npm run build           # 从 src/ 重建 lib/（宿主 bundle + 卡片产物）
 ```
 
-`npm run verify` 跑五件事，每件回答一个不同的问题：
+`npm run verify` 跑六件事，每件回答一个不同的问题：
 
 | 步骤 | 回答什么 | 全过时的输出 |
 |---|---|---|
 | `typecheck` | `src/**` 的每个 `.ts` 都过类型检查 | `tsc` 退出 0、无输出 |
+| `audit:test-types` | 测试文件自己也过类型检查（坏 import、改了名的导出、变了形的参数） | `opted in to type checking: 13 (floor 13)` |
 | `npm test` | 卡片逻辑与宿主半边没被改坏 | 最后一行 `# fail 0` |
 | `build`（宿主 + 卡片） | `lib/index.js` 与 `lib/client.js` 确实由 `src/` 生成 | `MATCH: … byte-for-byte identical` |
 | `verify:host` | 宿主 bundle 不陈旧、公开面与 peer 外置都还在 | `all 11 checks passed`（装了 `tsdown` 时 11 条；没装时 9 条，见下） |
@@ -389,11 +391,31 @@ npm run build           # 从 src/ 重建 lib/（宿主 bundle + 卡片产物）
 受版本管理（`docs/issues/19`），这道本地对拍之外，CI 的 `git diff --exit-code -- lib` 门禁
 也会在推上去时看见它。
 
+**测试树自己也有类型门禁。** 主 `tsconfig.json` 只管 `src/`（它的 `exclude` 里写着 `test`），
+所以测试文件过去完全不在任何编译器程序里：套件经 Node 的剥类型加载器 import `src/**/*.ts`，
+注解被抹掉，一个都没查；测试自身的 `.js` 更连解析都没发生过。`tsconfig.test.json` 是另一半——
+它把测试树放进一个程序，13 个测试文件用 `// @ts-check` 逐个 opt-in，`npm run audit:test-types`
+盯着这个程序。**两个程序是分开的**：`npm run typecheck` 仍然只意味着「每个 `src/**/*.ts` 是
+干净的」，测试程序有自己的门禁与自己的范围。
+
+`allowJs: true` 是让 `.js` 测试文件进程序的那一步，`checkJs: false` 是让没 opt-in 的文件
+只被解析、不被检查。**别把 `checkJs` 打开**：整棵树是 2014 条错误的量级（`probe/` 占 64 条），
+那需要一次有预算的迁移，不是一次翻开关。`tsconfig.test.json` 里的 `exclude` 必须重新声明：
+`extends` 会继承父配置的 `exclude`（`["node_modules","lib","test"]`），继承了之后 `include`
+里的 `test` 根本不进程序，门禁会报「0 error、0 个被检查的文件」，然后一脸无辜地绿着。
+pragma 的规则是实测出来的、不是猜的：只有 `//` 行注释算数（块注释里的 `@ts-check` 编译器
+根本不看），token 必须在注释开头，且最后一个 pragma 赢。剩下的 90 个测试文件还没 opt-in，
+缺口与代价记在 `docs/KNOWN_GAPS.md` 第 10 条（测试树的类型检查只覆盖 13 个文件）。
+
 **绿灯不等于门禁有效。** 这几道门禁每条都用故意的破坏验过：`build` 缺关键串时会拒绝写入
 （第一次构建摇掉全部模块、只剩 84 行，bundler 仍然退出 0）；`verify:host` 往 `lib/index.js`
 尾上追加一行就让 `fresh` 那条红（`the artifact is stale`）并以非 0 退出；`verify:bundle` 把
 探针下界从 `Math.max(0, …)` 改成 `1`，就会在 `formatCountdown|undefined|0` 上报出
-`00:00:00` → `00:00:01` 并以非 0 退出。怀疑门禁时照这个法子再破一次，比看它绿不绿有用。
+`00:00:00` → `00:00:01` 并以非 0 退出；`audit:test-types` 有四种破法——摘掉某个文件的
+`// @ts-check`（棘轮立刻点名「12 个文件 opt-in，下限是 13」）、给已 opt-in 的文件塞一个类型
+错误（tsc 点名到行）、把 `tsconfig.test.json` 的 `exclude` 加回 `test`（逐个点名「这个文件
+opt-in 了却不在程序里」）、在前导区补一行 `// @ts-nocheck`（点名「这个文件的检查被静默关掉
+了」）。怀疑门禁时照这个法子再破一次，比看它绿不绿有用。
 
 `npm run build` 需要构建器（`tsdown`），它是 devDependency，跑之前先 `npm install`。
 **测试与 `typecheck` 都不需要 `lib/`**：测试直接 import `src/**` 的源码（Node 原生剥类型），

@@ -170,6 +170,16 @@ jobs:
       - name: No explicit any
         run: npm run audit:explicit:any
 
+      # The test tree gets its own type program (tsconfig.test.json) because
+      # `npm test` cannot stand in for a compiler: the suite imports
+      # `src/**/*.ts` through Node's native type stripping, which erases the
+      # annotations without checking a single one, and the `.js` test files
+      # were not in any program at all. This step is the one that would notice
+      # a broken import inside a test, a renamed export, or a test file that
+      # quietly dropped out of the program.
+      - name: The test tree is type-checked too
+        run: npm run audit:test-types
+
       - name: Run tests
         run: npm test
 

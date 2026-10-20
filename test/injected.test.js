@@ -8,6 +8,8 @@
  * WITHOUT the service throws — naming the service, instead of registering
  * routes into `undefined` and failing silently later (red line 1, AGENTS.md).
  */
+// @ts-check
+
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { requireInjected } from '../src/host/injected.ts'
@@ -28,6 +30,7 @@ test('a missing service throws, naming the service', () => {
   assert.throws(
     () => requireInjected(undefined, 'webServer'),
     (error) => {
+      assert.ok(error instanceof Error, 'the refusal is an Error, not a thrown string')
       assert.match(error.message, /ctx\.inject ran for 'webServer' without the service/)
       return true
     },

@@ -32,6 +32,8 @@
  * handlers are exercised for real elsewhere; what only this file can catch is
  * the unwinding statement reappearing.
  */
+// @ts-check
+
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'

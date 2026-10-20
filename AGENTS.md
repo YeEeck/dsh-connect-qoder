@@ -93,9 +93,12 @@ npm test                   # node --test "test/*.test.js"（裸 node，套件直
                            # 靠 Node 22.19+/24 原生 strip types；无需安装也能跑）
 npm run test:card          # 只跑 jsdom 卡片 DOM 测试 test/card-dom.test.js
 npm run audit:any          # 两道隐式/显式 any 审计，client 改动容易踩
+npm run audit:test-types   # 测试树的类型门禁（tsconfig.test.json）：opt-in 文件数棘轮 +
+                           # 编译器真的报了 opt-in 文件的错误 + opt-in 文件真的在程序里
 npm run build              # 重建 lib/（host bundle + client bundle），改 src/ 后必跑；
                            # 重建后把 lib/ 与 src/ 同一次提交（CI 新鲜度门禁会查，docs/issues/19）
-npm run verify             # typecheck + 两道 audit + build + test + host/bundle 行为核验
+npm run verify             # typecheck + 两道 audit + 测试树类型门禁 + build + test +
+                           # host/bundle 行为核验
 ```
 
 - **改 client 后**：`npm run build:client`（= `scripts/build-client.mjs --tsdown --write`）。
@@ -104,6 +107,13 @@ npm run verify             # typecheck + 两道 audit + build + test + host/bund
 - **改 host 后**：`npm run build:host`；`verify:host` / `verify:bundle` 是产物级行为比对。
 - 覆盖率门槛：lines 68 / branches 82 / functions 66（`npm run test:coverage`），只看自己域的增减。
 - 测试数随并行会话变化，某个时点的总数不是契约。
+- **测试树有两个程序，别混**：`tsconfig.json` 只管 `src/`（它的 `exclude` 里写着 `test`），
+  `tsconfig.test.json` 管测试树。`npm run typecheck` 绿**不等于**测试文件被检查过——套件是经
+  Node 的剥类型加载器 import `src/**/*.ts` 的，注解一个都没查。想让某个测试文件进类型检查：
+  在**前导区**写 `// @ts-check`（只认 `//` 行注释；块注释里的 `@ts-check` 编译器不看；token
+  必须在注释开头；最后一个 pragma 赢；写在 import 之后无效），并把 opt-in 集合的棘轮下限
+  一起抬（`scripts/audit-test-types.mjs`）。`checkJs` 仍是关的：整棵树打开是 2014 条错误的
+  量级，代价见 `docs/KNOWN_GAPS.md` 第 10 条（测试树的类型检查只覆盖 13 个文件）。
 
 ## 红线（违反任一都会炸到用户机器）
 
