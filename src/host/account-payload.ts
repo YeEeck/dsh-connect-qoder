@@ -29,6 +29,7 @@ import { readAccountStateAsync } from './account-state.ts'
 import type { AccountRegion, AccountStateRecord } from './account-state.ts'
 import type { DeviceCredentialStatus } from './device-credential.ts'
 import { appDataRootFor } from './credentials.ts'
+import type { CredentialKind } from './credential-kind.ts'
 import { regionEnabledFor } from './preferences.ts'
 import type { Preferences } from './preferences.ts'
 
@@ -88,6 +89,16 @@ export interface BuildAccountPayloadOptions {
    * every existing shape assertion in the suite fail for no reason.
    */
   deviceStatus?: (regionId: string) => DeviceCredentialStatus
+  /**
+   * Which credential path is serving this region, when the host knows.
+   *
+   * Injected for the same reason as `deviceStatus`, and optional for the same
+   * reason: a caller with no resolved credential produces exactly the payload
+   * shape that existed before, and the key is added only when there is a kind
+   * to report. `undefined` means "not resolved yet", not "no credential" — the
+   * card falls back to what it can infer when the key is absent.
+   */
+  credentialKind?: (regionId: string) => CredentialKind | undefined
 }
 
 export async function buildAccountPayload({
@@ -98,6 +109,7 @@ export async function buildAccountPayload({
   appDataRoot = appDataRootFor(),
   regionEnabled = regionEnabledFor,
   deviceStatus,
+  credentialKind,
 }: BuildAccountPayloadOptions = {} as BuildAccountPayloadOptions) {
   const enabledRegions = Object.fromEntries(
     regions.map((region) => [region.id, regionEnabled(settings, region.id)]),
@@ -106,15 +118,21 @@ export async function buildAccountPayload({
   // about HOW it was read, the same way it is consistent about what it read.
   const mode = force === true ? { force: true } : { cachedOnly: true }
   const states = await Promise.all(
-    regions.map(async (region) => ({
-      ...(await readAccountState(region, appDataRoot, mode)),
-      enabled: enabledRegions[region.id],
-      // The plugin's own credential is reported alongside the application's
-      // sign-in, not merged into it: they are two credentials with two
-      // lifetimes, and a region can be `signed-out` of the app while the
-      // plugin's own token is perfectly good.
-      ...(deviceStatus === undefined ? {} : { device: deviceStatus(region.id) }),
-    })),
+    regions.map(async (region) => {
+      const kind = credentialKind?.(region.id)
+      return {
+        ...(await readAccountState(region, appDataRoot, mode)),
+        enabled: enabledRegions[region.id],
+        // The plugin's own credential is reported alongside the application's
+        // sign-in, not merged into it: they are two credentials with two
+        // lifetimes, and a region can be `signed-out` of the app while the
+        // plugin's own token is perfectly good.
+        ...(deviceStatus === undefined ? {} : { device: deviceStatus(region.id) }),
+        // Which path is actually serving this region. Absent when nothing has
+        // been resolved yet — the card then falls back to what it can infer.
+        ...(kind === undefined ? {} : { credentialKind: kind }),
+      }
+    }),
   )
   return { regions: states, enabledRegions }
 }

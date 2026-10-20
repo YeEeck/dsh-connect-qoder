@@ -16,7 +16,7 @@
  */
 import * as react from "react"
 import type { CardAccountEntry, TranslateFn, CheckboxEvent } from "./card-model.ts"
-import { withDate, describeThrown, deviceLoginNotice } from "./card-model.ts"
+import { withDate, describeThrown, deviceLoginNotice, effectiveAccountStateOf, credentialChipOf } from "./card-model.ts"
 import { QODER_ACCOUNT_PATH, QODER_ACCOUNT_RELOAD_PATH, QODER_ACCOUNT_CONFIRM_PATH } from "./paths.ts"
 import { getJson, postJson } from "./http.ts"
 import { writeSettingsField } from "./settings-write.ts"
@@ -216,7 +216,7 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 	// status dots on the region strip.
 	const dotClassOf = (state: string | undefined) => state === "ok" || state === "device" ? " dsm-qoder-region-dot-ok" : state === "expired" ? " dsm-qoder-region-dot-expired" : state === "needs-app" ? " dsm-qoder-region-dot-needs" : "";
 	// Whether the DESKTOP application's credential is the one serving this
-	// region.
+	// region, and the EFFECTIVE sign-in state of one region.
 	//
 	// The host reports the desktop application's sign-in in `state` and the
 	// plugin's own credential in `device`, and it deliberately does not merge
@@ -225,26 +225,10 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 	// own, then the PAT (see `credential-cache.ts`) — and the card has to
 	// answer about the credential that order actually picks.
 	//
-	// `source` is the host's own statement of where the sign-in it read came
-	// from: `app` for the desktop store, `env-pat` for the environment
-	// variable. A host that names no source at all is believed when the state
-	// says a sign-in WAS read, which is the older-host shape.
-	const desktopInUse = (entry: CardAccountEntry) =>
-		entry.state === "ok" && (entry.source === "app" || entry.source === undefined);
-	// The EFFECTIVE sign-in state of one region.
-	//
-	// The card has to answer ONE question — "am I signed in for this edition?" —
-	// and on a machine that cannot read the desktop app's keychain the answer
-	// is yes whenever the plugin's own credential is there. Without this, a
-	// macOS user who signed in through the browser read "Unreadable" in the
-	// state label and "Signed in to the plugin" two lines below.
-	//
-	// The desktop's own credential keeps the region when it is the one in use
-	// (a region that reads the desktop store says `ok` and keeps saying so);
-	// otherwise the plugin's own credential serves the region and says so.
-	const effectiveStateOf = (entry: CardAccountEntry): string =>
-		entry.device?.state === "ok" && !desktopInUse(entry) ? "device" : String(entry.state);
-	const stateLabelOf = (entry: CardAccountEntry) => t(`account.state.${effectiveStateOf(entry)}`);
+	// The rules live in `card-model.ts` because they are decidable without a
+	// DOM, and the host's own answer (`credentialKind`) is preferred over the
+	// panel's inference: the host is the one that resolved the credential.
+	const stateLabelOf = (entry: CardAccountEntry) => t(`account.state.${effectiveAccountStateOf(entry)}`);
 	// The strip shows every known region; the detail below it shows
 	// only the one the strip has selected. A selection that no longer
 	// exists should not happen — the host always answers with both
@@ -272,7 +256,7 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 	const deviceSignInOffered = activeRegionId !== undefined && deviceLoginNotice(activeEntry?.device) !== undefined;
 	// The state the CARD acts on for this region — the desktop application's
 	// own state, unless the plugin's own credential is the sign-in in use.
-	const activeEffectiveState = activeEntry !== undefined ? effectiveStateOf(activeEntry) : "";
+	const activeEffectiveState = activeEntry !== undefined ? effectiveAccountStateOf(activeEntry) : "";
 	// Whether the plugin's own credential is the sign-in in use here. It is a
 	// different question from `deviceSignInOffered` (can the card offer a
 	// browser sign-in?), and it is what makes this region signed in.
@@ -297,23 +281,13 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 		// the PAT and after a lapsed desktop one, so it is the credential
 		// serving the region in exactly the cases where the desktop's own
 		// state is not "ok".
-		if (activeEffectiveState === "device") {
+		const chip = credentialChipOf(activeEntry);
+		if (chip === "device") {
 			activeMeta.push(t("account.deviceFrom"));
-		} else {
-			if (activeEntry.source === "env-pat") activeMeta.push(t("account.envPat"));
-			// The app chip names where the credential CAME FROM, so it may only
-			// appear when a credential was actually read. In the `needs-app` state
-			// the host reports the app DIRECTORY's name — it found Qoder
-			// installed but could not read a sign-in out of it — so "from Qoder"
-			// there claims a sign-in this machine does not have. A host that names
-			// no source at all is believed only when the state says the sign-in
-			// WAS read.
-			const appCredentialRead =
-				activeEntry.source === "app" ||
-				(activeEntry.source === undefined && (activeEntry.state === "ok" || activeEntry.state === "expired"));
-			if (appCredentialRead && typeof activeEntry.appName === "string" && activeEntry.appName !== "") {
-				activeMeta.push(t("account.appFrom", { app: activeEntry.appName }));
-			}
+		} else if (chip === "env") {
+			activeMeta.push(t("account.envPat"));
+		} else if (chip === "app" && typeof activeEntry.appName === "string" && activeEntry.appName !== "") {
+			activeMeta.push(t("account.appFrom", { app: activeEntry.appName }));
 		}
 		if (activeHasIdentity && Number(activeIdentity.expiresAt) > 0) activeMeta.push(withDate(t("account.expiresAt"), activeIdentity.expiresAt));
 	}
@@ -376,7 +350,7 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 										if (entry.state !== "ok") void reload();
 									}}
 								>
-								<span aria-hidden="true" className={`dsm-qoder-region-dot${dotClassOf(effectiveStateOf(entry))}`} />
+								<span aria-hidden="true" className={`dsm-qoder-region-dot${dotClassOf(effectiveAccountStateOf(entry))}`} />
 								<span className="dsm-qoder-region-name">{entry.regionName ?? regionId}</span>
 							</button>
 							{/* No switch here any more. The pill used to carry

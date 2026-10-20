@@ -33,6 +33,7 @@ import type { SettingsService } from './settings-save.ts'
 import { classifyUpstreamError, describeThrown, isProtocolShapeChangedError, providerRegistrationState, thrownFlag } from './errors.ts'
 import type { DeviceLoginFlow } from './device-login-flow.ts'
 import type { DeviceCredentialStatus } from './device-credential.ts'
+import type { CredentialKind } from './credential-kind.ts'
 import {
   campaignIsClaimed,
   checkinStateFrom,
@@ -609,6 +610,16 @@ export interface StatusDeps {
    * is the zero-region case and is not a failure).
    */
   providerRegistrationError?: unknown
+  /**
+   * The regions and the credential path serving each of them.
+   *
+   * Reported because the status route is the surface a user is sent to when
+   * something is not working, and "which of the two sign-ins is in use" is the
+   * first question. `credentialKind` is absent for a region that has resolved
+   * no credential yet — that is different from a region served by the desktop
+   * application, and the difference is the point.
+   */
+  regions?: readonly { id: string; credentialKind?: CredentialKind }[]
 }
 
 /**
@@ -645,6 +656,14 @@ export async function statusHandler(
     activated: providerRegistration.ok,
     startedRegions: deps.startedCount,
     providerRegistration,
+    ...(deps.regions === undefined
+      ? {}
+      : {
+        regions: deps.regions.map((region) => ({
+          id: region.id,
+          ...(region.credentialKind === undefined ? {} : { credentialKind: region.credentialKind }),
+        })),
+      }),
   })
 }
 

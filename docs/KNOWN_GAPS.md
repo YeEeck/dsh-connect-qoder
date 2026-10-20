@@ -613,6 +613,16 @@ CN 与 PAT 凭据不受影响。二进制每进程只跑一次（`umidInfo` 缓�
 - **只签浏览器登录的用户现在也有"在线校验登录"按钮**（`account-panel.tsx`）。按钮以前只在
   `source` 有值时出现，而插件自有登录在账号行里 `source` 是空的——于是这条唯一在 macOS 上
   真正好用的路子，反而没有按钮可点。
+- **宿主现在直接说「谁在服务这个版本」**（`credential-kind.ts` + `credential-cache.ts` +
+  `account-payload.ts` + `index.ts` + `handlers.ts` + `card-model.ts`）。以前「桌面端还是插件
+  自有」这件事**只有卡片能猜**：`effectiveStateOf()` 靠账号行里的 `source` 反推，而 `source`
+  只在「桌面端 → PAT」的读取链里产生，插件自有登录那条永远不出现——于是卡片在「桌面端登录
+  过期、插件自有登录在服务」时只能靠 `device.state === 'ok'` 猜，猜错就显示成"没登录"。
+  现在**宿主是唯一知道实际解出哪条凭据的一方**，它把答案写成 `credentialKind`（`desktop` /
+  `device` / `env` 三档）随账号面板 payload 与 status 路由一起上报；卡片优先用这个字段，
+  拿不到时才回退到旧推断（兼容尚未解析出凭据的机器：面板渲染路径刻意不解析，宿主可能
+  真的还不知道）。宿主的答案来自**凭据缓存最后一次解析出的那一条**，与 runtime 用的
+  是同一次解析，不是另一次读盘。
 - **确认路由的兜底路径现在也读得到设备凭据**（`index.ts` + `handlers.ts`）。`deps.readCredential`
   这个接缝以前在宿主侧**从未接线**，所以没有 runtime 的 region 走兜底时只读桌面端与 PAT，
   插件自己的浏览器登录看不见。宿主现在把它接到**按 region 共享的凭据缓存**上（`RegionSources`），
@@ -621,11 +631,18 @@ CN 与 PAT 凭据不受影响。二进制每进程只跑一次（`umidInfo` 缓�
 
 **仍未做（host 侧 payload 语义，等定夺）**：
 
-- **宿主上报的 `source` 还分不出"插件自有登录"**（`account-state.ts` 的 `readAccountState` 只读
-  桌面端 → PAT，账号行里 `source` 永远不会出现 `device`）。这一轮是**客户端自己**把两本账合上
-  的：宿主仍然并列上报，卡片按"在服务的是谁"来显示。要让宿主也说出这句话，就得让"生效凭据"
-  成为唯一判据——那会改 payload 语义（`source` 多一档 `device`），牵动 `region-gate` 的判定与
+- **`source` 字段本身仍旧只分桌面端与 PAT**（`account-state.ts` 的 `readAccountState` 只读
+  桌面端 → PAT，账号行里 `source` 永远不会出现 `device`）。这一轮**刻意没改它的语义**：
+  让 `source` 多一档 `device` 会牵动 `region-gate` 的判定与
   `docs/issues/21-device-login-credential-source.md` 的验收，属于**要单独设计**的改动。
+  取而代之的是加了一个**正交**的新字段 `credentialKind`：它不描述「这条账号状态的证据来自
+  哪」，而描述「**实际在服务的是哪条凭据**」，两者可以同时成立（账号状态的证据读自桌面端，
+  但那条已过期、真正在服务的是插件自有登录——这正是本节开头那句"两句互相打架的话"）。
+  代价是 `source` 与 `credentialKind` 可能不一致，那是它们各自的职责，不是漂移。
+- **「谁在服务」目前只到凭据这一层**：`credentialKind` 说的是**凭据**来自哪条路（桌面端 store
+  / 插件自有 / 环境变量），还没说**这个版本是不是真的在用这条凭据**（例如区域被关掉、
+  provider 没注册成功时，凭据仍可能解出来）。要回答后者得把 provider 注册态也接进同一个
+  字段，牵动 `region-gate`，与上一条同源。
 - **"非 Windows 上不该建议装客户端"这条不成立，已撤下**：原以为 `account.download`（"没装 Qoder
   客户端？到「下载」区安装"）在读不到桌面端凭据的平台上是死路。重新校准后不成立：带这句的
   只有 `signed-out`（"应用目录不存在"，建议装客户端完全成立）与 `expired`（只有**读得到**桌面端

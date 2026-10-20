@@ -32,6 +32,7 @@ import {
 } from './credentials.ts'
 import { buildAccountPayload } from './account-payload.ts'
 import { CredentialCache } from './credential-cache.ts'
+import type { CredentialKind } from './credential-kind.ts'
 import { CredentialVault } from './credential-vault.ts'
 import { DeviceCredentialSource } from './device-credential.ts'
 import { FileThrottleStore } from './throttle-store.ts'
@@ -416,6 +417,16 @@ interface RegionSources {
   device: DeviceCredentialSource
   /** The credential cache: the desktop store, then the plugin's own credential, then the PAT. */
   credentials: CredentialCache
+  /**
+   * Which credential path is serving this region, as far as the host knows.
+   *
+   * `undefined` until something has been resolved — the panel render path
+   * deliberately does not resolve (see issue 07), so on a machine where the
+   * panel is the first thing to run, the host may not know yet. The card falls
+   * back to what it can infer in that case; the point of this field is that
+   * once the host DOES know, the card stops guessing.
+   */
+  credentialKind: () => CredentialKind | undefined
 }
 
 /**
@@ -1040,7 +1051,8 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
   const regionSources = new Map<string, RegionSources>()
   for (const region of REGIONS) {
     const device = deviceSourceFor(region, ctx)
-    regionSources.set(region.id, { device, credentials: credentialCacheFor(region, ctx, device) })
+    const credentials = credentialCacheFor(region, ctx, device)
+    regionSources.set(region.id, { device, credentials, credentialKind: () => credentials.kind })
   }
   /**
    * The sign-in conversation, driven by the card.
@@ -1445,6 +1457,10 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
       // Same reader the sign-out route answers with, so the sentence the panel
       // shows after signing out is the sentence it shows on the next render.
       deviceStatus: deviceDeps.status,
+      // Which sign-in is serving each region, as far as the host knows. The
+      // card used to infer this; the host can see the resolved credential, so
+      // the host says it (see `RegionSources.credentialKind`).
+      credentialKind: (regionId) => regionSources.get(regionId)?.credentialKind(),
       ...options,
     })
 
@@ -1628,9 +1644,13 @@ function registerSettingsSection(scope: ActivateScope): void {
  * `started` is reported as a count rather than a region list: this is a
  * browser-visible surface, and how many regions came up is diagnostic while
  * which sign-ins exist is the account panel's job (and has its own route).
+ * Which CREDENTIAL PATH each region is served by rides along, though: the
+ * count says how many came up, and this says whether the desktop application
+ * or the plugin's own sign-in is the one actually being used — the first
+ * question when the answer looks wrong.
  */
 function registerStatusRoute(scope: ActivateScope): void {
-  const { ctx, started, routeReleases } = scope
+  const { ctx, started, routeReleases, regionSources } = scope
   ctx.inject(['webServer'], (webCtx: HostContext) => {
     // Injection is the guarantee: `inject(['webServer'], …)` runs this callback
     // only once that service exists, so binding it to a local states that fact
@@ -1642,6 +1662,10 @@ function registerStatusRoute(scope: ActivateScope): void {
       handler: (req: IncomingMessage, res: ServerResponse) => statusHandler(req, res, {
         startedCount: started.length,
         providerRegistrationError: scope.providerRegistrationError(),
+        regions: REGIONS.map((region) => ({
+          id: region.id,
+          credentialKind: regionSources.get(region.id)?.credentialKind(),
+        })),
       }),
     }], routeReleases, ctx.logger)
   })

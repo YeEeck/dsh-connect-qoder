@@ -16,6 +16,7 @@
  */
 import { isCredentialUsable } from './credentials.ts'
 import type { LoadedCredential } from './credentials.ts'
+import { credentialKindOf, type CredentialKind } from './credential-kind.ts'
 
 /** What a PAT exchange answers — the three fields the cache copies across. */
 export interface ExchangedPat {
@@ -399,6 +400,20 @@ export class CredentialCache {
     }
     this.cached = credential
     return credential
+  }
+
+  /**
+   * The path the cached credential came from.
+   *
+   * `undefined` when nothing is cached yet, or when the cached credential was
+   * cleared. The card used to infer this from the account payload's `source`
+   * field, which describes what the panel could see rather than what the
+   * runtime resolved; here the answer comes from the credential actually in
+   * hand, so "the desktop app is serving this region" and "the plugin's own
+   * sign-in is serving it" stop being guesses.
+   */
+  get kind(): CredentialKind | undefined {
+    return credentialKindOf(this.cached)
   }
 
   /**

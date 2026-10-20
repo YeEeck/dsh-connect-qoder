@@ -248,8 +248,22 @@ export interface CardAccountEntry {
 	 * rather than a "not signed in" that would be a claim it cannot make.
 	 */
 	device?: CardDeviceEntry
+	/**
+	 * Which credential path is serving this region, as the HOST resolved it.
+	 *
+	 * The host knows the answer — it is the one that resolved the credential —
+	 * so it says it: `desktop` for the desktop application's own sign-in,
+	 * `device` for the credential this plugin obtained itself, `env` for a PAT
+	 * from the environment. Absent means the host has resolved nothing yet (or
+	 * is an older build that does not report it), and the card then falls back
+	 * to what it can infer from `state` and `source`.
+	 */
+	credentialKind?: CardCredentialKind
 	[key: string]: unknown
 }
+
+/** The three credential paths, named the way the host reports them. */
+export type CardCredentialKind = "desktop" | "device" | "env"
 
 /** One region's plugin-owned credential, as the account route reports it. */
 export interface CardDeviceEntry {
@@ -257,6 +271,74 @@ export interface CardDeviceEntry {
 	state?: string
 	/** Why, when the state is one the user has to act on. */
 	reason?: string
+}
+
+/**
+ * Which credential path is serving this region, as the host reported it.
+ *
+ * `undefined` when the host named none — an older build, or a host that has
+ * resolved no credential yet. The callers then fall back to what the panel can
+ * infer, which is a guess; the host's answer is not.
+ */
+export function credentialKindOf(entry: CardAccountEntry): CardCredentialKind | undefined {
+	const kind = entry.credentialKind;
+	return kind === "desktop" || kind === "device" || kind === "env" ? kind : undefined;
+}
+
+/**
+ * Whether the DESKTOP application's credential is the one serving this region.
+ *
+ * The host resolves credentials in one order — the desktop store, then the
+ * plugin's own, then the PAT (see `src/host/credential-cache.ts`) — and the card
+ * has to answer about the credential that order actually picks. When the host
+ * names the kind, that is the answer; otherwise the panel's own inference is
+ * used: a region that reads the desktop store says `ok` and keeps saying so.
+ */
+export function desktopCredentialInUse(entry: CardAccountEntry): boolean {
+	const kind = credentialKindOf(entry);
+	if (kind !== undefined) return kind === "desktop";
+	return entry.state === "ok" && (entry.source === "app" || entry.source === undefined);
+}
+
+/**
+ * The EFFECTIVE sign-in state of one region.
+ *
+ * The card has to answer ONE question — "am I signed in for this edition?" —
+ * and on a machine that cannot read the desktop app's keychain the answer is
+ * yes whenever the plugin's own credential is the one in use. Without this, a
+ * macOS user who signed in through the browser read "Unreadable" in the state
+ * label and "Signed in to the plugin" two lines below.
+ */
+export function effectiveAccountStateOf(entry: CardAccountEntry): string {
+	const kind = credentialKindOf(entry);
+	if (kind === "device") return "device";
+	if (kind !== undefined) return String(entry.state);
+	return entry.device?.state === "ok" && !desktopCredentialInUse(entry) ? "device" : String(entry.state);
+}
+
+/**
+ * Which source chip this region's credential deserves.
+ *
+ * ONE chip, because two of them at once ("from Qoder · from the plugin's own
+ * sign-in") reads as a contradiction. The host's kind decides it when it is
+ * there; otherwise the panel falls back to the source it was told about.
+ */
+export function credentialChipOf(entry: CardAccountEntry): "device" | "env" | "app" | undefined {
+	const kind = credentialKindOf(entry);
+	if (kind === "device") return "device";
+	if (kind === "env") return "env";
+	if (kind === "desktop") return "app";
+	if (effectiveAccountStateOf(entry) === "device") return "device";
+	if (entry.source === "env-pat") return "env";
+	// The app chip names where the credential CAME FROM, so it may only appear
+	// when a credential was actually read. In the `needs-app` state the host
+	// reports the app DIRECTORY's name — it found Qoder installed but could not
+	// read a sign-in out of it — so "from Qoder" there claims a sign-in this
+	// machine does not have.
+	const appCredentialRead =
+		entry.source === "app" ||
+		(entry.source === undefined && (entry.state === "ok" || entry.state === "expired"));
+	return appCredentialRead ? "app" : undefined;
 }
 
 /** The translation function the host injects. */

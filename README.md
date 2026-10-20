@@ -275,6 +275,7 @@ dsh plugin --profile web add <本仓库路径>
 | `src/host/catalog-store.ts` | 目录的磁盘缓存与原子落盘（无 peer 依赖） |
 | `src/host/catalog-refresh.ts` | 一次目录刷新的结果如何落地：**空目录也是结果**（照实清空并推进 `fetchedAt`），只有失败才保留上一份，且失败按 `credential` / `no-credential` / `fetch` / `protocol-shape-changed` 分档（无 peer 依赖） |
 | `src/host/credential-cache.ts` | 凭据缓存与「登录失效后重读」规则，以及 env-PAT 兑换的 429 节流闸门（平台自述窗口优先、否则指数退避；401/403 停泊，仅「重读登录」释放；无 peer 依赖）。三源顺序是「桌面端（**没过期**才算在场）→ 插件自有设备登录 → 环境变量 PAT」：过期的桌面端 access token 什么都干不了（连 provider 都不会被注册），所以它不再压住后面两条 |
+| `src/host/credential-kind.ts` | 「这个版本现在是谁在服务」的答案：凭据来源标签 → `desktop` / `device` / `env` 三档。宿主是唯一知道实际解出哪条凭据的一方，所以由它说；卡片与 status 路由据此把「桌面端登录」与「插件自有登录」两本账并成一条，不再靠面板猜（无 peer 依赖） |
 | `src/host/throttle-store.ts` | 兑换节流闸门的磁盘持久化（只存未过期的 rate-limit 窗口、parked 停泊与令牌一律不落盘，原子写，无 peer 依赖） |
 | `src/host/request-counter.ts` | 本地「今日经本客户端请求次数」计数：上游只报「用完了」不给每日上限，故只能本地自计（每次对话轮 +1，重试不重复计）。按 region + 上海本地日分文件、零点翻页、原子写（`temp/rename`）、越界 region 分量拒绝写盘、`gc` 只删本插件命名且早于保留期的旧日文件；撞 `daily_limit_exceeded` 时置 `dailyLimitHit` 不丢计数（无 peer 依赖） |
 | `src/host/token-counter.ts` | 本地「今日经本客户端消耗的 token 数」累加器：shim 每抓到一个上游 usage 帧（`total_tokens` / `cached_tokens`，上游每轮明确下发）就累加进本插件文件（`.qoder-token-count.<region>.<day>.json`）。与请求计数器同源同套路（按 region + 上海本地日分文件、零点翻页、原子写、越界防护、`gc` 只删本插件旧文件），但数据来自上游而非本地估算——聚合的是上游已经公开的真实 token 数，不画比例条（无每日上限口径）；`tokensFromUsage` 对坏帧返回 `null` 宁可不加也不加错 |
@@ -480,6 +481,13 @@ PowerShell，这些在别的平台上行为不同。
 - `test/account-state.test.js` —— 账号状态四档判定（`src/host/account-state.ts`）：
   全注入的存储读器 + 真实临时目录跑目录存在性检查，钉住「判定只信本地证据」
   与「状态记录不含任何凭据材料」两条不变量。
+- `test/credential-kind.test.js` —— 「这个版本现在是谁在服务」这句话曾经**只有卡片能猜**：
+  宿主把桌面端与插件自有两条凭据并列上报，卡片靠 `source` 字段反推，而 `source` 只在
+  「桌面端 → PAT」的读取链里产生，插件自有登录那条永远不出现——桌面端登录一过期，
+  卡片就显示成"没登录"。现在宿主是唯一知道实际解出哪条凭据的一方，它把答案写成
+  `credentialKind`（`desktop` / `device` / `env`）随账号面板与 status 路由上报，
+  卡片不再猜。这个文件钉住三档命名、缓存解析前后的取值，以及「宿主还没解析出凭据时
+  那个键不出现」（出现了就成了另一种撒谎）。
 - `test/errors-classify.test.js` —— 105 与 10605 的优先级决定了「提示用户重新登录」
   还是「排队等待」，两者弄反的代价完全不同。
 - `test/settings-save.test.js` —— DSH 0.2 代上 `set()` 会静默成功而不落盘；

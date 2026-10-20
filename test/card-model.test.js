@@ -33,6 +33,10 @@ import {
   describeThrown,
   providerRegistrationFailure,
   usageUnavailableKey,
+  credentialKindOf,
+  desktopCredentialInUse,
+  effectiveAccountStateOf,
+  credentialChipOf,
 } from '../src/client/card-model.ts'
 
 /** A translation stub that names the key it is asked for. */
@@ -255,4 +259,49 @@ test('usageUnavailableKey gives a spent allowance its own wording', () => {
   // can only carry one reason, but an older host's unknown string must not be
   // mistaken for either.
   assert.equal(usageUnavailableKey({ unavailableReason: 'credential' }), 'usage.unavailable')
+})
+
+// --- the credential path -----------------------------------------------------
+
+test('the host\'s credential kind is the answer, and its absence is not one', () => {
+  assert.equal(credentialKindOf({ credentialKind: 'desktop' }), 'desktop')
+  assert.equal(credentialKindOf({ credentialKind: 'device' }), 'device')
+  assert.equal(credentialKindOf({ credentialKind: 'env' }), 'env')
+  // A host that names something else is not trusted to name the path: the card
+  // falls back to its own inference rather than acting on a word it does not know.
+  assert.equal(credentialKindOf({ credentialKind: 'pat' }), undefined)
+  assert.equal(credentialKindOf({}), undefined)
+})
+
+test('the host says which credential is in use, so the card does not have to guess', () => {
+  // The desktop store exists and its token has lapsed; the plugin\'s own
+  // credential is what actually serves the region. The old inference read the
+  // account payload alone and called this "the desktop app".
+  const entry = { state: 'expired', source: 'app', device: { state: 'ok' }, credentialKind: 'device' }
+  assert.equal(desktopCredentialInUse(entry), false)
+  assert.equal(effectiveAccountStateOf(entry), 'device')
+})
+
+test('a host that names no kind leaves the card on its own inference', () => {
+  // The older shape: `state` and `source` only. The card still has to answer.
+  const desktop = { state: 'ok', source: 'app' }
+  assert.equal(desktopCredentialInUse(desktop), true)
+  assert.equal(effectiveAccountStateOf(desktop), 'ok')
+
+  const pluginOwned = { state: 'signed-out', source: undefined, device: { state: 'ok' } }
+  assert.equal(desktopCredentialInUse(pluginOwned), false)
+  assert.equal(effectiveAccountStateOf(pluginOwned), 'device')
+})
+
+test('one chip names the credential actually in use', () => {
+  assert.equal(credentialChipOf({ credentialKind: 'device' }), 'device')
+  assert.equal(credentialChipOf({ credentialKind: 'env' }), 'env')
+  assert.equal(credentialChipOf({ credentialKind: 'desktop' }), 'app')
+  // Without the host\'s answer, the panel\'s old inference still holds.
+  assert.equal(credentialChipOf({ state: 'ok', source: 'app' }), 'app')
+  assert.equal(credentialChipOf({ state: 'ok', source: 'env-pat' }), 'env')
+  assert.equal(credentialChipOf({ state: 'signed-out', source: undefined, device: { state: 'ok' } }), 'device')
+  // The app chip may only appear when a credential was actually READ: in the
+  // `needs-app` state the host names the app DIRECTORY, not a sign-in.
+  assert.equal(credentialChipOf({ state: 'needs-app', source: undefined }), undefined)
 })
