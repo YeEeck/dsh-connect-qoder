@@ -421,10 +421,9 @@ card 正则推导已改为精确候选（`|| /qoder/i.test(...)` 那种子串匹
   根治办法是在 app 关闭时把依赖改成 link：`dsh plugin add <本仓库路径> --profile desktop`
   （web profile 就是这么装的，是符号链接）。
 
-  **收尾（2026-10-20）**：`verify:deploy`（`scripts/check-deploy-drift.mjs` 及其测试）**已删除**，
-  理由是"开发只在 web 端跑"——web profile 是符号链接、永远与本仓库一致，desktop 副本的漂移
-  不影响开发质量，而这项检查从来不在 `npm run verify` 与 CI 里（不是任何门禁的一环）。
-  保留的只有一句可操作的事实：桌面端要跟上本仓库，跑 `dsh plugin add <本仓库路径> --profile desktop`。
+  **收尾（2026-10-20）**：漂移检查（`verify:deploy` 及其测试）已删除——它从不在 `npm run verify`
+  与 CI 里；desktop 走 npm 官方安装正是真实用户形态（上面"改成 link"那条旧建议因此作废），
+  "与 checkout 不同"不是缺陷。当前形态见 [AGENTS.md](../AGENTS.md)「工作目录与装载方式」。
 - **P3-2 文档**（S）：零配置 = Windows-only（凭据链只有 PowerShell + DPAPI，其它平台只剩 `QODER_PAT`）；
   README 里两处 503 是两件事；`KNOWN_GAPS:171-173` 的基线（branches 87.38）与实测（86.37）不符，
   安全垫被夸大约 43%；把凭据层的实测缺口登记进去；把账号封禁/条款风险写显眼。

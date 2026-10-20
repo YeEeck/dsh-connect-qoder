@@ -435,12 +435,10 @@ React、不碰 DOM、不发 `fetch`。这不是顺手为之，是为了让测它
 `@deepseek-ai/*`，由宿主在运行时提供，不在公共 registry 上，npm 自动安装 peer 会在装到
 devDependencies 之前就失败。
 
-**本机同时装着两份本插件时，它们不会自己同步**：`web` profile 是指向本仓库的符号链接（永远
-最新），`desktop` profile 是**复制**（停在 `dsh plugin add` 那一刻），而两边 `package.json` 的
-`version` 一样——任何按版本判断新旧的升级路径都会认为「已是最新」。桌面端要跟上本仓库，跑一次
-`dsh plugin add <本仓库路径> --profile desktop` 即可（只在 web 端开发时不必管它）。
-（曾经有个 `npm run verify:deploy` 专门比对这两份副本，2026-10-20 按「开发只在 web 端跑」的
-决定删掉了——它不在 `npm run verify` 与 CI 里，从来不是开发质量的一道门禁。）
+**本机两份安装形态不同、这是有意的**：`web` profile 是指向本仓库的符号链接（开发态，改完刷新
+即生效）；`desktop` profile 走 **npm 官方安装**，与真实用户同形态，跑的是已发布版。桌面端要试本地
+代码：`dsh plugin add <本仓库路径> --profile desktop`。
+（形态定义与"版本号相同 ≠ 内容相同"这条坑见 [AGENTS.md](AGENTS.md)「工作目录与装载方式」。）
 
 CI 在 Node 22.19 / 24 × Ubuntu / Windows 上跑（`.github/workflows/test.yml`）——
 Windows 不是冗余：shim 绑定回环监听、目录缓存依赖 rename 覆盖、凭据读取要调
