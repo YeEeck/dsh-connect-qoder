@@ -250,7 +250,7 @@ function lockViaPowerShell(file, holdMs = 5000) {
 test(
   'a key file locked by the killed child is reported, and a sibling is still reclaimed',
   { skip: process.platform === 'win32' ? false : 'the DPAPI hand-off exists only on Windows' },
-  async () => {
+  async () => withTempRoot(async () => {
   // Two aged directories, and a REAL exclusive lock on the first one's file —
   // this asserts both halves of the fix at once:
   //
@@ -260,6 +260,16 @@ test(
   //   2. the sweep does not abort on it — the unlocked sibling must still be
   //      reclaimed, since the sweep's whole job is to clear EVERY orphan out
   //      of TEMP, not just the first one it reaches.
+  //
+  // The private temp root is what makes this assertion stable. The sweep runs
+  // with age 0 (everything in the root looks stale), so in the SHARED root it
+  // also reaches a sibling test file's live `qoder-oscrypt-*` directory — and
+  // that sibling's own sweep, running in another process, reaches these
+  // fixtures. Both directions have been observed to break this assertion: the
+  // report this test needs went missing because its fixture had been reclaimed
+  // or reshaped by another file's sweep. Isolating the root keeps the sweep's
+  // blast radius on this test's own fixtures — and keeps this test's sweep from
+  // clearing a sibling's live key file.
   const locked = makeKeyDir()
   const sibling = makeKeyDir()
   const messages = captureDiagnostics()
@@ -273,11 +283,9 @@ test(
     // of everything below and the same wall `zeroOutFile` is about to hit.
     assert.equal(canOpenReadWrite(locked.file), false, 'the handle must block Node opens before the sweep runs')
 
-    // No `withTempRoot` here, and the asymmetry is deliberate: this test's
-    // fixtures are created OUTSIDE the real temp root's namespace, and a sibling
-    // file's directory being swept alongside it would only ADD to `messages` —
-    // which this test asserts are non-empty. The tests that assert silence are
-    // the ones that need the isolation, and they have it.
+    // The sweep looks in `tmpdir()`, which `withTempRoot` has just redirected to
+    // this test's private root — the fixtures and the sweep share one root, and
+    // nothing outside it.
     const reclaimed = sweepStaleOscryptDirs(0)
 
     assert.ok(
@@ -292,6 +300,13 @@ test(
     assert.ok(reclaimed >= 1)
   } finally {
     await holder.stop()
+    // `child.kill()` is asynchronous: the OS releases the handle only once the
+    // holder process is actually gone. Deleting a file that still has an open
+    // handle fails on Windows, and that failure would surface as a failure of
+    // THIS test (the private root cannot be removed) rather than as the
+    // cleanup problem it is. So wait for the lock to lift before removing
+    // anything.
+    await waitForUnlock(locked.file)
     // A failed cleanup must never mask or replace an error already thrown in
     // the try — the same finally-shadowing rule asserted in `oscryptKeyFor`.
     // The kill is asynchronous teardown, so the retries wait it out; anything
@@ -309,7 +324,8 @@ test(
     }
     setCredentialDiagnosticSink(undefined)
   }
-})
+  }),
+)
 
 /** Whether the file can be opened read-write right now (false = a lock holds it). */
 function canOpenReadWrite(file) {
@@ -319,6 +335,21 @@ function canOpenReadWrite(file) {
   } catch {
     return false
   }
+}
+
+/**
+ * Wait until `file` can be opened again — i.e. the holder process is really
+ * gone and the OS has released its handle.
+ *
+ * @returns whether the lock lifted before the timeout.
+ */
+async function waitForUnlock(file, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (canOpenReadWrite(file)) return true
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  return false
 }
 
 /**
