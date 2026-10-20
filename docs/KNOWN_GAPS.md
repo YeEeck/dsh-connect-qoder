@@ -118,6 +118,15 @@ quota 字段，让那种捕获在 fixture 校验层就红，而不是靠运行�
 **为什么没测**：模块顶层 import `@earendil-works/pi-ai` 与
 `@deepseek-ai/dsh-llm-pi-ai`，本仓库不安装 peer 依赖。
 
+**这句话曾经是全貌，现在不是了**（2026-10 实测更正）：在一台装了 DSH runtime 的机器上
+（本插件的开发机即是——宿主把 `@deepseek-ai/*` 与 `@earendil-works/pi-ai` 以链接的形式
+放进本目录的 `node_modules/`），`src/host/index.ts` 的顶层 import 是能解析的，
+`adapter.ts` 随它一起进入了覆盖率分母：实测 `adapter.ts` 为 60.68 行 / 100.00 分支 /
+0.00 函数（未覆盖 98、101、108、183-295，即 `createQoderAdapter` 组装 profile 的那段
+接线与它构造的 `PiAiAdapter`）。也就是说，**这一条里"没有可断言的纯逻辑"的那部分，
+现在已经进了分母**，只是它跑出来的形状是"接线被执行过"，不是"接线是对的"。
+在没装 runtime 的机器（CI runner）上它仍然进不去，原因见第 2 条末尾的算术。
+
 **已经测到哪一步**：`toPiModel` 原先住在这里，是整个插件最关键也最无防护的函数——
 它那行 `compat: { supportsDeveloperRole: false }` 决定了每个请求会不会被 403
 `10605` 拒绝。`maxTokens` 这条的教训翻转了一次：旧决策是「故意不声明」，但
@@ -152,6 +161,15 @@ pi-ai 与 `@deepseek-ai/*`。本机实测**两种做法都失败**，原因写�
 
 **为什么没测**：模块顶层 import 四个 `@deepseek-ai/*` peer 包，本仓库不安装。
 
+**这句话曾经是全貌，现在不是了**（2026-10 实测更正）：在一台装了 DSH runtime 的机器上
+（本插件的开发机即是——宿主把 `@deepseek-ai/*` 以链接的形式放进本目录的 `node_modules/`），
+`index.ts` 的顶层 import 是能解析的，因此它**已经进了覆盖率分母**：
+`test/activation.test.js` 直接 `import('../src/host/index.ts')`，用假 Cordis 上下文执行
+`apply()`，实测 `index.ts` 为 76.70 行 / 64.00 分支 / 34.15 函数。
+该文件执行的是**真激活**：十二条卡片路由全部挂上、dispose 全部释放、零区域时每个区
+都说明自己为什么没上线、`GET /account` 与 `GET /status` 经挂载后的 handler 真的应答。
+在没装 runtime 的机器（CI runner）上它进不去，原因不是技术性的，是算术——见本条末尾。
+
 **已经测到哪一步**：这个文件里所有**纯逻辑**都已经搬出去了——
 凭据缓存（`src/host/credential-cache.ts`）、目录落盘（`src/host/catalog-store.ts`）、
 设置写入与读回（`src/host/settings-save.ts`）、行投影与过滤（`src/host/catalog-entry.ts`）、
@@ -183,9 +201,13 @@ confirm 读取停摆区凭据的那条接缝同理——它原先调的是**同�
 上报）。抽取过程本身查出**两个真 bug**：半注册的 adapter 会残留无人能释放；回滚中途
 失败会丢弃刚注册成功的 adapter 的句柄。两者都已修并各有变异验证（去掉即红）。
 
-**剩下的风险**：`ctx.inject(['webServer'])` 里的路由**注册**接线本身；
-`ctx.effect` 的 dispose 时序（定时器与在途 `refreshCatalog` 的竞态）；
-`registerAdapter` 失败时的回滚是否真的释放了 shim 端口。
+**剩下的风险**（2026-10 实测更正）：`ctx.inject(['webServer'])` 里的路由**注册**接线
+**已经不再是风险**——`test/activation.test.js` 用假 webServer 记录每一次 `register()`，
+断言十二条路由**都挂上了**（零区域也挂）、**没有重复路径**、dispose 之后**全部释放**，
+并把挂上去的 handler 真的调用了一遍（`GET /account` 200 且带两个区、`GET /status` 报
+`startedRegions === 0`）。仍未测的是两处：`ctx.effect` 的 dispose 时序（定时器与在途
+`refreshCatalog` 的竞态）；`registerAdapter` 失败时的回滚是否真的释放了 shim 端口
+（回滚的**判定**已由 `publish-regions.ts` 覆盖，**端口**没有）。
 （handler 主体已不再是风险——见上。）
 
 **一处刚补上、但只有一半有测试的守卫**（2026-10）：`readUsage` 的用法读缓存此前会在
@@ -200,14 +222,25 @@ confirm 读取停摆区凭据的那条接缝同理——它原先调的是**同�
   四条断言在 `test/single-flight.test.js`（新起一次运行 / 被放弃的运行仍答复原等待者 /
   **被放弃运行的清理不得驱逐替换它的新运行** / 空槽 reset 是 no-op）。
 - **不可测的一半**：`RegionRuntime.usageGeneration` 的换代守卫，以及
-  `invalidateUsage()` 里"换代 + 清缓存 + reset 槽位"三件事的顺序。它落在本条目登记的
-  不可测区域内（`index.ts` 顶层 import peer 包），**没有可执行断言**——行为验证靠上面那半
-  加一次人工推演，别把它当成已测。要真进分母，得先把这段抽成一个纯模块（与
-  `single-flight.ts`、`region-gate.ts` 同样的手法），那是下一步而不是现状。
+  `invalidateUsage()` 里"换代 + 清缓存 + reset 槽位"三件事的顺序。**它仍然没有可执行
+  断言**——原因换了一个：不再是"`index.ts` 顶层 import peer 包所以进不去"（那条已经不准，
+  见本条开头），而是 `RegionRuntime` 本身没有导出，`activate()` 又把它关在词法作用域里，
+  测试拿不到这个类。要真进分母，得先把它抽成一个纯模块（与 `single-flight.ts`、
+  `region-gate.ts` 同样的手法），那是下一步而不是现状。**别把它当成已测**：行为验证至今
+  靠上面那半加一次人工推演。
 
-**要补上需要**：`index.ts` 仍因顶层 import 四个 `@deepseek-ai/*` peer 包不能被测试 import，
-所以**注册/dispose/回滚**这三块要真进分母，仍需 module-mocks 之外的新路子。
-**注意**：第 1 条里那条"module mocks 可行"的说法经实测是错的，不要按它排期。
+**要补上需要**：注册与 dispose 已经进了分母（`test/activation.test.js`，见上）；
+剩下的是**回滚是否真的释放了 shim 端口**，以及 `RegionRuntime` 那半个守卫。
+两者要真进 CI 的分母，靠的不是 module-mocks（那条路经实测是错的，见第 1 条），
+而是**把 peer 依赖从被测文件里摘出去**：抽成不 import `@deepseek-ai/*` 的纯模块，
+它们在**任何**机器上都能被 import，因而在 CI 的覆盖率里也占分母。
+**为什么现在不能直接把 `index.ts` 挂进 CI 的分母**：算术，不是技术。
+CI 的实测覆盖率是 90.27 / 82.27 / 86.35，**分支距地板（82）只剩 0.27pp**；
+`index.ts` 的分支覆盖是 64.00，把它加进分母会把全局分支数拖到地板以下，让 CI 变红。
+换句话说，第 7 条那句"新增分支多的文件前先想好它的测试"在这里是硬约束：
+**要么先把 `index.ts` 的分支覆盖拉到 82 以上，要么先把它拆成不带 peer 的纯模块**。
+在那之前，本仓库在装了 DSH runtime 的机器上（开发机即是）已经把 `index.ts` 拉进了分母，
+在 CI 上它**大声跳过**（跳过理由里点名缺哪个 specifier），而不是静默通过。
 
 ---
 
