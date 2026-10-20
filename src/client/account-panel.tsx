@@ -140,7 +140,18 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 			const value = await postJson<{ available?: unknown; confirmed?: unknown; kind?: string; detail?: string }>(QODER_ACCOUNT_CONFIRM_PATH, { region: regionId });
 			if (!mounted.current) return;
 			if (value.available !== true) {
-				setConfirmState((current) => ({ ...current, [regionId]: { kind: "unavailable" } }));
+				// The host may know WHY the confirmation could not run — a
+				// credential that threw while it was being read, or the absence
+				// of any sign-in to check. Dropping that reason is what left the
+				// card showing "Could not confirm: " with nothing after it: the
+				// failure-that-does-not-say-why shape red line 1 forbids. A
+				// host that reports no reason at all gets its own verdict, so
+				// the card can say WHICH of the two it was.
+				const detail = typeof value.detail === "string" && value.detail !== "" ? value.detail : undefined;
+				setConfirmState((current) => ({
+					...current,
+					[regionId]: { kind: detail === undefined ? "no-sign-in" : "unavailable", detail },
+				}));
 				return;
 			}
 			setConfirmState((current) => ({
@@ -235,7 +246,19 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 	const activeMeta = [];
 	if (activeEntry !== undefined) {
 		if (activeEntry.source === "env-pat") activeMeta.push(t("account.envPat"));
-		else if (typeof activeEntry.appName === "string" && activeEntry.appName !== "") activeMeta.push(t("account.appFrom", { app: activeEntry.appName }));
+		// The app chip names where the credential CAME FROM, so it may only
+		// appear when a credential was actually read. In the `needs-app` state
+		// the host reports the app DIRECTORY's name — it found Qoder
+		// installed but could not read a sign-in out of it — so "from Qoder"
+		// there claims a sign-in this machine does not have. A host that names
+		// no source at all is believed only when the state says the sign-in
+		// WAS read.
+		const appCredentialRead =
+			activeEntry.source === "app" ||
+			(activeEntry.source === undefined && (activeEntry.state === "ok" || activeEntry.state === "expired"));
+		if (appCredentialRead && typeof activeEntry.appName === "string" && activeEntry.appName !== "") {
+			activeMeta.push(t("account.appFrom", { app: activeEntry.appName }));
+		}
 		if (activeHasIdentity && Number(activeIdentity.expiresAt) > 0) activeMeta.push(withDate(t("account.expiresAt"), activeIdentity.expiresAt));
 	}
 	return (
@@ -466,6 +489,15 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 								{activeResult?.kind === "unavailable" ? (
 									<p className="dsm-qoder-account-note dsm-qoder-account-note-error">
 										{t("account.confirmFailed", { detail: activeResult.detail ?? "" })}
+									</p>
+								) : null}
+								{/* The host had nothing to confirm — no sign-in at all for this
+								    edition. That is its own verdict, not a failure with an
+								    empty reason: the card says so in its own words instead
+								    of trailing a colon after nothing. */}
+								{activeResult?.kind === "no-sign-in" ? (
+									<p className="dsm-qoder-account-note dsm-qoder-account-note-error">
+										{t("account.confirmNoSignIn")}
 									</p>
 								) : null}
 								{/* The plugin's own credential, for the machines with no desktop

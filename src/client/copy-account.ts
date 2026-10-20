@@ -6,6 +6,9 @@ export const zhAccount = {
 	"account.confirmed": "在线校验通过：登录有效",
 	"account.confirmExpired": "在线校验发现登录已过期——在 Qoder 客户端里重新登录后点「重新读取登录状态」",
 	"account.confirmFailed": "在线校验失败：{detail}",
+	// 宿主答「没有可校验的登录」时不给原因——原因就是没有登录，这句话自己说清楚，
+	// 比在「在线校验失败：」后面留一个空尾巴强（红线 1：失败必须说清是哪一种）。
+	"account.confirmNoSignIn": "这个版本没有可校验的登录——请先登录，或设置环境变量 PAT（QODERCN_PAT / QODER_PAT）",
 	// 协议漂移不是登录坏了：上游 200 的正文换了形状，重新登录修不了它。与 usage
 	// 的 protocolChanged 同一套判断（host handlers 的 confirm 路由会单独报这个
 	// kind），措辞必须指向「更新插件」，不能落进「在线校验失败」让用户白登录。
@@ -89,6 +92,9 @@ export const enAccount = {
 	"account.confirming": "Confirming…",
 	"account.confirmed": "Confirmed: sign-in is valid",
 	"account.confirmFailed": "Could not confirm: {detail}",
+	// See the zh note above: the host's "no sign-in to check" verdict gets its
+	// own sentence, instead of a colon followed by nothing.
+	"account.confirmNoSignIn": "There is no sign-in to confirm for this edition — sign in first, or set an environment PAT (QODERCN_PAT / QODER_PAT)",
 	"account.state.ok": "OK",
 	"account.state.expired": "Expired",
 	"account.state.needs-app": "Unreadable",

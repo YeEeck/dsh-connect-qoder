@@ -1146,3 +1146,89 @@ test('an older host gets the PAT-only wording, never a pointer to a missing butt
   assert.doesNotMatch(note, /浏览器登录/, 'no pointer to a button that is not there')
   assert.equal(deviceBlock(container), null, 'this host has no sign-in block at all')
 })
+
+// ---------------------------------------------------------------------------
+// What a confirmation that could not run says.
+//
+// The host answers a confirmation it could not complete with `available: false`.
+// It MAY carry a reason — a credential that threw while it was being read — and
+// it MAY not: the machine simply has no sign-in to check. The card used to
+// collapse both into one line, "Could not confirm: " plus whatever the host
+// sent, which for the reason-less answer was a colon followed by nothing. That
+// is the failure-that-does-not-say-why shape red line 1 names, and it hid the
+// difference between "your credential broke" and "there is no credential".
+// ---------------------------------------------------------------------------
+
+/** A fetch stub whose confirmation route answers with the given payload. */
+const confirmFetch = (answer) => {
+  const base = routeStub({})
+  const fetch = async (url, init) => {
+    // Checked before the account route: the confirm path contains it.
+    if (String(url).includes('/account/confirm')) {
+      return { ok: true, status: 200, json: async () => answer }
+    }
+    return base(url, init)
+  }
+  return fetch
+}
+
+/** The note the confirmation left behind, or null. */
+const confirmNote = (container) =>
+  [...container.querySelectorAll('.dsm-qoder-account-note-error')]
+    .map((n) => text(n))
+    .find((body) => body.includes('校验')) ?? null
+
+/** Press "confirm online" on the card and let the answer land. */
+async function pressConfirm(container, react) {
+  const button = [...container.querySelectorAll('button')].find((b) => text(b) === '在线校验登录')
+  assert.ok(button !== undefined, 'the confirm button must be offered')
+  await update(react, () => button.click())
+  for (let i = 0; i < 4; i++) await update(react, () => {})
+}
+
+test('a confirmation the host refuses shows the host reason', async () => {
+  const { container, react } = await mount({
+    fetch: confirmFetch({ available: false, detail: 'the credential read threw: EPERM' }),
+  })
+
+  await pressConfirm(container, react)
+
+  const note = confirmNote(container)
+  assert.ok(note !== null, 'a refused confirmation must say so')
+  assert.match(note, /EPERM/, 'the host reason must reach the reader')
+  assert.doesNotMatch(note, /在线校验失败：\s*$/, 'a reason must not be dropped on the way')
+})
+
+test('a confirmation with no sign-in to check says so in its own words', async () => {
+  // The host had nothing to check. That is a different failure from a broken
+  // credential, and it must not be dressed up as one.
+  const { container, react } = await mount({
+    fetch: confirmFetch({ available: false }),
+  })
+
+  await pressConfirm(container, react)
+
+  const note = confirmNote(container)
+  assert.ok(note !== null, 'a confirmation that could not run must say so')
+  assert.match(note, /没有可校验的登录/, 'the absence of a sign-in is the reason')
+  assert.doesNotMatch(note, /在线校验失败：\s*$/, 'no empty tail after a colon')
+})
+
+test('an unreadable desktop sign-in claims no credential source', async () => {
+  // The host reports the app DIRECTORY's name in the `needs-app` state: it
+  // found Qoder installed and could not read a sign-in out of it. Printing
+  // "from Qoder" beside that claim says the credential came from the app —
+  // which is precisely what did not happen.
+  const { container } = await mount({
+    accountRegions: [
+      { ...REGIONS[0], source: undefined, state: 'needs-app', detail: PLATFORM_DETAIL },
+      { ...REGIONS[1] },
+    ],
+  })
+
+  const meta = container.querySelector('.dsm-qoder-account-meta')
+  assert.ok(
+    meta === null || !text(meta).includes('来自 Qoder'),
+    'an unreadable sign-in must not claim a credential source',
+  )
+})

@@ -90,6 +90,54 @@ test('the PAT is still the last resort', async () => {
   assert.strictEqual((await subject.resolve()).token, 'pat-token')
 })
 
+test('a lapsed app credential does not shadow the plugin\'s own credential', async () => {
+  // The desktop app refreshes its own login while it runs, but the token it
+  // left on disk stops working the moment it lapses -- and a lapsed token
+  // serves NOTHING: every request signed with it is rejected, and the region
+  // gate refuses to publish the edition over it. Shadowing the plugin's own
+  // (renewable) sign-in with it would leave a machine that CAN work unable
+  // to, and would hide the browser sign-in behind a desktop app that has to
+  // be started again first.
+  const { cache: subject, asked } = cache({
+    app: { ...appCredential('app-token'), expired: true },
+    device: deviceCredential('device-token', FUTURE),
+  })
+
+  const resolved = await subject.resolve()
+  assert.strictEqual(resolved.token, 'device-token')
+  assert.strictEqual(resolved.source, 'device')
+  assert.strictEqual(asked.device, 1, 'a lapsed app store is exactly when the vault must be read')
+})
+
+test('a lapsed app credential outranks an environment PAT', async () => {
+  // Same rule, one step down the chain: a working PAT beats a dead store.
+  const { cache: subject } = cache({
+    app: { ...appCredential('app-token'), expired: true },
+    device: undefined,
+    pat: patCredential('pat-token'),
+  })
+
+  const resolved = await subject.resolve()
+  assert.strictEqual(resolved.token, 'pat-token')
+  assert.strictEqual(resolved.source, 'env-pat')
+})
+
+test('a lapsed app credential with nothing better stays the truth about the machine', async () => {
+  // Nothing else to fall back on: the desktop sign-in is expired, and saying
+  // so is the honest answer. Reporting "no sign-in at all" here would hide a
+  // lapsed login behind a vaguer failure, and would make the region gate log
+  // "no local sign-in" for a machine that plainly has one.
+  const { cache: subject, asked } = cache({
+    app: { ...appCredential('app-token'), expired: true },
+    device: undefined,
+  })
+
+  const resolved = await subject.resolve()
+  assert.strictEqual(resolved.token, 'app-token')
+  assert.strictEqual(resolved.expired, true)
+  assert.strictEqual(asked.device, 1, 'the vault is read before giving up on the app')
+})
+
 test('with no third source wired, resolution is exactly what it was', async () => {
   // The revert path: deleting one line from the entry must restore the old
   // behaviour completely, with no other edit.

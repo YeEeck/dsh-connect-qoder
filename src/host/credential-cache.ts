@@ -308,13 +308,29 @@ export class CredentialCache {
 
     this.reads += 1
     const fromApp = await this.loadApp()
+    // A desktop store whose access token has ALREADY lapsed can serve nothing:
+    // every request signed with it comes back rejected, and the edition is not
+    // even published (see `region-gate`). It must therefore not shadow a
+    // credential that CAN serve — the plugin's own sign-in, or a PAT. This is
+    // the app-first order read one step further: the app wins while it has
+    // something USABLE to say, and the vault is consulted once it has nothing.
+    //
+    // The flag is the one the app's own store computed (`expireTime` against
+    // the wall clock), which is why it is read as `=== true`: a malformed value
+    // must not be mistaken for a verdict, the same rule the region gate uses.
+    const appUsable = fromApp !== undefined && fromApp.expired !== true
     // The vault is a disk read and, when its token has lapsed, a network call —
-    // so it is consulted only when the app has nothing to say. On a machine
-    // with the desktop app signed in, which is every machine that works today,
-    // this line is inert; that is what makes the third source additive.
+    // so it is consulted only when the app has nothing usable to say. On a
+    // machine with the desktop app signed in, which is every machine that works
+    // today, this line is inert; that is what makes the third source additive.
     const fromDevice =
-      fromApp === undefined && this.loadDevice !== undefined ? await this.loadDevice() : undefined
-    const credential = fromApp ?? fromDevice ?? this.loadEnv()
+      !appUsable && this.loadDevice !== undefined ? await this.loadDevice() : undefined
+    // A lapsed app credential stays the LAST resort. It is still the truth
+    // about the machine's desktop sign-in, and reporting "nothing to sign in
+    // with" instead would hide a lapsed login behind a vaguer failure — and
+    // would make the region gate log "no local sign-in" for a machine that
+    // plainly has one.
+    const credential = (appUsable ? fromApp : undefined) ?? fromDevice ?? this.loadEnv() ?? fromApp
     if (credential === undefined) {
       this.cached = undefined
       return undefined

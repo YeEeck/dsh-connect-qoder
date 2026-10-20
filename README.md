@@ -39,12 +39,18 @@ Qoder 不是 OpenAI 兼容端点，所以需要三样东西：
 
 插件有三个凭据来源，按优先级依次尝试（**桌面应用优先**）：
 
-1. **Qoder 桌面应用自己的登录状态**（下面几段描述的解密过程）。只要它在，用的就是它：应用
-   运行时自己保持登录新鲜，本机没有比它更新的凭据。
+1. **Qoder 桌面应用自己的登录状态**（下面几段描述的解密过程）。只要它在**且没过期**，用的就是它：
+   应用运行时自己保持登录新鲜，本机没有比它更新的凭据。
 2. **插件自己的设备登录**。在浏览器里批准一个码，插件把换回来的可刷新令牌存进
    `$DSH_HOME/.qoder-auth.<region>.json`。这是没装桌面端（或不想装）的机器零配置登录的路径 ——
    详见 [凭据安全](#凭据安全) 与 `docs/issues/21-device-login-credential-source.md`。
 3. **环境变量 PAT**（`QODERCN_PAT` 等）。最后的兜底，需要用户自己到后台造一个长期令牌。
+
+**桌面端那条过期了就不算数**（2026-10-20）：过期的 access token 什么都干不了——每个带它签名的
+请求都会被拒，这个版本本身也不会被注册（`region-gate` 直接按"登录已过期"跳过发布）。所以它
+不再压住后面两条：插件会继续往设备登录、再往 PAT 找一条**还能用**的凭据。只有三条都拿不出
+东西时，那条过期的桌面端登录才作为"本机真实发生过的事"被报出去，而不是被一句含糊的"没登录"
+盖过去。
 
 无论走哪一条，**都不写入应用的文件**：桌面端的凭据文件始终以只读方式打开。
 
@@ -260,7 +266,7 @@ dsh plugin --profile web add <本仓库路径>
 | `src/host/catalog-entry.ts` | 目录条目的归一化、模型过滤（含按区域开关）与卡片行投影（无 peer 依赖） |
 | `src/host/catalog-store.ts` | 目录的磁盘缓存与原子落盘（无 peer 依赖） |
 | `src/host/catalog-refresh.ts` | 一次目录刷新的结果如何落地：**空目录也是结果**（照实清空并推进 `fetchedAt`），只有失败才保留上一份，且失败按 `credential` / `no-credential` / `fetch` / `protocol-shape-changed` 分档（无 peer 依赖） |
-| `src/host/credential-cache.ts` | 凭据缓存与「登录失效后重读」规则，以及 env-PAT 兑换的 429 节流闸门（平台自述窗口优先、否则指数退避；401/403 停泊，仅「重读登录」释放；无 peer 依赖） |
+| `src/host/credential-cache.ts` | 凭据缓存与「登录失效后重读」规则，以及 env-PAT 兑换的 429 节流闸门（平台自述窗口优先、否则指数退避；401/403 停泊，仅「重读登录」释放；无 peer 依赖）。三源顺序是「桌面端（**没过期**才算在场）→ 插件自有设备登录 → 环境变量 PAT」：过期的桌面端 access token 什么都干不了（连 provider 都不会被注册），所以它不再压住后面两条 |
 | `src/host/throttle-store.ts` | 兑换节流闸门的磁盘持久化（只存未过期的 rate-limit 窗口、parked 停泊与令牌一律不落盘，原子写，无 peer 依赖） |
 | `src/host/request-counter.ts` | 本地「今日经本客户端请求次数」计数：上游只报「用完了」不给每日上限，故只能本地自计（每次对话轮 +1，重试不重复计）。按 region + 上海本地日分文件、零点翻页、原子写（`temp/rename`）、越界 region 分量拒绝写盘、`gc` 只删本插件命名且早于保留期的旧日文件；撞 `daily_limit_exceeded` 时置 `dailyLimitHit` 不丢计数（无 peer 依赖） |
 | `src/host/token-counter.ts` | 本地「今日经本客户端消耗的 token 数」累加器：shim 每抓到一个上游 usage 帧（`total_tokens` / `cached_tokens`，上游每轮明确下发）就累加进本插件文件（`.qoder-token-count.<region>.<day>.json`）。与请求计数器同源同套路（按 region + 上海本地日分文件、零点翻页、原子写、越界防护、`gc` 只删本插件旧文件），但数据来自上游而非本地估算——聚合的是上游已经公开的真实 token 数，不画比例条（无每日上限口径）；`tokensFromUsage` 对坏帧返回 `null` 宁可不加也不加错 |
