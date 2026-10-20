@@ -23,12 +23,32 @@
  * name the `@keyframes` animations (`dsm-qoder-shimmer`, `dsm-qoder-flash`) —
  * those are animation names, not class names, and would otherwise look like
  * usages.
+ *
+ * WHY THE SCAN IS AN AST WALK
+ *
+ * The first version of this gate matched literals with a regex over the raw
+ * text. That is unsound in BOTH directions, and both directions have bitten:
+ *
+ * - a class name inside a comment was counted as a usage, which is the exact
+ *   thing this gate exists to prevent (a comment can keep dead CSS alive);
+ * - a comment containing an ASCII quote shifted the quote pairing, so real
+ *   usages were swallowed into comment text and reported as "never applied".
+ *   The card's own comments are full of quoted phrases ("am I signed in for
+ *   this edition?"), so this was waiting for the first comment that unbalances
+ *   the count.
+ *
+ * The TypeScript compiler already knows where a comment ends and a string
+ * begins, so the literals are read from the AST instead of guessed from the
+ * text. `typescript` is a devDependency of this repository and the import is
+ * deliberately NOT optional: a gate that cannot run must fail loudly, never
+ * skip (the slot-gate lesson in `.github/workflows/test.yml`).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import ts from 'typescript'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (rel) => readFileSync(join(root, rel), 'utf8')
@@ -36,13 +56,35 @@ const read = (rel) => readFileSync(join(root, rel), 'utf8')
 const CLASS_TOKEN = /(dsm-(?:qoder|plugin-card)[-\w]+)/g
 
 /**
- * Every dsm-* class token inside a string or template literal.
+ * Every string or template literal in one source file.
  *
- * A fresh regex per call: `matchAll` needs a global flag, and a module-level
- * `/g` regex carries `lastIndex` state that would leak across callers.
+ * A template literal contributes its quasis (the text around each `${}`); the
+ * expressions between them are walked as ordinary children, so a class name
+ * inside an interpolation is still seen.
  */
-function literals(source) {
-  return source.matchAll(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g)
+function literals(source, fileName) {
+  const kind = fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, kind)
+  const out = []
+  const visit = (node) => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      out.push(node.text)
+    } else if (ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
+      out.push(node.text)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return out
+}
+
+/** The dsm-* class tokens of every literal in one source file. */
+function classesIn(source, fileName) {
+  const out = new Set()
+  for (const lit of literals(source, fileName)) {
+    for (const m of lit.matchAll(CLASS_TOKEN)) out.add(m[1])
+  }
+  return out
 }
 
 /** Class names applied by the client source (all files but `styles.ts`). */
@@ -51,17 +93,24 @@ function referencedClasses() {
   for (const f of readdirSync(join(root, 'src/client'))) {
     if (f === 'styles.ts') continue
     if (!/\.(?:ts|tsx)$/.test(f)) continue
-    for (const lit of literals(read(`src/client/${f}`))) {
-      for (const m of lit[0].matchAll(CLASS_TOKEN)) out.add(m[1])
-    }
+    for (const c of classesIn(read(`src/client/${f}`), f)) out.add(c)
   }
   return out
 }
 
-/** Class selectors defined in the stylesheet's string table. */
+/**
+ * Class selectors defined in the stylesheet's string table.
+ *
+ * A rule string starts with its selector, so `.dsm-…` right at the front of a
+ * literal is a class. `@keyframes dsm-qoder-shimmer` does not start with a dot
+ * and is an animation name, not a class — it is deliberately not picked up.
+ */
 function definedClasses() {
   const out = new Set()
-  for (const m of read(STYLES).matchAll(/"\.((?:dsm-qoder|dsm-plugin-card)[-\w]+)/g)) out.add(m[1])
+  for (const lit of literals(read(STYLES), 'styles.ts')) {
+    const m = /^\.((?:dsm-qoder|dsm-plugin-card)[-\w]+)/.exec(lit)
+    if (m !== null) out.add(m[1])
+  }
   return out
 }
 
