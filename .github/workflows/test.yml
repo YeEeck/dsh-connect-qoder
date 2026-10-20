@@ -220,6 +220,22 @@ jobs:
           node --test test/host-range.test.mjs
           node scripts/update-host-range.mjs --check
 
+      # The market-entry gate: the submission copy under
+      # awesome-dsh-plugin-submission/ is read with the SAME js-yaml the
+      # marketplace parses it with, then checked against a mirror of the
+      # market's entry rules (unknown key, url shape, name vs url, category out
+      # of the 22 allowed, missing description.en, a locale the site does not
+      # render, tarball shape). Those are REJECTIONS at review time, and they
+      # are invisible to every other check in this job, because nothing else
+      # reads the submission file.
+      #
+      # A separate step for the same reason as the host range above: the file
+      # is `test/market-entry.test.mjs` and `npm test` runs `test/*.test.js`.
+      # js-yaml is a devDependency (installed above), so the parse really
+      # happens here instead of taking a SKIP path.
+      - name: The submission copy still satisfies the market's entry rules
+        run: npm run test:market-entry
+
       # Enforced as a FLOOR, not as a score: `test:coverage` carries
       # --test-coverage-lines/functions/branches set a little under the current
       # numbers, so a change that silently loses coverage fails the build while
