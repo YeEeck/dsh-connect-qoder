@@ -380,7 +380,7 @@ npm run build           # 从 src/ 重建 lib/（宿主 bundle + 卡片产物）
 |---|---|---|
 | `typecheck` | `src/**` 的每个 `.ts` 都过类型检查 | `tsc` 退出 0、无输出 |
 | `audit:test-types` | 测试文件自己也过类型检查（坏 import、改了名的导出、变了形的参数） | `opted in to type checking: 13 (floor 13)` |
-| `npm test` | 卡片逻辑与宿主半边没被改坏 | 最后一行 `# fail 0` |
+| `npm test` | 卡片逻辑与宿主半边没被改坏；三道发布门禁仍能被打破 | 最后一行 `# fail 0` |
 | `build`（宿主 + 卡片） | `lib/index.js` 与 `lib/client.js` 确实由 `src/` 生成 | `MATCH: … byte-for-byte identical` |
 | `verify:host` | 宿主 bundle 不陈旧、公开面与 peer 外置都还在 | `all 11 checks passed`（装了 `tsdown` 时 11 条；没装时 9 条，见下） |
 | `verify:bundle` | 重建产物与上一份已发布产物的行为一致 | `behaviour: IDENTICAL` + `OK: …` |
@@ -416,6 +416,15 @@ pragma 的规则是实测出来的、不是猜的：只有 `//` 行注释算数�
 错误（tsc 点名到行）、把 `tsconfig.test.json` 的 `exclude` 加回 `test`（逐个点名「这个文件
 opt-in 了却不在程序里」）、在前导区补一行 `// @ts-nocheck`（点名「这个文件的检查被静默关掉
 了」）。怀疑门禁时照这个法子再破一次，比看它绿不绿有用。
+
+**上面那几条破法现在自己会跑。** `test/gate-mutations.test.js` 把门禁要读的那些文件复制到
+`.verify-tmp/` 下的临时目录（**检出本身一个字节都不动**，所以它可以和别的套件并行跑），在副本
+上破一道门禁，要求那道门禁**自己**变红、并且用它自己的话作证（`the build is incomplete` /
+`the artifact is stale` / `does not behave like its baseline`），再跑一遍没破的副本当对照，
+证明红是这次破坏造成的、不是本来就在红。副本留在仓内是有原因的：`verify:host` 与
+`verify:bundle` 从 git 和 `node_modules` 读基准，放在系统临时目录里两道门禁都会因为
+「找不到基准」而直接放行——那正是这道测试要抓的空转绿。怀疑门禁时照上面的法子再破一次仍然
+有用；只是想确认门禁还活着，让这道测试跑一遍就行。
 
 `npm run build` 需要构建器（`tsdown`），它是 devDependency，跑之前先 `npm install`。
 **测试与 `typecheck` 都不需要 `lib/`**：测试直接 import `src/**` 的源码（Node 原生剥类型），
