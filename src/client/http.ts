@@ -38,11 +38,11 @@ function failureMessage(value: unknown, status: number): string {
 }
 
 /** Read the host route at `path` and decode its JSON answer. */
-export async function getJson<T = unknown>(path: string, options?: { signal?: AbortSignal }): Promise<T> {
+export async function getJson<T = unknown>(path: string, options?: { signal?: AbortSignal | undefined }): Promise<T> {
 	const response = await fetch(path, {
 		headers: { accept: "application/json" },
 		credentials: "same-origin",
-		signal: options?.signal,
+		...(options?.signal === undefined ? {} : { signal: options.signal }),
 	});
 	const value = (await response.json().catch((): undefined => undefined)) as T | undefined;
 	if (!response.ok) {
@@ -62,7 +62,7 @@ export async function postJson<T = unknown>(path: string, body?: unknown): Promi
 		method: "POST",
 		headers: { accept: "application/json", "content-type": "application/json" },
 		credentials: "same-origin",
-		body: body === undefined ? undefined : JSON.stringify(body),
+		...(body === undefined ? {} : { body: JSON.stringify(body) }),
 	});
 	const value = (await response.json().catch((): undefined => undefined)) as T | undefined;
 	if (!response.ok) {

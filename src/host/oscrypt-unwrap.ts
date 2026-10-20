@@ -42,14 +42,14 @@ import { describeThrown } from './errors.ts'
  */
 export interface CachedOscryptKey {
   key?: Buffer
-  identity?: string
+  identity?: string | undefined
 }
 
 /** A recorded unwrap failure, and the `Local State` version it describes. */
 export interface UnwrapFailure {
   reason: string
   at: number
-  identity?: string
+  identity?: string | undefined
 }
 
 /**
@@ -76,7 +76,7 @@ export interface UnwrapOptions {
    * assert that such a host is told WHY it cannot read the sign-in — and that
    * message is the whole reason the branch exists.
    */
-  platform?: string
+  platform?: string | undefined
 }
 
 /**

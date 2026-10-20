@@ -43,7 +43,7 @@ export class CatalogStore {
   /** How long a fetch stays fresh, in ms. */
   ttlMs: number
   /** Optional logger for a failed save. */
-  logger?: { warn?: (message: string, error?: unknown) => void }
+  logger: { warn?: (message: string, error?: unknown) => void } | undefined
   /**
    * Parsed catalog entries, unvalidated.
    *

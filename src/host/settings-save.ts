@@ -174,7 +174,7 @@ export async function applySettingsSave({
   field: unknown
   value: unknown
   candidates: string[]
-  equals?: EqualityFn
+  equals?: EqualityFn | undefined
 }): Promise<{ status: number; body: Record<string, unknown> }> {
   // `Object.hasOwn` rather than a plain lookup: a bare `SAVE_FIELDS[field]`
   // reaches the prototype chain, so `field: 'constructor'` (or `toString`,
@@ -263,7 +263,7 @@ export async function applySettingsSave({
 export async function saveFieldOutcome(
   settings: SettingsService | null | undefined,
   rawBody: unknown,
-  { candidates, equals }: { candidates: string[]; equals?: EqualityFn },
+  { candidates, equals }: { candidates: string[]; equals?: EqualityFn | undefined },
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   if (settings === undefined || settings === null) {
     // The service is gone, not just the namespace: there is no document to write

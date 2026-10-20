@@ -619,7 +619,7 @@ export interface StatusDeps {
    * no credential yet — that is different from a region served by the desktop
    * application, and the difference is the point.
    */
-  regions?: readonly { id: string; credentialKind?: CredentialKind }[]
+  regions?: readonly { id: string; credentialKind?: CredentialKind | undefined }[]
 }
 
 /**

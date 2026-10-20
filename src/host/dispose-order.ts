@@ -17,7 +17,7 @@ export interface DisposableRuntime {
    */
   disposed: boolean
   /** Aborts an in-flight upstream request rather than only ignoring its answer. */
-  refreshAbort?: { abort: () => void }
+  refreshAbort?: { abort: () => void } | undefined
   /** The catalog refresh interval, when one is installed. */
   refreshTimer?: ReturnType<typeof setInterval> | undefined
 }

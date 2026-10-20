@@ -172,7 +172,7 @@ export class CredentialCache {
   /** The PAT fallback reader. */
   loadEnv: () => LoadedCredential | undefined
   /** The plugin's own vault reader (device login); absent when unwired. */
-  loadDevice?: () => LoadedCredential | undefined | Promise<LoadedCredential | undefined>
+  loadDevice: (() => LoadedCredential | undefined | Promise<LoadedCredential | undefined>) | undefined
   /**
    * Exchanges a PAT for a job token; absent when PATs are unsupported.
    *
@@ -182,7 +182,7 @@ export class CredentialCache {
    * `any` neither the discriminant nor the three field names was checked, so a
    * rename on either side would have surfaced as `undefined` at runtime.
    */
-  exchangePat?: (credential: LoadedCredential) => Promise<ExchangedPat> | ExchangedPat
+  exchangePat: ((credential: LoadedCredential) => Promise<ExchangedPat> | ExchangedPat) | undefined
   /**
    * The cached record: an app credential as read, or a PAT after exchange —
    * which is that same credential with its three token fields replaced, so it
@@ -207,7 +207,7 @@ export class CredentialCache {
   /** Whether the throttle has been read from the store yet this process. */
   private throttleLoaded: boolean
   /** Optional throttle persistence; see {@link CredentialCacheOptions.throttleStore}. */
-  private throttleStore?: ThrottleStore
+  private throttleStore: ThrottleStore | undefined
   /** The wall clock, for honouring windows and running tests. */
   private now: () => number
 

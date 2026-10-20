@@ -315,8 +315,8 @@ function oldestFetchedAtOf(runtimes: RuntimeRef[]): number | undefined {
  */
 function refreshFailuresOf(
   runtimes: RuntimeRef[],
-): Array<{ region?: string; regionName?: string; reason: string; detail?: string }> {
-  const failures: Array<{ region?: string; regionName?: string; reason: string; detail?: string }> = []
+): Array<{ region?: string; regionName?: string; reason: string; detail?: string | undefined }> {
+  const failures: Array<{ region?: string; regionName?: string; reason: string; detail?: string | undefined }> = []
   for (const { runtime } of runtimes) {
     const failure = runtime?.refreshFailed
     if (failure === undefined || failure === null) continue

@@ -158,7 +158,7 @@ export function tokensFromUsage(usage: unknown): { total: number; cached: number
 export class TokenCounter {
   private basePath: (filename: string) => string
   private now: () => number
-  private logger?: { warn?: (message: string, error?: unknown) => void }
+  private logger: { warn?: (message: string, error?: unknown) => void } | undefined
   private keepDays: number
   /** 本实例实际完成 gc 扫描的本地日；同日再入短路（usage 轮询热路径节流）。 */
   private lastGcDay: string | null = null

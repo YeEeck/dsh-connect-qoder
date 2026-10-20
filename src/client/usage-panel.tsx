@@ -42,7 +42,7 @@ function QoderUsagePanel({ t, refreshToken = 0, activeRegion = "qoder-cn" }: Qod
 	const [notice, setNotice] = react.useState<string | undefined>(undefined);
 	const [busy, setBusy] = react.useState(false);
 	const [claimBusy, setClaimBusy] = react.useState(false);
-	const [claimNotice, setClaimNotice] = react.useState<{ kind?: string; message?: string; amount?: number } | undefined>(undefined);
+	const [claimNotice, setClaimNotice] = react.useState<{ kind?: string; message?: string; amount?: number | undefined } | undefined>(undefined);
 	// Whether the campaign list is expanded. It lives here rather than in
 	// `RegionUsage` so that component stays hook-free and renderable on its
 	// own. Upstream can ship several campaigns at once, and stacked they

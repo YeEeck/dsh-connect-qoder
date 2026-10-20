@@ -64,8 +64,15 @@ function readFailure(chunk: unknown, fallbackCode = ''):
 interface ChatShapeProbe {
   /** Data payloads the gateway streamed that this build does not read. */
   skipped: number
-  /** The first unreadable payload, as received — the evidence the verdict names. */
-  sample?: string
+  /**
+   * The first unreadable payload, as received — the evidence the verdict names.
+   *
+   * Present-but-`undefined` until a frame is noted, not absent: the probe is
+   * built with the key spelled out, so `'sample' in probe` is true from the
+   * start. `exactOptionalPropertyTypes` makes that distinction part of the
+   * type, which is why this reads `| undefined` rather than a bare `?`.
+   */
+  sample?: string | undefined
 }
 
 /** Note one unreadable frame on the turn's probe; the first is the one kept. */

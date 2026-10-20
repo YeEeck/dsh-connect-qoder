@@ -24,3 +24,5 @@ Thumbs.db
 *.local.json
 .env
 .env.*
+# Session scratch (typecheck/build probe output)
+.verify-tmp/

@@ -97,7 +97,11 @@ export async function readCampaigns(
     method: 'GET',
     headers: openApiHeaders(credential, region),
     redirect: 'error',
-    signal,
+    // `signal` is absent, not `undefined`: `RequestInit.signal` accepts
+    // `AbortSignal | null` and `exactOptionalPropertyTypes` rejects an explicit
+    // undefined. Spreading keeps "no timeout" as "no key", which is what the
+    // runtime already saw.
+    ...(signal === undefined ? {} : { signal }),
   })
   if (!response.ok) {
     // The body is read even though the message does not include it: it is where
@@ -139,7 +143,7 @@ export async function claimCampaign(
     headers: { ...openApiHeaders(credential, region), 'Content-Type': 'application/json' },
     body: '{}',
     redirect: 'error',
-    signal,
+    ...(signal === undefined ? {} : { signal }),
   })
   const text = await response.text()
   if (!response.ok) {
@@ -216,7 +220,7 @@ export async function fetchModels(
     method: 'GET',
     headers: { Accept: 'application/json', ...headers },
     redirect: 'error',
-    signal,
+    ...(signal === undefined ? {} : { signal }),
   })
   if (!response.ok) {
     const text = (await response.text()).slice(0, 300)
@@ -327,7 +331,7 @@ export async function exchangePat(
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ personal_access_token: pat }),
     redirect: 'error',
-    signal,
+    ...(signal === undefined ? {} : { signal }),
   })
   if (!response.ok) {
     const text = (await response.text()).slice(0, 300)
@@ -433,7 +437,7 @@ export async function fetchUserInfo(
     method: 'GET',
     headers: openApiHeaders(credential, region),
     redirect: 'error',
-    signal,
+    ...(signal === undefined ? {} : { signal }),
   })
   if (!response.ok) {
     const text = (await response.text()).slice(0, 300)

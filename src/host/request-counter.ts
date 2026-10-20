@@ -102,7 +102,7 @@ export interface RequestCounterOptions {
 export class RequestCounter {
   private basePath: (filename: string) => string
   private now: () => number
-  private logger?: { warn?: (message: string, error?: unknown) => void }
+  private logger: { warn?: (message: string, error?: unknown) => void } | undefined
   private keepDays: number
   /** gc 的「每本地日至多一次真扫」节流标记（与 TokenCounter.lastGcDay 同款）。 */
   private lastGcDay: string | null = null

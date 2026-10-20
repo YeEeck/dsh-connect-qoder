@@ -390,7 +390,12 @@ export async function fetchUsage(
   const headers = openApiHeaders(credential, region)
 
   const read = async (url: string): Promise<unknown> => {
-    const response = await fetch(url, { method: 'GET', headers, redirect: 'error', signal })
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+      redirect: 'error',
+      ...(signal === undefined ? {} : { signal }),
+    })
     // The body is read for its verdict, not for this reader's message: the
     // message has always been the bare status, and what the card needs is the
     // flag (`unavailableReason`, and a spent allowance marking the local

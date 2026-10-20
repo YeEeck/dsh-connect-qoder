@@ -147,9 +147,9 @@ function credentialOf(record: VaultRecord, region: string, now: number): LoadedC
 export class DeviceCredentialSource {
   private readonly region: string
   private readonly vault: CredentialVault
-  private readonly fetchImpl?: typeof fetch
+  private readonly fetchImpl: typeof fetch | undefined
   private readonly now: () => number
-  private readonly logger?: { warn?: (message: string) => void }
+  private readonly logger: { warn?: (message: string) => void } | undefined
   private last: DeviceCredentialStatus = { state: 'none' }
   /** When a renewal was last refused/failed, and what the service said. */
   private refusedAt: number | undefined

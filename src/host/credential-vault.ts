@@ -166,7 +166,7 @@ export class CredentialVault {
   /** The wall clock, stamped into `savedAt` and used for the quarantine name. */
   private now: () => number
   /** Optional logger for a failed write or an unreadable file. */
-  private logger?: { warn?: (message: string, error?: unknown) => void }
+  private logger: { warn?: (message: string, error?: unknown) => void } | undefined
   /**
    * The tail of the write chain; see {@link CredentialVault.update}.
    *

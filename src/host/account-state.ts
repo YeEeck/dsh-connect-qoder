@@ -102,8 +102,8 @@ export interface AccountStateRecord {
   manageUrl?: string
   downloadUrl?: string
   state: AccountState
-  source?: string
-  appName?: string
+  source: string | undefined
+  appName: string | undefined
   identity: AccountIdentity | undefined
   detail: string | undefined
 }

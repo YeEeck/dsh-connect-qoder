@@ -123,10 +123,10 @@ export interface CatalogEntry {
   maxInputTokens?: number
   defaultContextWindow?: number
   contextOptions?: unknown[]
-  priceFactor?: number
+  priceFactor?: number | undefined
   isFree?: boolean
   isDefault?: boolean
-  promotion?: Promotion
+  promotion?: Promotion | undefined
 }
 
 /**

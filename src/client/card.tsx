@@ -126,7 +126,7 @@ interface CheckinCardProps {
 	t: TranslateFn
 	checkin: CardCheckin
 	busy: boolean
-	notice?: { kind?: string; message?: string; amount?: number } | null
+	notice?: { kind?: string; message?: string; amount?: number | undefined } | null | undefined
 	onClaim: EventHandler
 }
 

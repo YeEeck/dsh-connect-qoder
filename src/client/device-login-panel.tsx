@@ -44,11 +44,11 @@ const POLL_MS = 2000
 interface QoderDeviceLoginPanelProps {
 	t: TranslateFn
 	/** The edition this block acts on. Nothing renders without one. */
-	region?: string
+	region?: string | undefined
 	/** What the account route reported for that edition's plugin token. */
-	device?: CardDeviceEntry
+	device?: CardDeviceEntry | undefined
 	/** Called once a sign-in or sign-out has landed, so the account panel re-reads. */
-	onChanged?: () => void
+	onChanged?: (() => void) | undefined
 }
 
 /** Which of the three requests is in flight, if any. */
@@ -75,7 +75,7 @@ function ActiveDeviceLogin({
 	t: TranslateFn
 	region: string
 	device: CardDeviceEntry
-	onChanged?: () => void
+	onChanged?: (() => void) | undefined
 }) {
 	const [busy, setBusy] = react.useState<Busy>("idle")
 	const [authUrl, setAuthUrl] = react.useState<string | undefined>(undefined)

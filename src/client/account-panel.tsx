@@ -27,7 +27,7 @@ import { QoderDeviceLoginPanel } from "./device-login-panel.tsx"
 interface QoderAccountPanelProps {
 	t: TranslateFn
 	onReconciled?: () => void
-	settingsScope?: SettingsScope
+	settingsScope?: SettingsScope | undefined
 	activeRegion?: string
 	onRegionChange?: (regionId: string) => void
 }
@@ -39,7 +39,7 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 	// One confirm outcome per region: `{ kind: "confirmed" |
 	// "sign-in-expired" | "unavailable", detail? }`. Absent means
 	// "not asked since the last re-read".
-	const [confirmState, setConfirmState] = react.useState<Record<string, { kind?: string; detail?: string }>>({});
+	const [confirmState, setConfirmState] = react.useState<Record<string, { kind?: string | undefined; detail?: string | undefined }>>({});
 	const [confirmBusy, setConfirmBusy] = react.useState<Record<string, boolean>>({});
 	// The per-region provider switch. The host answers with the fully
 	// resolved map for every known region, so saving posts that whole
@@ -145,7 +145,7 @@ function QoderAccountPanel({ t, onReconciled, settingsScope, activeRegion = "qod
 			return next;
 		});
 		try {
-			const value = await postJson<{ available?: unknown; confirmed?: unknown; kind?: string; detail?: string }>(QODER_ACCOUNT_CONFIRM_PATH, { region: regionId });
+			const value = await postJson<{ available?: unknown; confirmed?: unknown; kind?: string | undefined; detail?: string | undefined }>(QODER_ACCOUNT_CONFIRM_PATH, { region: regionId });
 			if (!mounted.current) return;
 			if (value.available !== true) {
 				// The host may know WHY the confirmation could not run — a

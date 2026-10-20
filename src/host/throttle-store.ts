@@ -60,7 +60,7 @@ export class FileThrottleStore implements ThrottleStore {
   /** The wall clock, for dropping an expired window on read. */
   private now: () => number
   /** Optional logger for a failed write. */
-  private logger?: { warn?: (message: string, error?: unknown) => void }
+  private logger: { warn?: (message: string, error?: unknown) => void } | undefined
 
   constructor({ path, now = () => Date.now(), logger }: FileThrottleStoreOptions) {
     this.path = path
