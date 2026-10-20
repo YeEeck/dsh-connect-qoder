@@ -180,6 +180,15 @@ jobs:
       - name: The test tree is type-checked too
         run: npm run audit:test-types
 
+      # The other half of the test tree's type gate: the files that have NOT
+      # opted in are still checked, and their errors are counted. The count is
+      # a budget that may only shrink, so a new test file cannot arrive with
+      # type errors in it behind the file-count ratchet (13 files opted in is
+      # a number a clean file inflates for free, and a file with sixty errors
+      # can only lower it).
+      - name: The test tree's type debt does not grow
+        run: npm run audit:test-type-errors
+
       - name: Run tests
         run: npm test
 

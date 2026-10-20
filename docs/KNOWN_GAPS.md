@@ -659,27 +659,46 @@ CN 与 PAT 凭据不受影响。二进制每进程只跑一次（`umidInfo` 缓�
 
 ---
 
-## 10. 测试树的类型检查只覆盖 13 个文件，其余 90 个只被解析
+## 10. 测试树的类型债被记成预算，但存量一条没修
 
-**位置**：`test/`、`tsconfig.test.json`、`scripts/audit-test-types.mjs`
+**位置**：`test/`、`tsconfig.test.json`、`tsconfig.test.budget.json`、
+`scripts/audit-test-types.mjs`、`scripts/audit-test-type-errors.mjs`
 
 **为什么没测**：2026-10-20 之前，测试文件完全不在任何编译器程序里——主 `tsconfig.json` 的
 `exclude` 写着 `test`、`allowJs` 是 `false`，而套件是经 Node 的剥类型加载器 import
 `src/**/*.ts` 的，注解被抹掉、一个都没查。测试树现在有了自己的程序（`tsconfig.test.json`），
 但 `checkJs` 是关的：没有 `// @ts-check` 的文件只被解析、不被检查。
 
-**还差多少**：2026-10-20 实测，103 个测试文件里 13 个 opt-in（`npm run audit:test-types` 的
-棘轮下限），其余 90 个只过了解析。把 `checkJs` 打开会得到 **2014 条**错误（`probe/` 目录占
-64 条），按错误码排是 `TS7006`（隐式 any）457 条、`TS2345` 303 条、`TS2339` 233 条、
-`TS7005` 169 条、`TS18048` 148 条、`TS7034` 93 条、`TS2379` 89 条；最重的几个文件是
-`test/handlers.test.js` 161 条、`test/shim.test.js` 136 条、`test/route-mount.test.js` 60 条。
-**这需要一次有预算的迁移，不是一次翻开关**：把 `checkJs: true` 写进 `tsconfig.test.json` 会让
-门禁立刻红，而那 2014 条里绝大多数是测试文件自己没标注的参数类型，逐条改是 90 个文件的工程。
+**还差多少**：2026-10-20 实测，104 个测试文件（101 个 `.js` + 3 个 `.mjs`）里 13 个 opt-in
+（`npm run audit:test-types` 的棘轮下限），这 13 个必须**零错误**；其余 91 个由
+`npm run audit:test-type-errors` 按**错误预算**管着。整棵树连同被测试文件顺带拖进来的
+`scripts/probe-params.mjs` 与 `probe/qoder-device-login.mjs`，一共 **2018 条**错误，
+按错误码排是 `TS7006`（参数隐式 any）471 条、`TS2345` 302 条、`TS2339` 233 条、
+`TS7005` 166 条、`TS18048` 148 条、`TS7034` 90 条、`TS2379` 89 条、`TS2353` 89 条；
+最重的几个文件是 `test/handlers.test.js` 161 条、`test/shim.test.js` 136 条、
+`test/route-mount.test.js` 60 条。**存量一条都没修**：预算就是今天的实测值，所以这道门禁
+管的是「不再变多」，不是「已经很干净」。
 
-**已经做到哪一步**：`npm run audit:test-types` 盯住三件会静默失守的事——opt-in 集合的棘轮
-下限（摘掉一个 pragma 就红）、编译器真的报了 opt-in 文件的错误（自探针：往 `test/` 里写一个
-带类型错误的临时文件，门禁要求这条错误被报出来）、以及 opt-in 的文件真的在程序里
-（`tsc --listFiles` 逐个点名）。pragma 的语义是实测出来的、不是猜的：只有 `//` 行注释算，
-块注释里的 `@ts-check` 编译器根本不看；token 必须出现在注释开头；最后一个 pragma 赢。
-六种故意破坏（摘 pragma、塞类型错误、把 `test` 加回 `exclude`、前导区加 `@ts-nocheck`、
-把 pragma 放到 import 之后、往未 opt-in 的文件里塞 pragma）都实测会红。
+**已经做到哪一步**：
+- `npm run audit:test-types` 盯住三件会静默失守的事——opt-in 集合的棘轮下限（摘掉一个
+  pragma 就红）、编译器真的报了 opt-in 文件的错误（自探针：往 `test/` 里写一个带类型错误的
+  临时文件，门禁要求这条错误被报出来）、以及 opt-in 的文件真的在程序里
+  （`tsc --listFiles` 逐个点名）。pragma 的语义是实测出来的、不是猜的：只有 `//` 行注释算，
+  块注释里的 `@ts-check` 编译器根本不看；token 必须出现在注释开头；最后一个 pragma 赢。
+  六种故意破坏（摘 pragma、塞类型错误、把 `test` 加回 `exclude`、前导区加 `@ts-nocheck`、
+  把 pragma 放到 import 之后、往未 opt-in 的文件里塞 pragma）都实测会红。
+- `npm run audit:test-type-errors` 是另一半：**棘轮轴从「文件数」换成了「错误数」**。
+  文件数那个轴买不到风险——给一个干净文件加 pragma 就 +1（有本事不要钱），而一个有 60 条
+  错的文件 opt-in 反而立刻变红（最该被看的文件进不来）；新写的测试文件带 20 条错进来，
+  文件数一动不动。错误预算反过来：新文件一进来就被数进去。两道门禁的分工是
+  `audit:test-types` 管「13 个文件必须零错」的下限，`audit:test-type-errors` 管
+  「整棵树的债不许涨」的上限。
+  这道门禁自己也有两道护栏：把 `tsconfig.test.budget.json` 的 `checkJs` 翻成 `false`
+  （错误数会塌成 0、门禁永远绿）、或把 `tsconfig.test.json` 的 `include` 里的 `test` 删掉
+  （测试树整个离开程序、同样塌成 0），两种改法都实测当场被抓红。
+
+**下一步**：预算只许降。`TS7006`/`TS7005`/`TS7034` 合起来 727 条是测试文件自己没标注的
+参数，机械但最省事；剩下 1291 条（收窄类与形状类）要逐条判断，收益也真实——坏 import
+在运行期就会炸，类型程序在测试树里真正独占的价值是「静默的类型错配」。降预算不需要
+另立计划：`node scripts/audit-test-type-errors.mjs --write` 会把当前总数与逐文件分布打出来，
+修掉一批就改一次 `BUDGET`。

@@ -26,18 +26,18 @@
  *
  * The same discipline as `test/mutation-gates.test.js`, applied to the gates
  * that one cannot reach: that file mutates the credential chain and lets the
- * real suite notice, while these three gates are scripts, not assertions, so
+ * real suite notice, while these four gates are scripts, not assertions, so
  * there is no failing test title to point at — the gate's own message is the
  * evidence.
  *
  * WHY THE SCRATCH LIVES INSIDE THE REPOSITORY
  *
- * Two of the three gates read their baseline out of git (`git show
- * <ref>:lib/client.js`) and the third needs the bundler from `node_modules`. A
- * scratch directory under the OS temp dir would have neither, so the gates
- * would report "no baseline" and exit 0 — the vacuous green this file exists
- * to catch, reproduced by the harness itself. `.verify-tmp/` is already ignored,
- * so the scratch never shows up in `git status`.
+ * Two of the gates read their baseline out of git (`git show
+ * <ref>:lib/client.js`) and the others need the bundler or the compiler from
+ * `node_modules`. A scratch directory under the OS temp dir would have neither,
+ * so the gates would report "no baseline" and exit 0 — the vacuous green this
+ * file exists to catch, reproduced by the harness itself. `.verify-tmp/` is
+ * already ignored, so the scratch never shows up in `git status`.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -264,6 +264,94 @@ test(
       )
     } finally {
       rmSync(dir, { recursive: true, force: true })
+    }
+  },
+)
+
+test(
+  'the debt budget refuses to be satisfied by measuring nothing',
+  { concurrency: true },
+  () => {
+    // The budget gate counts the type errors in the whole test tree and holds
+    // that count to a ceiling. Two configurations make the count collapse to
+    // zero while the gate still reports success — and each is one line of
+    // config away, so each is a mutation here.
+    const files = [
+      'package.json',
+      'tsconfig.json',
+      'tsconfig.test.json',
+      'tsconfig.test.budget.json',
+      'scripts',
+      'src',
+      'test',
+      'types',
+      'probe',
+    ]
+
+    // One control for both mutations: it proves the staged tree compiles the
+    // way the checkout does, so "the mutation was caught" cannot mean "the
+    // scratch was broken to begin with".
+    const controlDir = stage(files)
+    try {
+      linkNodeModules(controlDir)
+      const control = runNode(join(controlDir, 'scripts', 'audit-test-type-errors.mjs'), [], controlDir)
+      assert.equal(
+        control.status,
+        0,
+        `the unmutated copy must stay within its budget; got:\n${control.output}`,
+      )
+      assert.ok(
+        control.output.includes('test type errors:'),
+        `the unmutated copy must report the debt it measured; got:\n${control.output}`,
+      )
+    } finally {
+      rmSync(controlDir, { recursive: true, force: true })
+    }
+
+    // Mutation 1: the measuring program stops checking the files that have
+    // not opted in. The debt reads as zero, zero fits any budget, and the gate
+    // would pass forever on an empty measurement.
+    const flippedDir = stage(files)
+    try {
+      linkNodeModules(flippedDir)
+      replaceOnce(
+        join(flippedDir, 'tsconfig.test.budget.json'),
+        '"checkJs": true',
+        '"checkJs": false',
+      )
+
+      const run = runNode(join(flippedDir, 'scripts', 'audit-test-type-errors.mjs'), [], flippedDir)
+
+      assert.notEqual(run.status, 0, `the budget gate survived its mutation:\n${run.output}`)
+      assert.ok(
+        run.output.includes('no longer turns checkJs on'),
+        `the gate must say the measuring program stopped measuring; got:\n${run.output}`,
+      )
+    } finally {
+      rmSync(flippedDir, { recursive: true, force: true })
+    }
+
+    // Mutation 2: the test tree leaves the program entirely. Nothing is
+    // measured, nothing looks missing, and the gate has no way to tell —
+    // unless it compares the program against the files on disk.
+    const narrowedDir = stage(files)
+    try {
+      linkNodeModules(narrowedDir)
+      replaceOnce(
+        join(narrowedDir, 'tsconfig.test.json'),
+        '"include": ["src/host", "src/client", "types/*.d.ts", "test"]',
+        '"include": ["src/host", "src/client", "types/*.d.ts"]',
+      )
+
+      const run = runNode(join(narrowedDir, 'scripts', 'audit-test-type-errors.mjs'), [], narrowedDir)
+
+      assert.notEqual(run.status, 0, `the budget gate survived its mutation:\n${run.output}`)
+      assert.ok(
+        run.output.includes('the test tree is not fully in the type program'),
+        `the gate must say the tree left the program; got:\n${run.output}`,
+      )
+    } finally {
+      rmSync(narrowedDir, { recursive: true, force: true })
     }
   },
 )
