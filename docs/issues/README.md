@@ -32,7 +32,7 @@ gh issue create --repo eghrhegpe/dsh-connect-qoder --label P0 --title "$(head -1
 | [12-small-fixes-batch.md](12-small-fixes-batch.md) | ~~P2~~ **大部分已修** | 12 处小时级小口子：0.5.0 关 3，后续批次关 8（405/HEAD、Origin 带端口、no-store、`readJsonBodyOr400`、死码、lastSaveError 读取端、reload 形状、0 区域启动）；仅剩 `__hide-all__` 收拢为命名常量 `HIDE_ALL_MODELS` 但仍以哨兵形式存在 |
 | [13-lifecycle-dispose.md](13-lifecycle-dispose.md) | ~~P2~~ **已修**（宿主语义无法确认，按两种都对的方式处理） | dispose 两条尾巴（在途刷新、路由未注销） |
 | [14-namespace-convergence.md](14-namespace-convergence.md) | ~~P2~~ **大部分已修**（跨 bundle 共享不可行，改为对拍 + 失配显式报错） | 设置命名空间四套说法 → 已收敛为两套（`resolveNamespace` 与 `settingsNamespaceOf` 共享精确候选对，`__save` 候选去重）；`PROVIDER_NS` 现由 `plugin-identity.test.js` 钉在 `cordis.patch.yml` 行 id 上，失配时 `console.error` 显式报错 |
-| [15-delivery-docs-curation.md](15-delivery-docs-curation.md) | P3 | 交付漂移、文档与事实不符、默认不策展 |
+| [15-delivery-docs-curation.md](15-delivery-docs-curation.md) | ~~P3~~ **已结案**（交付漂移检查已于 2026-10-20 删除；当前装法见 [AGENTS.md](../../AGENTS.md)） | 交付漂移、文档与事实不符、默认不策展 |
 | [16-silent-failure-policy.md](16-silent-failure-policy.md) | **P2 门禁已落地**（2026-10-17） | 门禁：新代码不得再新增静默失败分支——`test/failure-reporting.test.js`（凭据层/目录层各注入一次失败、断言 ≥1 条上报）+ `docs/PLAN.md` P2-5 规则 + `.github/pull_request_template.md` 勾选 |
 | [17-client-source-restore.md](17-client-source-restore.md) | ~~P1~~ **已修**（产物去留已由 19 拍板：`lib/` 入库 + CI 新鲜度门禁） | `src/client` 已机械还原（内容等价）；字节一致经实测不可达——这不是未决项，19 已替它决策 |
 | [18-account-expired-link-no-context.md](18-account-expired-link-no-context.md) | ~~P2~~ **已修** | 账号失效提示裸链接跳官网无说明 → 已改为「先提示客户端重登/下载 + 带说明的下载链接」（issue 文件即验收基线） |
