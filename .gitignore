@@ -26,3 +26,6 @@ Thumbs.db
 .env.*
 # Session scratch (typecheck/build probe output)
 .verify-tmp/
+# Session scratch (一次性探针的落地处)——探针的**结论**要进 docs/ 或 probe/，
+# 脚本本身不入库：留在库里它既不被任何门禁跑、也不在任何程序里，是三重盲区。
+scratch/
