@@ -46,6 +46,27 @@ export const IMAGE_MODES = ["auto", "on", "off"] as const;
  */
 export const HIDE_ALL_MODELS = "__hide-all__";
 
+/**
+ * The queue-patience tiers this card offers — the client half of the vocabulary.
+ *
+ * The host owns the authoritative list (`PATIENCE_TIERS` in
+ * `src/host/patience.ts`) and resolves a stored value with it; the card needs
+ * the same three strings to render its three options and to normalise whatever
+ * the host shipped. Two lists, one meaning — so `test/contract.test.js`
+ * extracts the strings from the card source and asserts they equal the host's,
+ * and this module's copy is the one that test reads.
+ */
+export const PATIENCE_TIERS = ["2m", "4m", "6m"] as const;
+
+/**
+ * The tier in force when nothing usable is stored.
+ *
+ * The same value as the host's `DEFAULT_PATIENCE_TIER` and the schema's
+ * `.default(...)`: a card that defaulted elsewhere would show a selection the
+ * document does not hold, and the first save would then write it.
+ */
+export const DEFAULT_PATIENCE_TIER = "4m";
+
 /** One model row as the models route serves it — the fields this layer reads. */
 export interface ControllerModelRow {
 	id: string
@@ -54,11 +75,39 @@ export interface ControllerModelRow {
 	[key: string]: unknown
 }
 
-/** The three fields the card persists, staged and saved. */
+/** The fields the card persists, staged and saved. */
 export interface EditableState {
 	imageOverrides: Record<string, string>
 	maxWindow: boolean
 	enabledIds: Record<string, string[]>
+	/**
+	 * The queue-patience tier, one global value (`'2m' | '4m' | '6m'`).
+	 *
+	 * Typed `string` rather than the tier union because it is staged from
+	 * whatever the host reported and from a `<select>`'s `value`, both of which
+	 * are plain strings at the boundary; `patienceTierOf` below is the
+	 * normaliser that narrows it.
+	 */
+	patienceTier: string
+}
+
+/**
+ * Normalise one stored patience tier to one of {@link PATIENCE_TIERS}.
+ *
+ * An unrecognised value degrades to the default rather than to the first tier.
+ * The host already resolves the tier before shipping it, so this is the second
+ * half of the same rule: a browser cannot represent an unknown `<select>`
+ * value, and it does not throw either — it silently selects the FIRST option,
+ * which would show the user a deliberate "2m" for a document that says
+ * something else.
+ */
+export function patienceTierOf(stored: unknown): string {
+	// `find` rather than `includes` with a widened receiver: the list is a
+	// readonly tuple of literals, and comparing element-wise needs no cast to
+	// widen it to `readonly string[]` — the predicate itself is the narrowing.
+	return typeof stored === "string" && PATIENCE_TIERS.some((tier) => tier === stored)
+		? stored
+		: DEFAULT_PATIENCE_TIER;
 }
 
 /** Normalise whatever the saved map holds into one of {@link IMAGE_MODES}. */
@@ -127,6 +176,7 @@ export function initialEditableState(value: unknown): EditableState {
 			record.enabledModelIds !== null && typeof record.enabledModelIds === "object"
 				? (record.enabledModelIds as Record<string, string[]>)
 				: {},
+		patienceTier: patienceTierOf(record.patienceTier),
 	};
 }
 
@@ -156,11 +206,13 @@ export class QoderCardController<M extends ControllerModelRow = ControllerModelR
 			imageOverrides: { ...initial.imageOverrides },
 			maxWindow: initial.maxWindow,
 			enabledIds: { ...initial.enabledIds },
+			patienceTier: patienceTierOf(initial.patienceTier),
 		};
 		this.saved = {
 			imageOverrides: { ...initial.imageOverrides },
 			maxWindow: initial.maxWindow,
 			enabledIds: { ...initial.enabledIds },
+			patienceTier: patienceTierOf(initial.patienceTier),
 		};
 		this.snapshot = this.build();
 	}
@@ -198,15 +250,18 @@ export class QoderCardController<M extends ControllerModelRow = ControllerModelR
 
 	/** Seed the saved document, and mirror it as the staged state. */
 	seedSaved(next: EditableState): void {
+		const patienceTier = patienceTierOf(next.patienceTier);
 		this.saved = {
 			imageOverrides: { ...next.imageOverrides },
 			maxWindow: next.maxWindow,
 			enabledIds: { ...next.enabledIds },
+			patienceTier,
 		};
 		this.staged = {
 			imageOverrides: { ...next.imageOverrides },
 			maxWindow: next.maxWindow,
 			enabledIds: { ...next.enabledIds },
+			patienceTier,
 		};
 		this.lastSave = undefined;
 		this.publish();
@@ -261,6 +316,20 @@ export class QoderCardController<M extends ControllerModelRow = ControllerModelR
 		this.publish();
 	}
 
+	/**
+	 * Choose the queue-patience tier.
+	 *
+	 * Normalised on the way in, from the same list the options are rendered
+	 * from, so a stale option value (or a value that arrived from a host this
+	 * card does not fully understand) can never enter the staged document as an
+	 * unknown string.
+	 */
+	setPatienceTier(tier: string): void {
+		this.staged.patienceTier = patienceTierOf(tier);
+		this.lastSave = undefined;
+		this.publish();
+	}
+
 	setQuery(query: string): void {
 		this.query = query;
 		// View-only: never part of `dirty`, never persisted.
@@ -273,7 +342,7 @@ export class QoderCardController<M extends ControllerModelRow = ControllerModelR
 	}
 
 	/**
-	 * Persist the three editable fields through the injected writer.
+	 * Persist every editable field through the injected writer.
 	 *
 	 * Each write is verified upstream of this class (the host endpoint's
 	 * read-back in `writeSettingsField`), so a rejection raises here rather than
@@ -291,10 +360,12 @@ export class QoderCardController<M extends ControllerModelRow = ControllerModelR
 			results.push(await persist("enabledModelIds", this.staged.enabledIds));
 			results.push(await persist("imageOverrides", this.staged.imageOverrides));
 			results.push(await persist("useMaximumContextWindow", this.staged.maxWindow));
+			results.push(await persist("patienceTier", this.staged.patienceTier));
 			this.saved = {
 				imageOverrides: { ...this.staged.imageOverrides },
 				maxWindow: this.staged.maxWindow,
 				enabledIds: { ...this.staged.enabledIds },
+				patienceTier: this.staged.patienceTier,
 			};
 			// A clean "已保存" is owed only for a value the endpoint read back out
 			// of the document. The 404-legacy scope fallback instead resolves with
@@ -318,6 +389,7 @@ export class QoderCardController<M extends ControllerModelRow = ControllerModelR
 			imageOverrides: { ...this.saved.imageOverrides },
 			maxWindow: this.saved.maxWindow,
 			enabledIds: { ...this.saved.enabledIds },
+			patienceTier: this.saved.patienceTier,
 		};
 		this.lastSave = undefined;
 		this.publish();
@@ -339,7 +411,8 @@ export class QoderCardController<M extends ControllerModelRow = ControllerModelR
 		const dirty =
 			JSON.stringify(this.staged.imageOverrides) !== JSON.stringify(this.saved.imageOverrides) ||
 			JSON.stringify(this.staged.enabledIds) !== JSON.stringify(this.saved.enabledIds) ||
-			this.staged.maxWindow !== this.saved.maxWindow;
+			this.staged.maxWindow !== this.saved.maxWindow ||
+			this.staged.patienceTier !== this.saved.patienceTier;
 		const regionModels = this.models.filter((model) => model.region === this.activeRegion);
 		const regionAllTicked =
 			regionModels.length > 0 &&
@@ -357,6 +430,7 @@ export class QoderCardController<M extends ControllerModelRow = ControllerModelR
 			imageOverrides: this.staged.imageOverrides,
 			maxWindow: this.staged.maxWindow,
 			enabledIds: this.staged.enabledIds,
+			patienceTier: this.staged.patienceTier,
 			dirty,
 			saving: this.saving,
 			lastSave: this.lastSave,

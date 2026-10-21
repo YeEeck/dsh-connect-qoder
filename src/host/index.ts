@@ -47,6 +47,7 @@ import {
   resolvePreferences,
 } from './preferences.ts'
 import type { Preferences } from './preferences.ts'
+import { DEFAULT_PATIENCE_TIER, PATIENCE_TIERS } from './patience.ts'
 import { CatalogStore, CATALOG_TTL_MS as catalogTtlMs } from './catalog-store.ts'
 import { normalizeEntry } from './catalog-entry.ts'
 import type { FetchedEntry } from './catalog-entry.ts'
@@ -184,6 +185,32 @@ const ENABLED_MODEL_IDS_FIELD = z
   .volatile()
 
 /**
+ * How long a single request may wait for Qoder's queue.
+ *
+ * Three tiers rather than a number: the ADR (`docs/adr/0001-patience-knob-exposure.md`)
+ * decided the card exposes ONE knob and derives the idle window and the
+ * stream-idle ceiling from it, so the inequality "idle window < patience <
+ * stream-idle ceiling" holds by construction and a user cannot configure a
+ * combination that breaks it. An enum also removes "out of range" as a failure
+ * mode — there is no out of range.
+ *
+ * One global value, never per region: the queue a request lands in depends on
+ * the account, not on which edition's tab the user is looking at.
+ *
+ * The tier list itself lives in `patience.ts` — imported here rather than
+ * repeated — so the schema, the resolver and the card's select cannot drift to
+ * different vocabularies.
+ */
+const PATIENCE_TIER_FIELD = z
+  // Spread rather than passing the readonly array: `PATIENCE_TIERS` is declared
+  // `readonly PatienceTier[]`, and a spread hands schemastery the plain list it
+  // expects while keeping the list itself a single source.
+  .union([...PATIENCE_TIERS])
+  .default(DEFAULT_PATIENCE_TIER)
+  .description('How long one request may wait for Qoder\'s queue: "2m", "4m" or "6m"')
+  .volatile()
+
+/**
  * Which editions offer their models to DSH at all, per region.
  *
  * The account panel's per-region "models" switch writes this field through the
@@ -207,6 +234,7 @@ export const Config = z.object({
   imageOverrides: IMAGE_OVERRIDES_FIELD,
   enabledModelIds: ENABLED_MODEL_IDS_FIELD,
   enabledRegions: ENABLED_REGIONS_FIELD,
+  patienceTier: PATIENCE_TIER_FIELD,
 })
 
 /** Plugin-owned read-only route the settings card reads its model rows from. */
@@ -960,7 +988,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
   // source this used to juggle.
   //
   // `Preferences`, not a bare record: the Loader hands `apply` an object whose
-  // fields ARE the four settings this plugin declares, and the volatile shells
+  // fields ARE the five settings this plugin declares, and the volatile shells
   // (`{ get() }`) are a documented part of that hand-off. Typing it as an open
   // record here would let a reader index a field that does not exist and get
   // `unknown` back instead of a compile error.
@@ -994,7 +1022,7 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
   const current = () => resolvePreferences(preferences, livePreferences)
 
   /**
-   * The three settings taking effect needs the picker to rebuild: `invalidate`
+   * A settings change taking effect needs the picker to rebuild: `invalidate`
    * re-snapshots the model list, and the emit is what makes every reader of the
    * catalog — DSH's model picker included — drop the stale copy.
    */

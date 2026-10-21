@@ -17,6 +17,7 @@
  *
  * @module dsh-connect-qoder/catalog-entry
  */
+import { patienceTierOf } from './patience.ts'
 import { regionEnabledFor, HIDE_ALL_MODELS } from './preferences.ts'
 import { contextWindowLabelFor, resolveContextWindow } from './pi-model.ts'
 import { unwrapVolatile } from './volatile.ts'
@@ -254,11 +255,22 @@ export function buildModelRowsPayload({
   }
   const overrides = unwrapVolatile(settings?.imageOverrides)
   const enabled = unwrapVolatile(settings?.enabledModelIds)
+  // The tier is RESOLVED here rather than echoed raw: the card renders the
+  // resolved value as the selected option, so a stored value from a future
+  // version (or a hand edit) must arrive as the tier actually in force. The
+  // separate `patienceInvalid` flag is what keeps that substitution visible —
+  // without it the card would quietly show "4m" for a document that says
+  // something else, which is the silent fallback 红线 1 forbids. The reader is
+  // imported from `patience.ts` so this module owns no second copy of the tier
+  // list (see the contract test that compares the card's options to it).
+  const patience = patienceTierOf(settings)
   return {
     models,
     imageOverrides: overrides !== null && typeof overrides === 'object' ? overrides : {},
     useMaximumContextWindow: unwrapVolatile(settings?.useMaximumContextWindow) === true,
     enabledModelIds: enabled !== null && typeof enabled === 'object' ? enabled : {},
+    patienceTier: patience.tier,
+    patienceInvalid: patience.invalid,
     // The instant the ANSWER was rendered is the wrong fact to ship, and this
     // line was the whole of issue 05. A failed refresh keeps the last good
     // catalog, so serving "now" told the card a refresh had just happened —

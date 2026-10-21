@@ -16,7 +16,16 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { QoderCardController, enabledIdsFor, imageModeOf, initialEditableState, HIDE_ALL_MODELS } from '../src/client/controller.ts'
+import {
+  QoderCardController,
+  DEFAULT_PATIENCE_TIER,
+  PATIENCE_TIERS,
+  enabledIdsFor,
+  imageModeOf,
+  initialEditableState,
+  patienceTierOf,
+  HIDE_ALL_MODELS,
+} from '../src/client/controller.ts'
 
 /** A roster for one region, so tests read clearly. */
 function roster(entries) {
@@ -25,7 +34,7 @@ function roster(entries) {
 
 /** An empty saved document, as a fresh install would have it. */
 function blank() {
-  return { imageOverrides: {}, maxWindow: false, enabledIds: {} }
+  return { imageOverrides: {}, maxWindow: false, enabledIds: {}, patienceTier: DEFAULT_PATIENCE_TIER }
 }
 
 /** A controller over a small two-region roster, no edits made. */
@@ -57,8 +66,67 @@ test('`seedSaved` is what makes an edit dirty, and only then', () => {
   controller.toggleModel('qoder-cn', 'm')
   assert.equal(controller.getSnapshot().dirty, true)
   // Seeding mirrors saved onto staged, so the same value stops being an edit.
-  controller.seedSaved({ imageOverrides: {}, maxWindow: false, enabledIds: { 'qoder-cn': [] } })
+  controller.seedSaved({ imageOverrides: {}, maxWindow: false, enabledIds: { 'qoder-cn': [] }, patienceTier: DEFAULT_PATIENCE_TIER })
   assert.equal(controller.getSnapshot().dirty, false)
+})
+
+test('the patience tier is staged, and choosing another one makes the card dirty', () => {
+  const controller = fresh()
+  assert.equal(controller.getSnapshot().patienceTier, DEFAULT_PATIENCE_TIER, 'a fresh card starts on the default')
+  assert.equal(controller.getSnapshot().dirty, false)
+  controller.setPatienceTier('6m')
+  assert.equal(controller.getSnapshot().patienceTier, '6m')
+  assert.equal(
+    controller.getSnapshot().dirty,
+    true,
+    'the dirty comparison must include the tier, or a save button never lights up for it',
+  )
+  // Staging the value it already holds is not an edit.
+  controller.setPatienceTier(DEFAULT_PATIENCE_TIER)
+  assert.equal(controller.getSnapshot().dirty, false)
+})
+
+test('save() persists the tier whole, as its own field', async () => {
+  const controller = fresh()
+  controller.setPatienceTier('2m')
+  /** @type {Array<[string, unknown]>} */
+  const posted = []
+  await controller.save(async (field, value) => {
+    posted.push([field, value])
+  })
+  // One global value, posted whole — the host whitelists it as 'whole' and
+  // there is no region dimension to merge.
+  assert.deepEqual(
+    posted.find(([field]) => field === 'patienceTier'),
+    ['patienceTier', '2m'],
+    `save() must post the tier; it posted ${JSON.stringify(posted.map(([f]) => f))}`,
+  )
+  assert.equal(posted.length, 4, 'the tier is the fourth field the card writes')
+  assert.equal(controller.getSnapshot().dirty, false, 'a landed save promotes it to saved')
+  assert.deepEqual(controller.getSnapshot().lastSave, { ok: true })
+})
+
+test('a tier edit is discarded back to the saved tier, like every other field', () => {
+  const controller = fresh()
+  controller.seedSaved({ imageOverrides: {}, maxWindow: false, enabledIds: {}, patienceTier: '6m' })
+  assert.equal(controller.getSnapshot().patienceTier, '6m', 'seedSaved seeds the tier')
+  controller.setPatienceTier('2m')
+  assert.equal(controller.getSnapshot().dirty, true)
+  controller.discard()
+  assert.equal(controller.getSnapshot().patienceTier, '6m')
+  assert.equal(controller.getSnapshot().dirty, false)
+})
+
+test('a failed save leaves the chosen tier staged, not discarded', async () => {
+  const controller = fresh()
+  controller.setPatienceTier('6m')
+  await controller.save(async (field) => {
+    if (field === 'patienceTier') throw new Error('refused')
+    return true
+  })
+  assert.equal(controller.getSnapshot().patienceTier, '6m', 'the choice survives a refused write')
+  assert.equal(controller.getSnapshot().dirty, true)
+  assert.equal(controller.getSnapshot().lastSave?.ok, false)
 })
 
 test('a save that succeeds promotes staged to saved and reports ok', async () => {
@@ -108,7 +176,12 @@ test('a refused write surfaces a failure and keeps the edits', async () => {
 
 test('`discard` returns every field to the last saved document', () => {
   const controller = fresh()
-  controller.seedSaved({ imageOverrides: { qwen3: 'on' }, maxWindow: true, enabledIds: { 'qoder-cn': ['qwen3-max'] } })
+  controller.seedSaved({
+    imageOverrides: { qwen3: 'on' },
+    maxWindow: true,
+    enabledIds: { 'qoder-cn': ['qwen3-max'] },
+    patienceTier: DEFAULT_PATIENCE_TIER,
+  })
   controller.setMode('qwen3-max', 'off')
   controller.setMaxWindow(false)
   controller.toggleModel('qoder-cn', 'deepseek-v3')
@@ -121,7 +194,7 @@ test('`discard` returns every field to the last saved document', () => {
 
 test('`setMode("auto")` removes the override so the saved doc stays minimal', () => {
   const controller = fresh()
-  controller.seedSaved({ imageOverrides: { m: 'off' }, maxWindow: false, enabledIds: {} })
+  controller.seedSaved({ imageOverrides: { m: 'off' }, maxWindow: false, enabledIds: {}, patienceTier: DEFAULT_PATIENCE_TIER })
   controller.setMode('m', 'auto')
   assert.deepEqual(controller.getSnapshot().imageOverrides, {})
 })
@@ -194,8 +267,8 @@ test('a save while one is already in flight is ignored', async () => {
   const gate = new Promise((resolve) => {
     release = resolve
   })
-  // Persist answers each of the three fields once the gate is opened; before
-  // that it holds, so the first save is provably still in flight.
+  // Persist answers each field once the gate is opened; before that it holds,
+  // so the first save is provably still in flight.
   const holding = async () => {
     releases += 1
     await gate
@@ -206,14 +279,57 @@ test('a save while one is already in flight is ignored', async () => {
   assert.equal(releases, 1)
   release()
   await inFlight
-  assert.equal(releases, 3, 'all three fields of the first save were written; the second was ignored')
+  // Four fields since the patience tier joined the document (allow-list, image
+  // overrides, context window, tier).
+  assert.equal(releases, 4, 'all four fields of the first save were written; the second was ignored')
   assert.equal(controller.getSnapshot().dirty, false)
 })
 
 test('`initialEditableState` degrades a malformed answer to blanks', () => {
-  assert.deepEqual(initialEditableState(null), { imageOverrides: {}, maxWindow: false, enabledIds: {} })
-  assert.deepEqual(initialEditableState('garbage'), { imageOverrides: {}, maxWindow: false, enabledIds: {} })
+  const blankState = { imageOverrides: {}, maxWindow: false, enabledIds: {}, patienceTier: DEFAULT_PATIENCE_TIER }
+  assert.deepEqual(initialEditableState(null), blankState)
+  assert.deepEqual(initialEditableState('garbage'), blankState)
   assert.equal(initialEditableState({ useMaximumContextWindow: true }).maxWindow, true)
+})
+
+test('`patienceTierOf` normalises a stored tier, and falls back to the default for anything else', () => {
+  // The client half of the same rule the host applies: the card must never put
+  // an unknown string into a controlled <select>, because the browser does not
+  // throw on one — it silently selects the first option, showing the user a
+  // deliberate "2m" for a value they never chose.
+  for (const tier of PATIENCE_TIERS) assert.equal(patienceTierOf(tier), tier)
+  for (const stored of ['5m', '', 4, null, undefined, {}, []]) {
+    assert.equal(patienceTierOf(stored), DEFAULT_PATIENCE_TIER, JSON.stringify(stored))
+  }
+})
+
+test('`initialEditableState` seeds the tier the host resolved, and falls back for anything else', () => {
+  // The host resolves the tier before it ships it (`patienceTierOf`), so a
+  // value that arrives here is normally one of the three. The normalisation is
+  // still performed on THIS side because the card must never put an unknown
+  // string into a <select>: the browser would silently select the first option,
+  // which reads as a deliberate '2m' to the user. '4m' is the same default the
+  // host and the schema use.
+  assert.equal(initialEditableState({ patienceTier: '6m' }).patienceTier, '6m')
+  assert.equal(initialEditableState({ patienceTier: '2m' }).patienceTier, '2m')
+  for (const value of ['5m', '', 4, null, {}, []]) {
+    assert.equal(
+      initialEditableState({ patienceTier: value }).patienceTier,
+      DEFAULT_PATIENCE_TIER,
+      `stored tier ${JSON.stringify(value)} must normalise to the default`,
+    )
+  }
+  assert.equal(initialEditableState({}).patienceTier, DEFAULT_PATIENCE_TIER, 'an absent tier is the default')
+  assert.equal(DEFAULT_PATIENCE_TIER, '4m')
+  assert.deepEqual([...PATIENCE_TIERS], ['2m', '4m', '6m'])
+})
+
+test('the tier is part of the snapshot the JSX reads', () => {
+  // A value the card renders but the snapshot omits is a value React never
+  // re-renders on; the select would keep showing the old tier after a save.
+  const controller = fresh()
+  controller.setPatienceTier('2m')
+  assert.equal(controller.getSnapshot().patienceTier, '2m')
 })
 
 test('`enabledIdsFor` reads an empty list as "every model"', () => {

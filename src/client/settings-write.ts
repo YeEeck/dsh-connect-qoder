@@ -1,7 +1,7 @@
 /**
  * Verified settings writes, adapted from the WorkBuddy bundle's
  * `writeField` contract (src/client/account-selection) to this card's
- * three top-level fields.
+ * top-level fields.
  *
  * The settings scope's `set()` resolving is NOT proof that anything was
  * stored.

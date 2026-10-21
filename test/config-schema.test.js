@@ -101,18 +101,45 @@ test('the config schema declares enabledRegions as a volatile field', () => {
 test('every config field is marked volatile', () => {
   // The host validates `settings.mutate` fields against the Loader entry's
   // config schema and accepts only declared AND volatile fields. Losing the
-  // marker on any of the four turns that field's save into a silent refusal
+  // marker on any of them turns that field's save into a silent refusal
   // (the `Config field … is not volatile` refusal the first test pins for
-  // enabledRegions alone). All four go through `__save`, so all four must
-  // carry the marker.
+  // enabledRegions alone). Every field goes through `__save`, so every field
+  // must carry the marker — and a NEW field that is not added to this list
+  // makes the promise empty for exactly that field.
   for (const field of [
     'USE_MAXIMUM_CONTEXT_WINDOW_FIELD',
     'IMAGE_OVERRIDES_FIELD',
     'ENABLED_MODEL_IDS_FIELD',
     'ENABLED_REGIONS_FIELD',
+    'PATIENCE_TIER_FIELD',
   ]) {
     volatileBodyOf(field) // throws if the declaration or the marker is gone
   }
+})
+
+test('the patience tier is an enum of the three tiers, defaulting to the middle one', () => {
+  // The ticket that adds the tier is a SETTING that must match what the card's
+  // select renders and what `patience.ts` resolves. The default is load-bearing
+  // twice: it is what a fresh install gets, and it is the value the resolver
+  // falls back to, so the two must be the same number or a corrupt document
+  // would silently move the user to a tier the schema would not have produced.
+  const config = objectValueOf('export const Config')
+  assert.ok(/patienceTier:\s*PATIENCE_TIER_FIELD/.test(config), 'Config lost its patienceTier field')
+  const body = volatileBodyOf('PATIENCE_TIER_FIELD')
+  // Asserted as two facts rather than one exact spelling: the field must be a
+  // union (an enum, not a free string) AND its members must come from
+  // `patience.ts`. Pinning `.union([...PATIENCE_TIERS])` character-for-character
+  // would turn a harmless `z.union(PATIENCE_TIERS)` simplification red without
+  // changing what the schema accepts.
+  assert.ok(body.includes('.union('), 'the patience tier must be an enum, not a free-form string')
+  assert.ok(
+    body.includes('PATIENCE_TIERS'),
+    'the tier list must come from src/host/patience.ts, not a second copy in the schema',
+  )
+  assert.ok(
+    body.includes('.default(DEFAULT_PATIENCE_TIER)'),
+    'the schema default and the resolver default must be one value',
+  )
 })
 
 test('the pre-existing fields are still declared', () => {
@@ -125,6 +152,7 @@ test('the pre-existing fields are still declared', () => {
     'imageOverrides',
     'enabledModelIds',
     'enabledRegions',
+    'patienceTier',
   ]) {
     assert.ok(config.includes(field), `Config lost its \`${field}\` field`)
   }

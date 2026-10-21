@@ -12,7 +12,15 @@ import { TokenHistoryChart } from "./token-history-chart.tsx"
 // The editable-state machine. `imageModeOf`, `enabledIdsFor`, `IMAGE_MODES` and
 // the sentinel are imported rather than re-declared, so the rules the JSX reads
 // and the rules the tests assert are literally the same functions.
-import { QoderCardController, imageModeOf, enabledIdsFor, initialEditableState, persistViaScope, IMAGE_MODES } from "./controller.ts"
+import {
+	QoderCardController,
+	DEFAULT_PATIENCE_TIER,
+	imageModeOf,
+	enabledIdsFor,
+	initialEditableState,
+	persistViaScope,
+	IMAGE_MODES,
+} from "./controller.ts"
 // The browser-free decision layer (off-peak gate, rate, window label, refresh
 // verdict, formatting) plus the view-model type vocabulary. Moved to its own
 // module so Node tests can import the real rules instead of mirroring them —
@@ -358,7 +366,15 @@ export function QoderPluginCard({ t, settingsScope, view }: QoderPluginCardProps
 	// methods — no `useState` in the rules, only around what React must own.
 	//
 	// Created once, via the initializer form, so a re-render never resets it.
-	const [controller] = react.useState(() => new QoderCardController<CardModelRow>({ imageOverrides: {}, maxWindow: false, enabledIds: {} }));
+	const [controller] = react.useState(
+		() =>
+			new QoderCardController<CardModelRow>({
+				imageOverrides: {},
+				maxWindow: false,
+				enabledIds: {},
+				patienceTier: DEFAULT_PATIENCE_TIER,
+			}),
+	);
 	// Keep the roster the fetch returned in sync with the controller, so the
 	// derived `regionModels` / `visibleModels` / `regionAllTicked` are current.
 	// The roster is live catalog state, never persisted, so feeding it here is
@@ -392,6 +408,14 @@ export function QoderPluginCard({ t, settingsScope, view }: QoderPluginCardProps
 	// standing between a fully rendered roster and the chat picker silently
 	// offering none of it.
 	const [providerFailure, setProviderFailure] = react.useState<string | null>(null);
+	// Whether the HOST had to replace a stored patience tier it could not read.
+	// The host resolves the tier before shipping it, so the resolved value alone
+	// cannot say that a substitution happened — this flag is the only evidence,
+	// and it is what turns the fallback into a visible warning instead of a
+	// silent "4 minutes" for a document that says something else (AGENTS.md
+	// 红线 1). Defaults to false: a host that predates the field reports nothing,
+	// and a warning nobody can act on is worse than no warning.
+	const [patienceInvalid, setPatienceInvalid] = react.useState(false);
 	// Bumped when the account panel's re-read lands; the usage panel
 	// treats a non-zero value as "force a fresh quota pull".
 	const [usageBump, setUsageBump] = react.useState(0);
@@ -468,13 +492,17 @@ export function QoderPluginCard({ t, settingsScope, view }: QoderPluginCardProps
 			// An unparseable or non-OK answer throws (the roster has no
 			// "no data" state to fall back to), which lands in the catch
 			// below as a visible failure, never a silent empty list.
-			const value = await getJson<{ models?: unknown; refreshedAt?: unknown }>(
+			const value = await getJson<{ models?: unknown; refreshedAt?: unknown; patienceInvalid?: unknown }>(
 				`${QODER_MODELS_PATH}${refresh ? "?refresh=1" : ""}`,
 				{ signal },
 			);
 			if (!mounted.current) return;
 			setModels(Array.isArray(value.models) ? value.models : []);
 			if (!refresh) controller.seedSaved(initialEditableState(value));
+			// Read on every load, refresh included: the fallback is a fact about
+			// the DOCUMENT, not about the roster, and a refresh is exactly when
+			// someone asks whether the host still sees what they saved.
+			setPatienceInvalid(value.patienceInvalid === true);
 			// The host sends when the rows were FETCHED, not when this response
 			// was rendered. The old `else Date.now()` fallback was the browser
 			// half of issue 05: a route that answered while every refresh was
@@ -543,7 +571,7 @@ export function QoderPluginCard({ t, settingsScope, view }: QoderPluginCardProps
 		controller.setRegionAll(regionId, allOn);
 	}, [controller]);
 	/**
-	 * Persist the card's three settings fields.
+	 * Persist the card's saved settings fields.
 	 *
 	 * The controller writes through `persistViaScope`, which verifies each write
 	 * (read-back against what was posted) and merges the per-region allow-list,
@@ -553,7 +581,17 @@ export function QoderPluginCard({ t, settingsScope, view }: QoderPluginCardProps
 	 */
 	const save = react.useCallback(() => {
 		if (settingsScope === undefined) return Promise.resolve();
-		return controller.save(persistViaScope(settingsScope));
+		return controller.save(persistViaScope(settingsScope)).then(() => {
+			const outcome = controller.getSnapshot().lastSave;
+			// A CONFIRMED save proves the document now holds a valid tier: the host
+			// endpoint read the posted value back out of it. Leaving the warning up
+			// would then describe a document that no longer exists. An UNCONFIRMED
+			// save (the 404-legacy path) proves nothing about the document, so the
+			// warning stays — the card already labels that save "已保存（未确认）".
+			if (outcome !== undefined && outcome.ok === true && outcome.confirmed !== false) {
+				setPatienceInvalid(false);
+			}
+		});
 	}, [controller, settingsScope]);
 	const discard = react.useCallback(() => {
 		controller.discard();
@@ -570,6 +608,13 @@ export function QoderPluginCard({ t, settingsScope, view }: QoderPluginCardProps
 	const setMaxWindow = react.useCallback((on: boolean) => {
 		controller.setMaxWindow(on);
 	}, [controller]);
+	// Staging a tier clears the host's "that value was replaced" warning on the
+	// next answer, not here: the user has only PROPOSED a different tier until a
+	// save lands, and dismissing the warning on selection would hide the one
+	// fact that explains why the card showed a tier they did not choose.
+	const setPatienceTier = react.useCallback((tier: string) => {
+		controller.setPatienceTier(tier);
+	}, [controller]);
 	// The derived roster view (the active region's models, the filtered
 	// subset, the ticked counter) is computed by the controller, not here.
 	// `snap` below is the one object the JSX reads.
@@ -583,6 +628,7 @@ export function QoderPluginCard({ t, settingsScope, view }: QoderPluginCardProps
 	const imageOverrides = snap.imageOverrides;
 	const maxWindow = snap.maxWindow;
 	const enabledIds = snap.enabledIds;
+	const patienceTier = snap.patienceTier;
 	const activeRegion = snap.activeRegion;
 	// One row's image select is shown when the user asked for the tuning
 	// column, or when that model already carries a non-default override — an
@@ -741,8 +787,9 @@ export function QoderPluginCard({ t, settingsScope, view }: QoderPluginCardProps
 								</button>
 							</div>
 						) : null}
-						{/* The two roster-level controls that are not per-model: the
-						    context-window display and the image-input tuning switch.
+						{/* The roster-level controls that are not per-model: the
+						    queue-patience tier, the context-window display and the
+						    image-input tuning switch.
 						    They sit ABOVE the roster, not below it, for a hard
 						    reason: "按最大上下文显示" is persisted state — it dirties
 						    the card (`controller.ts`: `staged.maxWindow !==
@@ -750,6 +797,35 @@ export function QoderPluginCard({ t, settingsScope, view }: QoderPluginCardProps
 						    roster's own footer. A setting that "保存" would carry
 						    must sit above the row that saves it. */}
 						<div className="dsm-qoder-switches">
+							{/* The queue-patience tier. A <select> out of the ADR
+							    (docs/adr/0001-patience-knob-exposure.md): an enum makes
+							    "out of range" impossible, where a number input would
+							    owe the user four new visible failure states — and the
+							    card already uses a select per model row, so the shape
+							    is an existing precedent rather than a new one.
+							    It sits in THIS row, above the commit bar, because it
+							    is persisted state: a setting "保存" would carry must
+							    be above the row that saves it. The three values are
+							    written out here rather than mapped, because the copy
+							    keys are per tier — and they are the strings
+							    `test/contract.test.js` extracts to prove they equal
+							    the host's `PATIENCE_TIERS`. */}
+							<label className="dsm-qoder-switch" title={t("row.patienceTitle")}>
+								<span>{t("row.patience")}</span>
+								<select
+									className="dsm-qoder-select"
+									value={patienceTier}
+									disabled={saving}
+									aria-label={t("row.patience")}
+									onChange={(event: unknown) => {
+										setPatienceTier((event as ValueEvent).target.value);
+									}}
+								>
+									<option value="2m">{t("row.patience2m")}</option>
+									<option value="4m">{t("row.patience4m")}</option>
+									<option value="6m">{t("row.patience6m")}</option>
+								</select>
+							</label>
 							<label className="dsm-qoder-switch" title={t("row.maxWindowTitle")}>
 								<input
 									type="checkbox"
@@ -780,6 +856,22 @@ export function QoderPluginCard({ t, settingsScope, view }: QoderPluginCardProps
 								<span>{t("row.imageTuning")}</span>
 							</label>
 						</div>
+						{/* The host had to replace a stored tier it could not read.
+						    This line is the whole reason the fallback is allowed:
+						    without it the select above would show "4 minutes" for a
+						    document that says something else, and the user would have
+						    no way to know their choice is not in force (AGENTS.md 红线 1,
+						    docs/issues/16). It sits directly under the switch row because
+						    it explains that row's select, and it renders ABOVE the commit
+						    bar with it. */}
+						{patienceInvalid ? (
+							// The tier named is the one the host RESOLVED (it ships the resolved
+							// value), so the sentence keeps telling the truth if the default ever
+							// moves — no second copy of "4 minutes" in the copy table.
+							<p className="dsm-qoder-error">
+								{t("row.patienceInvalid", { tier: t(`row.patience${patienceTier}`) })}
+							</p>
+						) : null}
 						{/* The image hint explains the per-row selects, so it is
 						    only worth a line when those selects are actually on
 						    screen. With the tuning column collapsed the card keeps

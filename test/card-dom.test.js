@@ -56,7 +56,7 @@ const REGIONS = [
 ]
 
 /** A fetch stub answering the plugin's own routes from an in-memory model. */
-function routeStub({ models = [model({})], accountRegions = REGIONS, usageRegions = [], usageCheckin, saveStatus = 200, imageOverrides = {} } = {}) {
+function routeStub({ models = [model({})], accountRegions = REGIONS, usageRegions = [], usageCheckin, saveStatus = 200, imageOverrides = {}, patienceTier = '4m', patienceInvalid = false } = {}) {
   const calls = []
   const seen = (url) => { calls.push(String(url)); return calls }
   const json = (value) => ({
@@ -73,6 +73,8 @@ function routeStub({ models = [model({})], accountRegions = REGIONS, usageRegion
         imageOverrides,
         enabledModelIds: {},
         useMaximumContextWindow: false,
+        patienceTier,
+        patienceInvalid,
         refreshedAt: 1750000000000,
       })
     }
@@ -771,8 +773,11 @@ test('toggling the max-window switch does not erase the load-failure detail', as
 test('the per-row image selects stay out of the way until they are asked for', async () => {
   const { container, react } = await mount({ models: [model({ id: 'm1', name: 'Alpha' })] })
 
+  // Scoped to the roster: the card has a second `.dsm-qoder-select` in its
+  // switch row (the queue-patience tier), and counting every select on the
+  // card would make this assertion about the wrong control.
   assert.equal(
-    container.querySelectorAll('.dsm-qoder-select').length,
+    container.querySelectorAll('.dsm-qoder-models .dsm-qoder-select').length,
     0,
     'a default row must not print a select whose value says nothing was set',
   )
@@ -782,7 +787,7 @@ test('the per-row image selects stay out of the way until they are asked for', a
   await update(react, () => tuning.click())
 
   assert.equal(
-    container.querySelectorAll('.dsm-qoder-select').length,
+    container.querySelectorAll('.dsm-qoder-models .dsm-qoder-select').length,
     1,
     'the tuning switch must reveal the per-row select',
   )
@@ -846,9 +851,176 @@ test('an image override the user set is never hidden by the view switch', async 
     fetch: routeStub({ models: [model({ id: 'm1', name: 'Alpha' })], imageOverrides: { m1: 'on' } }),
   })
 
-  const select = container.querySelector('.dsm-qoder-select')
+  const select = container.querySelector('.dsm-qoder-models .dsm-qoder-select')
   assert.ok(select !== null, 'a model with an override must keep its select with the switch off')
   assert.equal(select.value, 'on', `the saved override must be the selected value; saw: ${select.value}`)
+})
+
+// ---------------------------------------------------------------------------
+// The queue-patience tier (`.scratch/stream-idle-patience/issues/04`).
+//
+// THIS BLOCK IS EXPECTED TO FAIL UNTIL THE CLIENT BUNDLE IS REBUILT. This file
+// drives `lib/client.js`, which is a build artifact; ticket 04 changes
+// `src/client/card.tsx` and `controller.ts` and deliberately does not run the
+// build (the lead rebuilds `lib/` once per delivery commit). The assertions are
+// written against the TARGET behaviour and must not be weakened to go green
+// against a stale artifact — a green run here before the rebuild would mean the
+// test is checking something other than the shipped card.
+// ---------------------------------------------------------------------------
+
+/**
+ * The patience select in the card's switch row, or null when it is absent.
+ *
+ * @param {any} container - the rendered card's container.
+ * @returns {any} the select element, or null.
+ */
+const patienceSelect = (container) =>
+  container.querySelector('.dsm-qoder-switches select.dsm-qoder-select')
+
+test('the card offers the three patience tiers, above the commit bar', async () => {
+  const { container } = await mount({ models: [model({ id: 'm1', name: 'Alpha' })] })
+
+  const select = patienceSelect(container)
+  assert.ok(select !== null, 'the card must render the queue-patience select')
+  assert.deepEqual(
+    [...select.options].map((option) => option.value),
+    ['2m', '4m', '6m'],
+    'the three tiers, in the order the durations ascend',
+  )
+  assert.deepEqual(
+    [...select.options].map((option) => text(option)),
+    ['2 分钟', '4 分钟', '6 分钟'],
+    'each option must carry its copy, not its stored value',
+  )
+  // A setting the commit bar saves has to sit above it (the repo rule this
+  // card already follows for "按最大上下文显示"), or the user picks a tier and
+  // the button that commits it is below the fold.
+  const bar = container.querySelector('.dsm-qoder-actions-save')
+  assert.ok(bar !== null, 'the commit bar is missing')
+  const all = [...container.querySelectorAll('*')]
+  assert.ok(all.indexOf(select) < all.indexOf(bar), 'the tier select must render above the commit bar')
+})
+
+test('the patience select shows the tier the host resolved, and a save posts it whole', async () => {
+  // `patienceTier` is what the HOST resolved (`patienceTierOf`), not the raw
+  // document value: an unknown stored tier arrives already normalised and the
+  // separate flag says so.
+  //
+  // The save is asserted on the REQUEST BODY the endpoint receives, because
+  // that is the contract with the host's whitelist: one field per write, so the
+  // tier must arrive as its own `{ field: 'patienceTier', value: '2m' }` and
+  // not folded into another field's body.
+  const base = routeStub({ models: [model({ id: 'm1', name: 'Alpha' })], patienceTier: '6m' })
+  /** @type {Array<{ field?: string, value?: unknown }>} */
+  const saves = []
+  /**
+   * @param {any} url - the route being fetched.
+   * @param {any} init - the fetch init, whose body carries the posted field.
+   * @returns {any} the base stub's answer.
+   */
+  const fetch = (url, init) => {
+    if (String(url).includes('/__save')) saves.push(JSON.parse(String(init?.body ?? '{}')))
+    return base(url, init)
+  }
+  const { container, react } = await mount({ fetch })
+
+  const select = patienceSelect(container)
+  assert.ok(select !== null, 'the card must render the queue-patience select')
+  assert.equal(select.value, '6m', `the host's tier must be the selected one; saw: ${select.value}`)
+
+  // Choose another tier, the way a browser does.
+  await update(react, () => {
+    // The controlled select's `value` is a React prop; set it the way the
+    // browser would and fire the event React listens for.
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')
+    descriptor?.set?.call(select, '2m')
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  assert.equal(patienceSelect(container).value, '2m')
+
+  const save = [...container.querySelectorAll('button')].find((b) => text(b) === '保存')
+  assert.ok(save !== undefined, 'no save button')
+  assert.equal(save.disabled, false, 'choosing a tier must make the card dirty and enable save')
+  await update(react, () => save.click())
+  // Four sequential writes now; give the chain enough turns to settle.
+  for (let i = 0; i < 6; i++) await update(react, () => {})
+
+  const posted = saves.find((body) => body.field === 'patienceTier')
+  assert.ok(
+    posted !== undefined,
+    `the save must post a patienceTier field; it posted ${JSON.stringify(saves.map((b) => b.field))}`,
+  )
+  assert.equal(posted.value, '2m', 'the chosen tier must be persisted whole')
+  assert.deepEqual(
+    saves.map((body) => body.field),
+    ['enabledModelIds', 'imageOverrides', 'useMaximumContextWindow', 'patienceTier'],
+    'the tier is the fourth field the card writes, in the order the controller persists them',
+  )
+})
+
+test('reopening the card re-seeds the tier that was saved', async () => {
+  // The round trip a user actually checks: choose, save, close, open. The host
+  // answers with what the document now holds, and the select must show it
+  // rather than its first option.
+  const reopened = await mount({ models: [model({ id: 'm1', name: 'Alpha' })], patienceTier: '2m' })
+  const select = patienceSelect(reopened.container)
+  assert.ok(select !== null, 'the card must render the queue-patience select')
+  assert.equal(select.value, '2m', 'a reopened card must show the saved tier')
+})
+
+test('a stored tier the host could not read is warned about, not silently replaced', async () => {
+  // The fallback is visible or it is a silent failure (AGENTS.md 红线 1). The
+  // host normalises the tier AND reports that it did, and this line is the
+  // only place that fact reaches the user.
+  const { container, react } = await mount({
+    models: [model({ id: 'm1', name: 'Alpha' })],
+    patienceTier: '4m',
+    patienceInvalid: true,
+  })
+
+  /**
+   * The patience warning, if the card is showing one.
+   *
+   * @param {any} root - the container to search.
+   * @returns {any} the warning element, or undefined.
+   */
+  const warningIn = (root) =>
+    [...root.querySelectorAll('.dsm-qoder-error')].find((n) => text(n).includes('排队耐心'))
+
+  const warning = warningIn(container)
+  assert.ok(warning !== undefined, 'a replaced tier must be visible on the card')
+  assert.match(text(warning), /4 分钟/, 'the warning must name the tier actually in force')
+
+  // And a save that the host CONFIRMED proves the document now holds a valid
+  // tier — the endpoint read the posted value back out of it. A warning that
+  // survived that would be describing a document that no longer exists.
+  const select = patienceSelect(container)
+  assert.ok(select !== null, 'the card must render the queue-patience select')
+  await update(react, () => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')
+    descriptor?.set?.call(select, '6m')
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  const save = [...container.querySelectorAll('button')].find((b) => text(b) === '保存')
+  assert.ok(save !== undefined, 'no save button')
+  await update(react, () => save.click())
+  for (let i = 0; i < 6; i++) await update(react, () => {})
+  assert.equal(warningIn(container), undefined, 'a confirmed save replaces the document the warning described')
+})
+
+test('a readable tier produces no warning at all', async () => {
+  // The false-alarm direction. A permanent red line on a healthy card trains
+  // people to ignore the one that matters.
+  const { container } = await mount({ models: [model({ id: 'm1', name: 'Alpha' })], patienceTier: '6m' })
+  // The control has to be ON SCREEN for "no warning" to mean anything: a card
+  // that rendered neither the select nor the warning would satisfy the
+  // assertion below vacuously, and that is exactly the stale-bundle state this
+  // block is expected to be red in before the rebuild.
+  assert.ok(patienceSelect(container) !== null, 'the control must be on screen for this test to mean anything')
+  assert.equal(
+    [...container.querySelectorAll('.dsm-qoder-error')].some((n) => text(n).includes('排队耐心')),
+    false,
+  )
 })
 
 // The save/discard row used to sit OUTSIDE the scrolling list, which handed its

@@ -1,14 +1,21 @@
 /**
- * Resolving the three settings this plugin offers.
+ * Resolving the settings this plugin offers.
+ *
+ * Four of the five are resolved here — the per-region model allow-list, the
+ * per-model image overrides, the per-region provider switch and the
+ * maximum-context switch. The fifth, the queue-patience tier, has its own
+ * reader (`patienceTierOf` in `patience.ts`): it answers a value plus an
+ * "invalid" flag rather than a plain setting, and that vocabulary belongs with
+ * the tier list itself.
  *
  * Extracted from `activate` in lib/index.js. The logic is pure — it takes a
  * configuration source and answers questions about it — but it was inlined in a
  * function that cannot be imported, so none of it was covered.
  *
- * Two of the three settings are read on every model build and on every listing,
- * so their resolution sits on the hot path of a card render. The interesting
- * part is the live-reference shape: a volatile field holds `{ get() }`
- * rather than a value, and reading it directly yields the shell.
+ * Two of the settings are read on every model build and on every listing, so
+ * their resolution sits on the hot path of a card render. The interesting part
+ * is the live-reference shape: a volatile field holds `{ get() }` rather than
+ * a value, and reading it directly yields the shell.
  *
  * @module dsh-connect-qoder/preferences
  */
@@ -20,10 +27,11 @@ import type { VolatileRef } from './volatile.ts'
  *
  * `enabledModelIds` and `imageOverrides` are keyed BY REGION / BY MODEL, so
  * their value type is a map; `enabledRegions` maps a region id to its switch;
- * `useMaximumContextWindow` is the one plain boolean. Every field is optional
- * because absence is meaningful throughout this module — an absent allow-list
- * means "no filter" and an absent region switch means "offered", which is the
- * opposite of a default-filled document.
+ * `useMaximumContextWindow` is one plain boolean and `patienceTier` is the
+ * plain enum string (one global value — never per region). Every field is
+ * optional because absence is meaningful throughout this module — an absent
+ * allow-list means "no filter" and an absent region switch means "offered",
+ * which is the opposite of a default-filled document.
  *
  * The `VolatileRef<>` wrappers are not decoration: on the 0.2 line each of
  * these arrives as a `{ get() }` shell, and every reader here unwraps before
@@ -34,6 +42,15 @@ export interface Preferences {
   imageOverrides?: VolatileRef<Record<string, unknown>>
   enabledRegions?: VolatileRef<Record<string, unknown>>
   useMaximumContextWindow?: VolatileRef<unknown>
+  /**
+   * The queue-patience tier (`'2m' | '4m' | '6m'`).
+   *
+   * Typed `unknown` on purpose, like the boolean above: the document may be
+   * hand-edited and hold anything, and the reader that knows the vocabulary is
+   * `patienceTierOf` — declaring `PatienceTier` here would promise a
+   * validation nothing performs.
+   */
+  patienceTier?: VolatileRef<unknown>
 }
 
 /** The per-model image modes a saved override may hold. */

@@ -291,7 +291,8 @@ dsh plugin --profile web add <本仓库路径>
 | `src/host/adapter-models.ts` | 单个区域向 DSH 提供的模型列表：区域开关（只认显式 `true`）、勾选过滤、最大上下文开关、逐模型图像模式（从 `adapter.ts` 抽出以便直测，无 peer 依赖） |
 | `src/host/region-gate.ts` | 一个区域能否作为 provider 上线：三档拒绝（无登录 / 已过期 / 读不到）各自的判定与日志级别（从 `index.ts` 抽出以便直测，无 peer 依赖） |
 | `src/host/lifecycle.ts` | 插件 fiber 退出时要撤销的东西：路由注册的注销句柄收集与释放（宿主是否随 fiber 回收无法从插件侧确认，故两种语义都正确；无 peer 依赖） |
-| `src/host/preferences.ts` | 四个设置项的读取与 volatile 解包（`enabledRegions` 区域开关：缺失/非对象一律读作开启，只有显式 `false` 才关） |
+| `src/host/preferences.ts` | 设置项的读取与 volatile 解包（`enabledRegions` 区域开关：缺失/非对象一律读作开启，只有显式 `false` 才关；排队耐心档位的读取在下一行的 `patience.ts`） |
+| `src/host/patience.ts` | 排队耐心档位的**单一词表**：`PatienceTier` / `PATIENCE_TIERS` / `DEFAULT_PATIENCE_TIER` 与解析器 `patienceTierOf`（返回 `{ tier, invalid }`——回落默认档时必须带 `invalid: true`，卡片据此显示告警，不许静默，无 peer 依赖）；三个推导数值（`limitsFor` / `streamIdleCeilingFor`）按 ADR 也落在此文件，由让档位生效的那张票补上 |
 | `src/host/offpeak.ts` | 错峰窗口与费率算术（无 peer 依赖） |
 | `src/host/single-flight.ts` | 同类异步任务的并发合并：刷新在途时，后来的调用并入同一次请求（目录/用量刷新用，无 peer 依赖） |
 | `src/host/claim.ts` | 每日签到：当轮活动的挑选、可领状态判定与领取结果的归一化（纯函数，无 peer 依赖） |
@@ -318,7 +319,7 @@ dsh plugin --profile web add <本仓库路径>
 | `src/client/paths.ts` | 卡片用到的五条插件路由 |
 | `src/client/styles.ts` | 卡片样式与 `installStyles`（`dsm-*` 一套与 `dsh-connect-workbuddy` 逐字一致，原因见文件头） |
 | `src/client/settings-write.ts` | 「写入后读回校验」的浏览器半边 |
-| `src/client/controller.ts` | 卡片可编辑状态机（staged/saved 三字段、`dirty`、`save`、`discard` 与派生的模型视图）——无 React、无 DOM，可被 `node:test` 直接测 |
+| `src/client/controller.ts` | 卡片可编辑状态机（staged/saved 四个字段——按区勾选、逐模型图像、最大上下文开关、排队耐心档位——`dirty`、`save`、`discard` 与派生的模型视图）——无 React、无 DOM，可被 `node:test` 直接测 |
 | `src/client/copy.ts` | 卡片文案聚合入口（中/英），`index.ts` 与 `card.tsx` 只从这里取 |
 | `src/client/copy-row.ts` `copy-usage.ts` `copy-account.ts` | 按面板拆分的三段文案：模型行与错峰、用量与签到、账号与区域标签条 |
 | `src/client/card-model.ts` | 卡片的**浏览器无关决策层**：视图模型类型词汇 + 纯规则（`offPeakState` / `rateAt` / `windowLabelOf` / `refreshNoticeKey` / 格式化 / `describeThrown`——卡片所有 catch 块给用户看的失败文案都过它）。无 React、无 DOM、无 `fetch`，因此 Node 测试可直接 import 真规则，而非镜像副本（这是向 sensenova `snapshot.ts` 对齐的那一刀；`describeThrown` 也从 `card.tsx` 挪进来，拆掉装配层与两个容器之间的循环 import） |

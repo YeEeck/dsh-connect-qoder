@@ -58,6 +58,11 @@ export const SAVE_FIELDS = {
   enabledRegions: 'regions',
   imageOverrides: 'whole',
   useMaximumContextWindow: 'whole',
+  // The queue-patience tier: one global value, never per region. The card
+  // posts the complete value ("2m" / "4m" / "6m"), so there is nothing to
+  // merge — and a `regions` merge here would be actively wrong, because the
+  // stored value is a string and a region map would replace it with an object.
+  patienceTier: 'whole',
 } as const
 
 /**

@@ -33,6 +33,14 @@ import { dirname, join } from 'node:path'
 // settings-save.ts is framework-free by design (see its module header), so the
 // whitelist can be asserted as the real value instead of via text extraction.
 import { SAVE_FIELDS } from '../src/host/settings-save.ts'
+// The host owns the tier vocabulary; the client's copy exists only because the
+// card must normalise what it renders. Both are imported rather than restated,
+// so this file compares the REAL lists instead of transcriptions of them.
+import { DEFAULT_PATIENCE_TIER, PATIENCE_TIERS } from '../src/host/patience.ts'
+import {
+  DEFAULT_PATIENCE_TIER as CLIENT_DEFAULT_PATIENCE_TIER,
+  PATIENCE_TIERS as CLIENT_PATIENCE_TIERS,
+} from '../src/client/controller.ts'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -153,6 +161,63 @@ test('namespace: host defines the expected settings namespace', () => {
   // constant, but for now this test pins the host's value so a rename fails.
   const hostNs = requireExtracted(extractString(hostIndex, 'QODER_SETTINGS_NS'), 'QODER_SETTINGS_NS in src/host/index.ts')
   assert.strictEqual(hostNs, 'dsh-connect-qoder', 'host namespace must be dsh-connect-qoder')
+})
+
+// --- Patience tier vocabulary ------------------------------------------------
+
+const cardSource = read('src/client/card.tsx')
+
+/**
+ * The tier values the card's patience <select> renders, read from SOURCE TEXT.
+ *
+ * The card writes its three options out literally — each one carries its own
+ * copy key — so there is no value array to import; the list exists only as
+ * markup. This walks from the select's aria-label to its closing tag, the same
+ * way the route-path extractors above walk their constants, and funnels the
+ * result through `requireExtracted`: a renamed aria-label must turn red rather
+ * than compare two empty lists.
+ */
+const cardPatienceOptions = () => {
+  const anchor = cardSource.indexOf('aria-label={t("row.patience")}')
+  assert.notStrictEqual(anchor, -1, 'card.tsx no longer renders the patience select (its aria-label moved)')
+  const close = cardSource.indexOf('</select>', anchor)
+  assert.notStrictEqual(close, -1, 'the patience select is unterminated in card.tsx')
+  const values = [...cardSource.slice(anchor, close).matchAll(/value="([^"]+)"/g)].map((m) => m[1])
+  return requireExtracted(values.length > 0 ? values : undefined, 'the patience <option> values in card.tsx')
+}
+
+test('the card offers exactly the tiers the host declares', () => {
+  // The card hardcodes its three options because each one carries its own copy
+  // key; the host owns the authoritative list in `src/host/patience.ts`. Two
+  // lists, one meaning — so this compares them instead of trusting them to stay
+  // in step. A tier added on one side only is a setting the user can save but
+  // never select, or select and never see again.
+  const options = cardPatienceOptions()
+  assert.deepStrictEqual(
+    options,
+    [...PATIENCE_TIERS],
+    `the card's <option> values must be the host's tiers; card=${options.join(',')} host=${PATIENCE_TIERS.join(',')}`,
+  )
+  // The client controller keeps its own copy too — it normalises both the value
+  // the host shipped and the value the select hands back — and it must agree
+  // with the host, or the card would normalise a good tier to the default.
+  assert.deepStrictEqual([...CLIENT_PATIENCE_TIERS], [...PATIENCE_TIERS])
+  assert.strictEqual(CLIENT_DEFAULT_PATIENCE_TIER, DEFAULT_PATIENCE_TIER)
+})
+
+test('the tier select renders in the settings row, above the commit bar', () => {
+  // The repo rule (pinned for the DOM by test/card-dom.test.js, 'every setting
+  // the commit bar saves renders above it') is that a persisted setting sits
+  // above the row that saves it. This is the source-side half: the select is
+  // inside the `.dsm-qoder-switches` block, and that block is declared before
+  // the commit bar rather than after it.
+  const selectAt = cardSource.indexOf('aria-label={t("row.patience")}')
+  assert.notStrictEqual(selectAt, -1, 'card.tsx lost the patience select')
+  const switchesAt = cardSource.lastIndexOf('dsm-qoder-switches', selectAt)
+  const barAt = cardSource.indexOf('dsm-qoder-actions-save', selectAt)
+  assert.ok(switchesAt !== -1 && switchesAt < selectAt, 'the select must live in the settings switch row')
+  assert.ok(barAt !== -1, 'card.tsx no longer renders the commit bar')
+  assert.ok(selectAt < barAt, 'the select must be declared above the commit bar')
 })
 
 // --- Guard liveness (negative control) ---------------------------------------

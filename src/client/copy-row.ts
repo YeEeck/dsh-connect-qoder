@@ -96,7 +96,19 @@ export const zhRow = {
 	// override stays visible even with it off: hiding a value the user set
 	// would be worse than the noise.
 	"row.imageTuning": "按模型微调图像输入",
-	"row.imageTuningTitle": "默认关闭：所有模型跟随 Qoder 目录声明的视觉能力。开启后可以为每个模型单独强制开启或关闭；已经改过的模型始终显示。"
+	"row.imageTuningTitle": "默认关闭：所有模型跟随 Qoder 目录声明的视觉能力。开启后可以为每个模型单独强制开启或关闭；已经改过的模型始终显示。",
+	// 排队耐心（CONTEXT.md）：单次请求愿意为等待放行花掉的总时间。档位而不是数字，
+	// 因为空闲窗口与流空闲天花板都由它推导，用户配不出违反「空闲 < 耐心 < 天花板」
+	// 的组合（docs/adr/0001-patience-knob-exposure.md）。文案说「排队」而不是
+	// 「超时」：等的是 Qoder 放行，不是让用户以为回答会被腰斩。
+	"row.patience": "排队耐心",
+	"row.patienceTitle": "单次请求最多等 Qoder 放行多久（含握手与每次重试前的等待）。档位越高越能熬过高峰排队；每次请求各自重新计时，不跨请求累计。",
+	"row.patience2m": "2 分钟",
+	"row.patience4m": "4 分钟",
+	"row.patience6m": "6 分钟",
+	// 落到默认档的告警。红线 1：回落必须可见——用户手改配置写成不存在的档位时，
+	// 若不说话，卡片会显示「4 分钟」，而用户以为自己选的是别的档。
+	"row.patienceInvalid": "设置里存的排队耐心档位无法识别，已按默认的 {tier} 处理；重新选择并保存即可覆盖。"
 };
 /** English — model row copy. */
 export const enRow = {
@@ -161,5 +173,17 @@ export const enRow = {
 	"row.filterTicked": "{ticked} ticked",
 	"row.clearFilter": "Clear filter",
 	"row.imageTuning": "Tune image input per model",
-	"row.imageTuningTitle": "Off by default: every model follows the vision flag Qoder's own catalog declares. Turn it on to force image input on or off per model; a model you have already changed stays visible either way."
+	"row.imageTuningTitle": "Off by default: every model follows the vision flag Qoder's own catalog declares. Turn it on to force image input on or off per model; a model you have already changed stays visible either way.",
+	// The queue-patience tier (CONTEXT.md): how long ONE request may spend
+	// waiting for Qoder to let it through. "Queue patience", not "timeout" — the
+	// thing being waited for is admission, and the tier is the user's answer to
+	// "how deep a queue am I willing to sit in".
+	"row.patience": "Queue patience",
+	"row.patienceTitle": "How long one request may wait for Qoder to let it through (handshake and every retry sleep included). A higher tier outlasts a busier queue; each request starts its own clock, and nothing carries over between requests.",
+	"row.patience2m": "2 minutes",
+	"row.patience4m": "4 minutes",
+	"row.patience6m": "6 minutes",
+	// The fallback warning. 红线 1: a fallback must never be silent — otherwise the
+	// card shows "4 minutes" for a document the user believes says something else.
+	"row.patienceInvalid": "The stored queue-patience tier is not one this plugin knows, so the default of {tier} is in force. Pick a tier and save to replace it."
 };

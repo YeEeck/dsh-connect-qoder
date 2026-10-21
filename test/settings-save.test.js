@@ -128,6 +128,7 @@ test('a field that exists only on the prototype is reported as unknown', () => {
     'enabledRegions',
     'imageOverrides',
     'useMaximumContextWindow',
+    'patienceTier',
   ])
   for (const inherited of ['constructor', 'toString', '__proto__']) {
     assert.ok(
@@ -353,19 +354,24 @@ test('a boolean field round-trips', async () => {
   assert.strictEqual(off.body.readBack, false)
 })
 
-test('the field list is exactly the four the card writes', () => {
+test('the field list is exactly the fields the card writes', () => {
   // A typo here would make a field unwritable with a 400 the card cannot
   // explain, so the set is pinned.
   assert.deepStrictEqual(Object.keys(SAVE_FIELDS).sort(), [
     'enabledModelIds',
     'enabledRegions',
     'imageOverrides',
+    'patienceTier',
     'useMaximumContextWindow',
   ])
   assert.strictEqual(SAVE_FIELDS.enabledModelIds, 'regions')
   assert.strictEqual(SAVE_FIELDS.enabledRegions, 'regions')
   assert.strictEqual(SAVE_FIELDS.imageOverrides, 'whole')
   assert.strictEqual(SAVE_FIELDS.useMaximumContextWindow, 'whole')
+  // One global value, never per region: the patience tier is the same for both
+  // editions, so a region merge on it would have nothing to merge and would
+  // replace a string with a map.
+  assert.strictEqual(SAVE_FIELDS.patienceTier, 'whole')
 })
 
 test('mergeForShape ignores the stored value for whole-shaped fields', () => {

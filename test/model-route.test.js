@@ -213,6 +213,37 @@ test('a truthy non-boolean does not switch the maximum-context setting on', () =
   }
 })
 
+test('the payload answers the resolved patience tier, never the raw stored value', () => {
+  // The card renders whichever tier the host resolved as the selected option,
+  // so a stored value from a future version (or a hand edit) must not reach it
+  // verbatim: it would select an option that does not exist, and the <select>
+  // would silently fall back to its first option in the browser. The tier is
+  // normalised here and the separate flag is what makes the substitution
+  // visible (AGENTS.md 红线 1).
+  const ok = build([runtimeOf('qoder-cn', [entryFor()])], { patienceTier: '6m' })
+  assert.strictEqual(ok.patienceTier, '6m')
+  assert.strictEqual(ok.patienceInvalid, false)
+
+  const fallback = build([runtimeOf('qoder-cn', [entryFor()])], { patienceTier: '5m' })
+  assert.strictEqual(fallback.patienceTier, '4m', 'an unknown tier resolves to the default')
+  assert.strictEqual(fallback.patienceInvalid, true, 'and the substitution is reported, not silent')
+
+  // A volatile shell is unwrapped before judging, so a good setting does not
+  // read as invalid merely because it arrived as { get() }.
+  const shell = build([runtimeOf('qoder-cn', [entryFor()])], { patienceTier: { get: () => '2m' } })
+  assert.strictEqual(shell.patienceTier, '2m')
+  assert.strictEqual(shell.patienceInvalid, false)
+})
+
+test('an absent patience tier is the default and not a reported fallback', () => {
+  // A fresh install has saved nothing. Warning there would put a permanent red
+  // line on every new user's card and train them to ignore the one that means
+  // something, so absence answers the default with invalid: false.
+  const payload = build([runtimeOf('qoder-cn', [entryFor()])])
+  assert.strictEqual(payload.patienceTier, '4m')
+  assert.strictEqual(payload.patienceInvalid, false)
+})
+
 test('missing settings are served as the defaults, not omitted', () => {
   // The card reads these unconditionally; an absent key would make it compare
   // against undefined and treat the user as having unsaved edits forever.
