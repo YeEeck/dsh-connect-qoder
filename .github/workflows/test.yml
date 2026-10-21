@@ -46,6 +46,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # `fetch-depth: 0` is REQUIRED here too, not only in the `build` job.
+          # `npm test` runs `test/gate-mutations.test.js`, which asks the
+          # bundle-behaviour probe to compare the committed `lib/` against a
+          # baseline found by WALKING HISTORY. A shallow clone has no history to
+          # walk, so the walk falls back to HEAD — the same artifact — and every
+          # probe compares the bundle with itself. The probe refuses to pass on
+          # that: a green step that compared nothing is not evidence, so it
+          # fails with "FAIL (vacuous)" and names this line.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
