@@ -63,6 +63,19 @@ const {
 /** The 32 bytes a real OSCrypt master key has. */
 const KEY = Buffer.from('0123456789abcdef0123456789abcdef', 'utf8')
 
+/**
+ * The platform these tests claim to be on.
+ *
+ * The unwrap is PowerShell + DPAPI, so the module refuses to run anywhere but
+ * Windows — and it reads `process.platform` when the caller names no platform.
+ * On a Linux CI runner that refusal would reach the assertions below as "the
+ * unwrap answered with no key", which is a DIFFERENT failure from the one
+ * these tests are about. Naming the platform is what lets the fake spawner
+ * make the whole chain reachable on ANY machine — the promise this file makes
+ * in its header — instead of only on the Windows box that runs it today.
+ */
+const WINDOWS = { platform: 'win32' }
+
 /** The scratch root the module's temp dirs must land in. */
 let tempRoot = ''
 
@@ -159,7 +172,7 @@ function tempDirs() {
 test('the sync unwrap returns the key the child wrote, and takes its temp dir with it', () => {
   const appDir = appDirWithState('sync-ok')
   const spawn = fakeSpawn()
-  const key = oscryptKeyFor(appDir, {}, spawn)
+  const key = oscryptKeyFor(appDir, WINDOWS, spawn)
   assert.ok(key !== undefined, 'a successful unwrap must answer with a key')
   assert.deepStrictEqual(key, KEY, 'the key must be exactly what the child wrote')
   assert.equal(spawn.calls.length, 1, 'the child must be spawned exactly once')
@@ -169,7 +182,7 @@ test('the sync unwrap returns the key the child wrote, and takes its temp dir wi
 test('the async unwrap answers with the same key through the same body', async () => {
   const appDir = appDirWithState('async-ok')
   const spawn = fakeSpawn({ mode: 'async' })
-  const key = await oscryptKeyForAsync(appDir, {}, spawn)
+  const key = await oscryptKeyForAsync(appDir, WINDOWS, spawn)
   assert.ok(key !== undefined, 'a successful async unwrap must answer with a key')
   assert.deepStrictEqual(key, KEY)
   assert.deepStrictEqual(tempDirs(), [], 'the hand-off directory must not survive the call')
@@ -181,7 +194,7 @@ test('the temp dir carries our identity marker before the child is spawned', () 
   // marker has to be written first — before any secret byte exists.
   const appDir = appDirWithState('marker')
   const spawn = fakeSpawn()
-  oscryptKeyFor(appDir, {}, spawn)
+  oscryptKeyFor(appDir, WINDOWS, spawn)
   assert.equal(spawn.calls[0].markerPresent, true, 'the marker must exist when the child starts')
 })
 
@@ -191,7 +204,7 @@ test('the child is the system PowerShell, addressed absolutely, with a minimal e
   process.env.QODER_API_KEY = 'another-secret'
   try {
     const spawn = fakeSpawn()
-    oscryptKeyFor(appDir, {}, spawn)
+    oscryptKeyFor(appDir, WINDOWS, spawn)
     const { powershell, args, options } = spawn.calls[0]
     assert.match(powershell, /powershell\.exe$/i, 'the interpreter must be the system one')
     assert.ok(powershell.includes('System32'), `the interpreter must be addressed absolutely: ${powershell}`)
@@ -211,7 +224,7 @@ test('the child is the system PowerShell, addressed absolutely, with a minimal e
 test('a child that fails leaves no temp dir, and the reason is remembered', () => {
   const appDir = appDirWithState('fail-sync')
   const spawn = fakeSpawn({ fail: true })
-  const key = oscryptKeyFor(appDir, {}, spawn)
+  const key = oscryptKeyFor(appDir, WINDOWS, spawn)
   assert.equal(key, undefined, 'a failed unwrap must not answer with a key')
   assert.deepStrictEqual(tempDirs(), [], 'a failed unwrap must not leave its hand-off file behind')
   const reason = describeUnwrapFailure(appDir)
@@ -226,7 +239,7 @@ test('a rejected async child is caught, and its temp dir is removed', async () =
   // leave a plaintext master key in the temp dir.
   const appDir = appDirWithState('fail-async')
   const spawn = fakeSpawn({ fail: true, mode: 'async' })
-  const key = await oscryptKeyForAsync(appDir, {}, spawn)
+  const key = await oscryptKeyForAsync(appDir, WINDOWS, spawn)
   assert.equal(key, undefined)
   assert.deepStrictEqual(tempDirs(), [], 'a rejected async child must not leave its temp dir behind')
   assert.match(String(describeUnwrapFailure(appDir)), /PowerShell exited 1/)
@@ -235,7 +248,7 @@ test('a rejected async child is caught, and its temp dir is removed', async () =
 test('a hand-off file that is not a 32-byte key is refused, and the size is named', () => {
   const appDir = appDirWithState('short-key')
   const spawn = fakeSpawn({ key: Buffer.from('too-short', 'utf8') })
-  const key = oscryptKeyFor(appDir, {}, spawn)
+  const key = oscryptKeyFor(appDir, WINDOWS, spawn)
   assert.equal(key, undefined, 'a key of the wrong size must not be accepted')
   assert.match(
     String(describeUnwrapFailure(appDir)),
@@ -248,7 +261,7 @@ test('a hand-off file that is not a 32-byte key is refused, and the size is name
 test('an empty hand-off file is refused', () => {
   const appDir = appDirWithState('empty-key')
   const spawn = fakeSpawn({ key: Buffer.alloc(0) })
-  assert.equal(oscryptKeyFor(appDir, {}, spawn), undefined)
+  assert.equal(oscryptKeyFor(appDir, WINDOWS, spawn), undefined)
   assert.match(String(describeUnwrapFailure(appDir)), /empty key file/)
 })
 
@@ -258,7 +271,7 @@ test('an app that is not installed is not reported as a problem', () => {
   // something that is expected.
   const missing = mkdtempSync(join(tempRoot, 'missing-'))
   const spawn = fakeSpawn()
-  assert.equal(oscryptKeyFor(missing, {}, spawn), undefined)
+  assert.equal(oscryptKeyFor(missing, WINDOWS, spawn), undefined)
   assert.deepStrictEqual(messages, [], 'a name that does not exist is not a problem to report')
   assert.equal(spawn.calls.length, 0, 'a missing app must not spawn a child')
 })
@@ -335,8 +348,8 @@ test('the module does not answer twice for the same app directory', () => {
   // within the same file version must not spawn a second child.
   const appDir = appDirWithState('cached')
   const spawn = fakeSpawn()
-  const first = oscryptKeyFor(appDir, {}, spawn)
-  const second = oscryptKeyFor(appDir, {}, spawn)
+  const first = oscryptKeyFor(appDir, WINDOWS, spawn)
+  const second = oscryptKeyFor(appDir, WINDOWS, spawn)
   assert.deepStrictEqual(first, KEY)
   assert.deepStrictEqual(second, KEY)
   assert.equal(spawn.calls.length, 1, 'the second read must come from the cache')
