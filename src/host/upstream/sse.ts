@@ -7,8 +7,10 @@
  * per-attempt absolute deadline with an idle window that measures SILENCE (see
  * `IDLE_WINDOW_MS` in `retry.ts` and the idle clock in `streamChat`), and split
  * what a stall MEANS by phase — retryable before the first yielded frame,
- * terminal after it. Ticket 02 moves the progress stamp from "bytes arrived" to
- * "a frame was reached"; ticket 03 replaces the give-up branch's wording.
+ * terminal after it. Ticket 02 narrowed what counts as progress from "bytes
+ * arrived" to "a frame was reached", so a stream that only sends heartbeats is
+ * judged stuck HERE rather than by the Host's blind watchdog. Ticket 03 replaces
+ * the give-up branch's wording.
  */
 
 import crypto from 'node:crypto'
@@ -232,21 +234,26 @@ export async function* streamChat(
 
   // ---- the idle clock ------------------------------------------------------
   //
-  // One clock for the attempt in flight. It is stamped BEFORE the handshake,
-  // re-stamped when response headers arrive, and — in this ticket — stamped
-  // again for every chunk of bytes the body yields.
+  // What counts as progress is a FRAME, never a byte. The clock is stamped
+  // BEFORE the handshake (no body byte can exist yet, so that is a phase
+  // boundary rather than a claim about the wire), re-stamped when the handshake
+  // settles, and from then on ONLY where a frame is recognised and yielded —
+  // the `choices`/`usage` branch in `readFrames`. SSE comments
+  // (`: keep-alive`), blank lines, non-`data:` lines, unparseable payloads,
+  // `[DONE]` and failure frames are the upstream breathing, not working: they
+  // refill no window, so a gateway that only keeps its connection alive is
+  // judged stuck HERE — retryable before the first frame, terminal after it —
+  // instead of outliving this plugin's window and dying at the Host's blind
+  // watchdog, which would retry the whole turn and spend the daily allowance
+  // again.
   //
   // It is ALSO stamped whenever this generator resumes from a `yield` (see
   // `noteResume`): a consumer that takes its time is not upstream silence, and
   // without that stamp a slow consumer would spend the window and the next read
   // would expire on the spot without giving the upstream a chance to answer.
   // Only time in which a read was actually outstanding is upstream's to answer
-  // for. Heartbeats do not yield, so they cannot use this to stay alive.
-  //
-  // TICKET 02 moves the per-byte stamp to "a frame was actually reached"
-  // (heartbeat comments, blank lines and unparseable payloads are not
-  // progress); `noteResume` is already the right place for it, because this
-  // module only ever yields a real chunk.
+  // for. `noteResume` runs only after a real chunk has been yielded, so a
+  // heartbeat cannot reach it.
   let lastProgressAt = Date.now()
   const idleRemaining = () => Math.max(0, idleWindowMs - (Date.now() - lastProgressAt))
   /** The generator is about to hand control back to its consumer, not to the wire. */
@@ -325,10 +332,10 @@ export async function* streamChat(
         // mid-answer is judged stuck instead of parking this generator on a
         // socket that will never speak again.
         const { done, value } = await underIdleWindow(reader.read(), controller)
-        // TICKET 01: any bytes at all count as progress. Ticket 02 narrows this
-        // to "a frame was actually reached", because SSE comments, blank lines
-        // and unparseable payloads are the upstream breathing, not working.
-        lastProgressAt = Date.now()
+        // Deliberately NO stamp here: bytes are not frames. A `: keep-alive`
+        // comment, a blank line and a payload this build cannot parse all arrive
+        // as bytes and none of them is progress. The clock is re-armed only
+        // where a frame is recognised and yielded, below.
         if (done) {
           // The stream ENDED: flush the decoder and hand the residual buffer
           // to the SAME line path below. A last frame that arrives without a
@@ -378,6 +385,10 @@ export async function* streamChat(
           // A token-accounting frame carries `choices: []` (or omits the field)
           // and a top-level `usage`. It must be forwarded, not treated as a
           // failure: the shim turns it into the counts DSH records per turn.
+          //
+          // THIS is the only place a body read re-arms the idle clock. Everything
+          // the reader throws away — comments, blank lines, unparseable payloads,
+          // `[DONE]`, failure frames — leaves it alone on purpose.
           if (chunk?.choices !== undefined || (chunk?.usage !== undefined && chunk.usage !== null)) {
             yield chunk
             // Back from the consumer: whatever it spent deciding is not silence.
@@ -483,10 +494,13 @@ export async function* streamChat(
     const attemptSignal =
       signal === undefined ? controller.signal : AbortSignal.any([signal, controller.signal])
     // The handshake gets the same idle window as the body, re-stamped the moment
-    // headers arrive (see `lastProgressAt`). The returned response body outlives
-    // this scope, so this deadline MUST NOT stay armed past the headers — which
-    // is exactly what the race in `underIdleWindow` guarantees, since it clears
-    // its timer as soon as `fetch` settles.
+    // headers arrive (see `lastProgressAt`). This stamp is a PHASE BOUNDARY, not
+    // a progress claim: headers mean the upstream accepted the request, and no
+    // body byte could have arrived before them. From here on, only a frame
+    // re-arms the clock. The returned response body outlives this scope, so this
+    // deadline MUST NOT stay armed past the headers — which is exactly what the
+    // race in `underIdleWindow` guarantees, since it clears its timer as soon as
+    // `fetch` settles.
     lastProgressAt = Date.now()
     try {
       response = await underIdleWindow(
@@ -510,8 +524,10 @@ export async function* streamChat(
       throw classifyHandshakeFailure(thrown, signal)
     }
     // The handshake is over: its deadline was disarmed as soon as `fetch`
-    // settled (see `underIdleWindow`), and the body's clock starts now. THIS is
-    // the disarm the old code promised in a comment and never performed.
+    // settled (see `underIdleWindow`), and the body's clock starts now — a
+    // fresh window, not a progress claim, because the next stamp that counts as
+    // progress has to be a frame. THIS is the disarm the old code promised in a
+    // comment and never performed.
     lastProgressAt = Date.now()
 
     if (!response.ok) {
