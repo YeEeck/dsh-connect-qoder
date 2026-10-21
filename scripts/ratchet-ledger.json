@@ -1,0 +1,41 @@
+{
+  "$comment": "The ratchet ledger: every number that gates this repository, and the record of how it got there. The gates read their number from here — a value this ledger does not account for is refused, so moving a threshold is a recorded act (from, to, date, reason) that shows up in a diff, not a quiet edit of a constant. The rules live in scripts/ratchet-ledger.mjs; the gates that read it are scripts/audit-test-types.mjs, scripts/audit-test-type-errors.mjs, scripts/audit-implicit-any.mjs and scripts/audit-explicit-any.mjs.",
+  "ratchets": {
+    "testOptInFloor": {
+      "value": 13,
+      "baseline": {
+        "from": 13,
+        "on": "2026-10-21",
+        "reason": "baseline — the number of test files that carry // @ts-check today; the floor may only rise unless a change says otherwise"
+      },
+      "changes": []
+    },
+    "testTypeErrorBudget": {
+      "value": 2018,
+      "baseline": {
+        "from": 2018,
+        "on": "2026-10-21",
+        "reason": "baseline — the test tree's type-error debt, measured with checkJs on (tsconfig.test.budget.json)"
+      },
+      "changes": []
+    },
+    "implicitAnyBudget": {
+      "value": 0,
+      "baseline": {
+        "from": 0,
+        "on": "2026-10-21",
+        "reason": "baseline — the debt was cleared; any new implicit any is a new site, not a tolerated one"
+      },
+      "changes": []
+    },
+    "explicitAnyBudget": {
+      "value": 0,
+      "baseline": {
+        "from": 0,
+        "on": "2026-10-21",
+        "reason": "baseline — the debt was cleared; any new explicit any is a new site, not a tolerated one"
+      },
+      "changes": []
+    }
+  }
+}

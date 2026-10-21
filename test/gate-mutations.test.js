@@ -110,6 +110,26 @@ function replaceOnce(file, from, to) {
   return original
 }
 
+/**
+ * Move one ratchet value in a staged ledger, without recording the move.
+ *
+ * The ledger is edited as data rather than by string surgery: a text anchor
+ * would rot the moment the file is reworded, and the point of this mutation
+ * is not the exact bytes but the shape — the VALUE moves, the RECORD does
+ * not. That is the whole failure mode: a threshold that travels with the
+ * debt it is supposed to hold down.
+ *
+ * @param {string} dir the staged copy
+ * @param {string} ratchet which ratchet to move
+ * @param {number} value what to move it to
+ */
+function bumpLedgerValue(dir, ratchet, value) {
+  const file = join(dir, 'scripts', 'ratchet-ledger.json')
+  const ledger = JSON.parse(readFileSync(file, 'utf8'))
+  ledger.ratchets[ratchet].value = value
+  writeFileSync(file, `${JSON.stringify(ledger, null, 2)}\n`, 'utf8')
+}
+
 test(
   'the build gate refuses to write a bundle that lost a string the card needs',
   { concurrency: true },
@@ -352,6 +372,114 @@ test(
       )
     } finally {
       rmSync(narrowedDir, { recursive: true, force: true })
+    }
+
+    // Mutation 3: the MAIN path. The tree carries more debt than the ceiling
+    // allows, and the gate has to say so in its own words. The two mutations
+    // above both made the MEASUREMENT collapse; this one keeps the
+    // measurement honest and checks the comparison instead — which is the
+    // thing nobody was checking before.
+    const grownDir = stage(files)
+    try {
+      linkNodeModules(grownDir)
+      writeFileSync(
+        join(grownDir, 'test', 'zz-debt-growth-probe.js'),
+        [
+          '// The debt, grown on purpose: two deliberate type errors.',
+          '// Exported so the compiler reports them as type errors and not as unused.',
+          "export const debtGrowthNumber = /** @type {number} */ ('a string, not a number')",
+          'export const debtGrowthList = /** @type {string[]} */ (42)',
+          '',
+        ].join('\n'),
+      )
+
+      const run = runNode(join(grownDir, 'scripts', 'audit-test-type-errors.mjs'), [], grownDir)
+
+      assert.notEqual(run.status, 0, `the budget gate survived a debt that outgrew it:\n${run.output}`)
+      assert.ok(
+        run.output.includes('debt is above the ceiling'),
+        `the gate must say the debt is above the ceiling; got:\n${run.output}`,
+      )
+    } finally {
+      rmSync(grownDir, { recursive: true, force: true })
+    }
+
+    // Mutation 4: the ceiling itself moves, and nothing records the move.
+    // This is the failure mode the ledger exists for: a threshold that
+    // travels with the debt is not a threshold, it is a comment.
+    const movedDir = stage(files)
+    try {
+      linkNodeModules(movedDir)
+      bumpLedgerValue(movedDir, 'testTypeErrorBudget', 3000)
+
+      const run = runNode(join(movedDir, 'scripts', 'audit-test-type-errors.mjs'), [], movedDir)
+
+      assert.notEqual(run.status, 0, `the budget gate survived an unrecorded raise:\n${run.output}`)
+      assert.ok(
+        run.output.includes('the ratchet ledger is not consistent'),
+        `the gate must say the threshold moved without a record; got:\n${run.output}`,
+      )
+    } finally {
+      rmSync(movedDir, { recursive: true, force: true })
+    }
+  },
+)
+
+test(
+  'the ratchet ledger refuses a threshold nobody recorded',
+  { concurrency: true },
+  () => {
+    // The thresholds the gates enforce used to be constants in the scripts
+    // themselves, which made a raise invisible: the number moved, and the
+    // comparison moved with it, so the gate stayed green while its job
+    // disappeared. They live in a ledger now, and the ledger refuses a value
+    // it cannot account for — so the only way to move one is to record the
+    // move (from, to, date, reason).
+    const files = [
+      'package.json',
+      'tsconfig.json',
+      'tsconfig.test.json',
+      'scripts',
+      'src',
+      'test',
+      'types',
+      'probe',
+    ]
+
+    // Control: the staged copy passes the floor gate the way the checkout
+    // does, so "the mutation was caught" cannot mean "the scratch was broken".
+    const controlDir = stage(files)
+    try {
+      linkNodeModules(controlDir)
+      const control = runNode(join(controlDir, 'scripts', 'audit-test-types.mjs'), [], controlDir)
+      assert.equal(
+        control.status,
+        0,
+        `the unmutated copy must pass the opt-in gate; got:\n${control.output}`,
+      )
+      assert.ok(
+        control.output.includes('opted in to type checking'),
+        `the unmutated copy must report the opt-in set it measured; got:\n${control.output}`,
+      )
+    } finally {
+      rmSync(controlDir, { recursive: true, force: true })
+    }
+
+    // Mutation: the floor moves down, and nothing says why.
+    const movedDir = stage(files)
+    try {
+      linkNodeModules(movedDir)
+      bumpLedgerValue(movedDir, 'testOptInFloor', 1)
+
+      const run = runNode(join(movedDir, 'scripts', 'audit-test-types.mjs'), [], movedDir)
+
+      assert.notEqual(run.status, 0, `the opt-in gate survived an unrecorded move:\n${run.output}`)
+      assert.ok(
+        run.output.includes('the ratchet ledger is not consistent'),
+        `the gate must say the threshold moved without a record; got:\n${run.output}`,
+      )
+    } finally {
+      rmSync(movedDir, { recursive: true, force: true })
     }
   },
 )

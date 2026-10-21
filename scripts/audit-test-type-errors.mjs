@@ -5,9 +5,10 @@
  *
  * WHY THIS EXISTS
  *
- * `npm run audit:test-types` ratchets the test tree by FILE COUNT: 13 files
- * opt in to `// @ts-check`, and the floor may only rise. That axis buys less
- * than it looks like it buys, and it buys it in the wrong direction:
+ * `npm run audit:test-types` ratchets the test tree by FILE COUNT: a number
+ * of files opt in to `// @ts-check`, and the floor may only rise. That axis
+ * buys less than it looks like it buys, and it buys it in the wrong
+ * direction:
  *
  *   - adding the pragma to a file that is already clean raises the count for
  *     free — progress that costs nothing, so it is not progress;
@@ -22,22 +23,32 @@
  * tsconfig.test.json with one flag flipped), every diagnostic counted, and the
  * total compared against a budget that may only shrink.
  *
- * The budget is deliberately ABOVE ZERO. The tree is ~2000 errors deep, and
- * pretending otherwise would mean either fixing all of it before the gate
- * exists (months of mechanical work) or pretending the debt is not there. The
- * honest shape is: the debt is measured, it is written down, and it is not
- * allowed to grow. New test files are checked the day they arrive; the stock
- * gets burned slowly.
+ * WHERE THE BUDGET LIVES
+ *
+ * Not here. The budget is a line in the ratchet ledger
+ * (`scripts/ratchet-ledger.json`), next to the record of how it got there, and
+ * this script refuses a value the ledger does not account for. That is the
+ * difference between "a number in a file" and "a fact somebody checked": a
+ * constant could be raised in any diff with nothing in it to show, while a
+ * ledger entry has to say from where, to where, on what date, and why — and
+ * the chain of those entries has to add up.
+ *
+ * The budget is deliberately ABOVE ZERO. The tree is thousands of errors
+ * deep, and pretending otherwise would mean either fixing all of it before
+ * the gate exists (months of mechanical work) or pretending the debt is not
+ * there. The honest shape is: the debt is measured, it is written down, and
+ * it is not allowed to grow. New test files are checked the day they arrive;
+ * the stock gets burned slowly.
  *
  * WHAT IT DOES NOT CLAIM
  *
- * A budget of 2018 is not a type-clean test tree. It is a number that cannot
- * go up. The claim this gate makes is narrow and it is the one that is true:
- * "the test tree's type debt is not growing".
+ * A budget of thousands is not a type-clean test tree. It is a number that
+ * cannot go up. The claim this gate makes is narrow and it is the one that
+ * is true: "the test tree's type debt is not growing".
  *
  * WHY THE BUDGET IS NOT THE WHOLE STORY
  *
- * The 13 opted-in files are held to a much stronger standard by the other
+ * The opted-in files are held to a much stronger standard by the other
  * gate: they must compile with ZERO errors (`npm run audit:test-types`). This
  * script does not weaken that — it counts their errors too, and they are
  * zero, so they never move the total. The two gates are complementary: one
@@ -47,45 +58,82 @@
  * THE GUARDS ON THE GUARDS
  *
  * A budget gate is exactly the kind of thing that can go green for the wrong
- * reason, so two things are checked before the number is believed:
+ * reason, so three things are checked before the number is believed:
  *
  *   1. `tsconfig.test.budget.json` really has `checkJs: true` and really
  *      extends tsconfig.test.json. Flip the flag and the measured debt
- *      collapses to zero — the gate would report "0 errors, budget 2018" and
+ *      collapses to zero — the gate would report "0 errors, budget N" and
  *      pass forever.
  *   2. every `.js`/`.mjs` file under `test/` is really in the compiler's
  *      program. Narrow the `include` and the tree leaves the program, the
  *      error count collapses to zero, and the gate passes on an empty
  *      measurement. The check compares the program against the files on disk
  *      rather than against a fixed number, so it cannot rot.
+ *   3. the budget this gate compares against is one the ledger accounts for.
+ *      Otherwise the ceiling would travel with the debt: raise the number and
+ *      the comparison stays green, which is the whole failure mode.
+ *
+ * And the main path is mutation-tested too: `test/gate-mutations.test.js`
+ * makes the debt grow inside a staged copy and requires this gate to go red
+ * with its own words, so "the ceiling holds" is a checked fact rather than an
+ * intention.
  */
 import { execFileSync } from 'node:child_process'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, relative } from 'node:path'
+import { describeError, LEDGER_REL, loadLedger, ratchetValue } from './ratchet-ledger.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 /**
- * The debt ceiling, in diagnostics. Only `--write` changes this, and that is
- * the point: the number that gates the build is edited deliberately, in a
- * diff a reviewer reads, rather than drifting as a side effect of ordinary
- * work.
+ * The debt ceiling, in diagnostics.
  *
- * 2018 is the measured count at the time this gate was written, not an
- * estimate. It covers the 101 `.js` test files that have not opted in, the 3
- * `.mjs` helpers, and the two non-test files the tree drags in transitively
- * (`scripts/probe-params.mjs` and `probe/qoder-device-login.mjs` — they are
- * imported by test files, so they are in the program whether or not anybody
- * meant them to be).
+ * It is not a constant in this file: it is a line in the ratchet ledger
+ * (`scripts/ratchet-ledger.json`), together with the record of how it got
+ * there. A value the ledger does not account for is refused below, so the
+ * number that gates the build can only move as a recorded act — from, to,
+ * date, reason — in a diff a reviewer reads, rather than drifting as a side
+ * effect of ordinary work.
  *
- * The number moves as the tree moves: fixing errors lowers it (and the
- * budget should be lowered with them, or the next file's debt hides in the
- * slack), and a change in `src/` can raise it without the test tree getting
- * worse at all. Both directions are legitimate reasons to edit this line —
- * that is the "deliberately, in a diff" part.
+ * What it covers: every `.js`/`.mjs` file under `test/` that has not opted
+ * in, the `.mjs` helpers among them, and the two non-test files the tree
+ * drags in transitively (`scripts/probe-params.mjs` and
+ * `probe/qoder-device-login.mjs` — they are imported by test files, so they
+ * are in the program whether or not anybody meant them to be). That last
+ * part is worth remembering when the number moves for reasons that have
+ * nothing to do with the test tree: a change in `src/` can raise the debt
+ * without the tests getting worse at all.
  */
-const BUDGET = 2018
+const LEDGER_RATCHET = 'testTypeErrorBudget'
+
+let ledger = null
+try {
+  ledger = loadLedger()
+} catch (err) {
+  console.error(
+    `\nFAIL the ratchet ledger is not consistent: ${describeError(err)}\n` +
+      `  (${LEDGER_REL} is the single source of truth for this budget — a threshold nobody ` +
+      'accounted for is a threshold nobody noticed.)',
+  )
+  process.exit(1)
+}
+
+const BUDGET = ratchetValue(ledger, LEDGER_RATCHET)
+
+// The budget that is actually enforced: the ledger's value, unless the caller
+// overrides it for a one-off measurement. It is parsed BEFORE anything is
+// printed, so every number this gate shows is the number it enforced. The
+// old version printed the constant and compared against the override, which
+// made the failure message quote a budget the run was not using.
+const budgetArgIndex = process.argv.indexOf('--budget')
+const budget = budgetArgIndex >= 0 ? Number(process.argv[budgetArgIndex + 1]) : BUDGET
+if (!Number.isFinite(budget)) {
+  console.error(
+    `\nFAIL --budget needs a number, got ${JSON.stringify(process.argv[budgetArgIndex + 1] ?? null)}`,
+  )
+  process.exit(1)
+}
 
 const CONFIG = 'tsconfig.test.budget.json'
 
@@ -219,32 +267,35 @@ if (process.argv.includes('--write')) {
     console.log(`  ${String(e.count).padStart(4)}  ${file}  ${[...e.codes].map(([c, n]) => `${c}×${n}`).join(' ')}`)
   }
   console.log(
-    `\n${total} total — update BUDGET in scripts/audit-test-type-errors.mjs by hand (no --write-in-place).`,
+    `\n${total} total — to move the ceiling, record it in ${LEDGER_REL} (ratchet "${LEDGER_RATCHET}": ` +
+      'a change entry with from, to, date and reason). The ledger is checked, so a number that is not ' +
+      'recorded there is refused.',
   )
   process.exit(0)
 }
 
 // Report before the gate so the failure is legible, not just a number.
-console.log(`test type errors: ${total} (budget ${BUDGET}) — ${rows.length} file(s) with errors`)
+console.log(`test type errors: ${total} (budget ${budget}) — ${rows.length} file(s) with errors`)
 for (const [file, e] of rows.slice(0, 20)) {
   console.log(`  ${String(e.count).padStart(4)}  ${file}  ${[...e.codes].map(([c, n]) => `${c}×${n}`).join(' ')}`)
 }
 if (rows.length > 20) console.log(`  … and ${rows.length - 20} more file(s)`)
 
-const budget = process.argv.includes('--budget')
-  ? Number(process.argv[process.argv.indexOf('--budget') + 1])
-  : BUDGET
-
 if (!(total <= budget)) {
   console.error(
-    `\nFAIL test type-error budget: ${total} errors, budget ${BUDGET}. ` +
-      `The debt grew. Fix the new errors, or take the increase deliberately by editing BUDGET ` +
-      `in scripts/audit-test-type-errors.mjs — silently, this is how 2018 becomes 3000 and ` +
-      `nobody notices. (Fixing errors also lowers the count: lower BUDGET in the same diff.)`,
+    `\nFAIL test type-error budget: ${total} errors, budget ${budget}. ` +
+      'The debt is above the ceiling. Fix the new errors, or take the increase deliberately: ' +
+      `record it in ${LEDGER_REL} (ratchet "${LEDGER_RATCHET}", a change entry with from ${budget}, ` +
+      `to ${total}, the date and a reason) and set the value to ${total}. ` +
+      'A ceiling nobody accounted for is a ceiling nobody noticed. ' +
+      '(Fixing errors also lowers the count: record the lower ceiling in the same diff.)',
   )
   process.exit(1)
 }
 
 if (total < budget) {
-  console.log(`  (the debt is below the budget — lower BUDGET in the same diff, or the slack hides the next file's errors)`)
+  console.log(
+    `  (the debt is below the budget — record the lower ceiling in ${LEDGER_REL} in the same diff, ` +
+      'or the slack hides the next file\'s errors)',
+  )
 }

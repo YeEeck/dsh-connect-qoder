@@ -187,16 +187,16 @@ test('no test file opts itself out of checking, and no pragma sits where it mean
   }
 })
 
-test('the ratchet floor in the gate script equals the number of files that opt in', () => {
-  const script = read('scripts/audit-test-types.mjs')
-  const floor = Number(/const FLOOR = (\d+)/.exec(script)?.[1])
-  assert.ok(Number.isInteger(floor), 'the gate script lost its FLOOR constant')
+test('the ratchet floor in the ledger equals the number of files that opt in', () => {
+  const ledger = JSON.parse(read('scripts/ratchet-ledger.json'))
+  const floor = /** @type {number} */ (ledger?.ratchets?.testOptInFloor?.value)
+  assert.ok(Number.isInteger(floor), 'the ledger lost the opt-in floor')
   assert.ok(floor > 0, 'the floor is zero, so removing every pragma would still pass')
   assert.ok(optedIn.length > 0, 'no test file opts in to type checking — the gate would have nothing to guard')
   assert.equal(
     floor,
     optedIn.length,
-    `the floor in scripts/audit-test-types.mjs is ${floor} but ${optedIn.length} file(s) opt in — raise it in the same diff`,
+    `the floor in scripts/ratchet-ledger.json is ${floor} but ${optedIn.length} file(s) opt in — raise it in the same diff`,
   )
 })
 

@@ -22,7 +22,9 @@
  *
  * 1. The ratchet floor: at least FLOOR test files carry a `// @ts-check`
  *    pragma. Removing a pragma is a silent loss of coverage, and nothing else
- *    in the build would notice it.
+ *    in the build would notice it. The floor itself lives in the ratchet
+ *    ledger (`scripts/ratchet-ledger.json`), so lowering it has to be a
+ *    recorded act — from, to, date, reason — and not a quiet edit.
  * 2. No effective `@ts-nocheck`: it outranks `@ts-check` in the same file, so
  *    a file could carry both and leave the program without reporting anything.
  * 3. No MISPLACED pragma: a pragma that sits after the first statement reads
@@ -60,6 +62,7 @@ import { readFileSync, readdirSync, statSync, writeFileSync, rmSync, existsSync 
 import { fileURLToPath } from 'node:url'
 import { dirname, join, relative, isAbsolute } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { describeError, LEDGER_REL, loadLedger, ratchetValue } from './ratchet-ledger.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const tscBin = join(root, 'node_modules', 'typescript', 'bin', 'tsc')
@@ -69,14 +72,30 @@ const configAbs = join(root, configRel)
 /**
  * The ratchet floor: how many test files must carry `// @ts-check`.
  *
- * Only a deliberate edit of this constant changes it, and that is the point:
- * the number that gates the build is edited in a diff a reviewer reads,
- * rather than drifting as a side effect of ordinary work.
+ * It is not a constant in this file: it is a line in the ratchet ledger
+ * (`scripts/ratchet-ledger.json`), next to the record of how it got there. A
+ * value the ledger does not account for is refused, so the number that gates
+ * the build moves only as a recorded act — from, to, date, reason — in a diff
+ * a reviewer reads, rather than drifting as a side effect of ordinary work.
  *
  * The floor is a FLOOR and not an exact count: adding a pragma must never
  * fail the build. Only REMOVING one may.
  */
-const FLOOR = 13
+const LEDGER_RATCHET = 'testOptInFloor'
+
+let ledger = null
+try {
+  ledger = loadLedger()
+} catch (err) {
+  console.error(
+    `\nFAIL the ratchet ledger is not consistent: ${describeError(err)}\n` +
+      `  (${LEDGER_REL} is the single source of truth for this floor — a threshold nobody ` +
+      'accounted for is a threshold nobody noticed.)',
+  )
+  process.exit(1)
+}
+
+const FLOOR = ratchetValue(ledger, LEDGER_RATCHET)
 
 /** The temporary file the self-probe writes. Not a `*.test.js`, so `npm test` never runs it. */
 const PROBE_REL = 'test/zz-audit-test-types-probe.js'
@@ -223,7 +242,9 @@ if (optedIn.length < FLOOR) {
   fail(
     `test-type ratchet: ${optedIn.length} file(s) opt in to type checking, floor is ${FLOOR}. ` +
       `A pragma was removed, so those files are no longer checked by anything. ` +
-      `Restore the \`// @ts-check\` line, or take the loss deliberately by editing FLOOR in scripts/audit-test-types.mjs.`,
+      `Restore the \`// @ts-check\` line, or take the loss deliberately: record it in ` +
+      `${LEDGER_REL} (ratchet "${LEDGER_RATCHET}", a change entry with from ${FLOOR}, ` +
+      `to ${optedIn.length}, the date and a reason) and set the value to ${optedIn.length}.`,
   )
 }
 

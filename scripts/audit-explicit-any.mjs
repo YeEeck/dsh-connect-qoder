@@ -42,13 +42,17 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, relative } from 'node:path'
+import { describeError, LEDGER_REL, loadLedger, ratchetValue } from './ratchet-ledger.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 /**
- * The debt ceiling. Only `--write` changes this, and that is the point: the
- * number that gates the build is edited deliberately, in a diff a reviewer
- * reads, rather than drifting as a side effect of ordinary work.
+ * The debt ceiling. It is not a constant in this file any more: it is a line
+ * in the ratchet ledger (`scripts/ratchet-ledger.json`), next to the record of
+ * how it got there. A value the ledger does not account for is refused, so
+ * the number that gates the build moves only as a recorded act — from, to,
+ * date, reason — in a diff a reviewer reads, rather than drifting as a side
+ * effect of ordinary work.
  *
  * Trajectory during the migration, batch by batch:
  *   70 → 25 → 15 → 8 → 5 → 1
@@ -72,13 +76,27 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
  *
  * The budget is therefore 0 and the exception is handled by the `isAllowed`
  * rule below, NOT by leaving headroom. That distinction is the whole point of a
- * ratchet: with `BUDGET = 1` this script counted a newly introduced `: any`
+ * ratchet: with a budget of 1 this script counted a newly introduced `: any`
  * correctly and still exited 0, because one site plus the allowance is not
  * "more than one". A budget that can absorb an unrelated site is not a gate.
  * Allowing the constraint by pattern keeps the ceiling at zero, so ANY new
  * `any` — including one in a file that has never had one — fails the build.
  */
-const BUDGET = 0
+const LEDGER_RATCHET = 'explicitAnyBudget'
+
+let ledger = null
+try {
+  ledger = loadLedger()
+} catch (err) {
+  console.error(
+    `\nFAIL the ratchet ledger is not consistent: ${describeError(err)}\n` +
+      `  (${LEDGER_REL} is the single source of truth for this budget — a threshold nobody ` +
+      'accounted for is a threshold nobody noticed.)',
+  )
+  process.exit(1)
+}
+
+const BUDGET = ratchetValue(ledger, LEDGER_RATCHET)
 
 /** Directories to scan, relative to the repo root. */
 const SOURCES = ['src/host', 'src/client']
@@ -197,27 +215,41 @@ if (process.argv.includes('--write')) {
     console.log(`  ${String(sites.length).padStart(3)}  ${file}`)
     for (const s of sites) console.log(`         L${s.line}: ${s.detail}`)
   }
-  console.log(`\n${total} total — update BUDGET in scripts/audit-explicit-any.mjs by hand (no --write-in-place).`)
+  console.log(
+    `\n${total} total — to move the ceiling, record it in ${LEDGER_REL} (ratchet "${LEDGER_RATCHET}": ` +
+      'a change entry with from, to, date and reason). The ledger is checked, so a number that is not ' +
+      'recorded there is refused.',
+  )
   process.exit(0)
 }
 
+// The budget that is actually enforced: `--budget N` tightens it for one run.
+// It is parsed BEFORE the report so the report can name the number that was
+// in force — a report that names a different number than the one the gate
+// enforced is how a debt gets waved through with a green line in the log.
+const budgetArg = process.argv.indexOf('--budget')
+const budget = budgetArg === -1 ? BUDGET : Number(process.argv[budgetArg + 1])
+if (!Number.isFinite(budget)) {
+  console.error(
+    `\nFAIL explicit-any audit: --budget needs a number, got ${JSON.stringify(process.argv[budgetArg + 1] ?? null)}`,
+  )
+  process.exit(1)
+}
+
 // Report before the gate so the failure is legible, not just a number.
-console.log(`explicit-any sites: ${total} (budget ${BUDGET})`)
+console.log(`explicit-any sites: ${total} (budget ${budget})`)
 for (const [file, sites] of [...perFile.entries()].sort()) {
   console.log(`  ${String(sites.length).padStart(3)}  ${file}`)
   for (const s of sites) console.log(`         L${s.line}: ${s.detail}`)
 }
 
-const budget = process.argv.includes('--budget')
-  ? Number(process.argv[process.argv.indexOf('--budget') + 1])
-  : BUDGET
-
 if (!(total <= budget)) {
   console.error(
-    `\nFAIL explicit-any ratchet: ${total} sites, budget ${BUDGET}. ` +
-      `The debt grew. Annotate the new sites, or take the increase deliberately by ` +
-      `editing BUDGET in scripts/audit-explicit-any.mjs — silently, this is how ` +
-      `1 becomes 40 and nobody notices.`,
+    `\nFAIL explicit-any ratchet: ${total} sites, budget ${budget}. ` +
+      `The debt grew. Annotate the new sites, or take the increase deliberately: record it in ` +
+      `${LEDGER_REL} (ratchet "${LEDGER_RATCHET}", a change entry with from ${budget}, to ${total}, ` +
+      'the date and a reason) and set the value to that. ' +
+      'A ceiling nobody accounted for is a ceiling nobody noticed.',
   )
   process.exit(1)
 }
