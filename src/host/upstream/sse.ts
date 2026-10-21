@@ -9,8 +9,10 @@
  * what a stall MEANS by phase — retryable before the first yielded frame,
  * terminal after it. Ticket 02 narrowed what counts as progress from "bytes
  * arrived" to "a frame was reached", so a stream that only sends heartbeats is
- * judged stuck HERE rather than by the Host's blind watchdog. Ticket 03 replaces
- * the give-up branch's wording.
+ * judged stuck HERE rather than by the Host's blind watchdog. Ticket 03 gave the
+ * give-up branch its own wording (see `PatienceExhaustedError`): when a RETRYABLE
+ * failure outlasts the patience, the user is told how long the wait cost and that
+ * re-sending restarts it; a terminal verdict still propagates as itself.
  */
 
 import crypto from 'node:crypto'
@@ -637,7 +639,23 @@ export async function* streamChat(
       // Every other failure passes through unchanged.
       const error = signal?.aborted === true ? thrown : reclassifyIdle(thrown, idleWindowMs, region)
       const queueWaitMs = queueWaitFor(error, waitedMs, attempt, patienceMs)
-      if (queueWaitMs === undefined) throw error
+      if (queueWaitMs === undefined) {
+        // The ladder stopped, and it stops for two DIFFERENT reasons that it
+        // answers identically: the failure is not retryable at all, or it is
+        // retryable and the patience is spent. Telling them apart is the whole
+        // of ticket 03 — a terminal verdict (daily limit, protocol shape,
+        // sign-in) must propagate as itself, while an exhausted wait is
+        // re-worded so the user learns how long it cost and that re-sending
+        // restarts the clock. `queueWaitFor` cannot make that distinction for
+        // us: it tests the flag and then the remaining budget, and returns
+        // `undefined` for either miss. So the retryable flag is read HERE, by
+        // the same `thrownFlag` predicate the shim uses — never inferred from
+        // an `undefined` return, and never guessed from the error's class. The
+        // caller's abort is checked first: a request the user cancelled
+        // themselves has not outlasted anything.
+        if (signal?.aborted === true || thrownFlag(error, 'retryable') !== true) throw error
+        throw new PatienceExhaustedError(waitedMs, patienceMs, lastFailureDetail(error))
+      }
       // The caller aborted while we were deciding, so stop rather than sleep.
       if (signal?.aborted) throw error
       await sleep(queueWaitMs, signal)
@@ -783,6 +801,43 @@ function stalledMidAnswerMessage(idleWindowMs: number, region: Region): string {
 }
 
 /**
+ * A human-readable duration: seconds for anything from a second up, the raw
+ * milliseconds below that.
+ *
+ * The sub-second branch exists for the same reason as in the stall sentence
+ * above: real waits are minutes, but a test injects tens of milliseconds, and
+ * a message that rounded those to "about 0s" would read as broken rather than
+ * as a small budget. It is deliberately NOT shared with that sentence: ticket
+ * 01's wording is pinned by its own tests, and one formatter for both would put
+ * this ticket's needs in the way of that.
+ *
+ * @param ms - a duration in milliseconds.
+ * @returns e.g. `240s`, or `80ms` below one second.
+ */
+function durationText(ms: number): string {
+  const seconds = Math.round(ms / 1000)
+  return seconds >= 1 ? `${seconds}s` : `${Math.round(ms)}ms`
+}
+
+/**
+ * The last failure's detail, as text, or `''` when it carried none.
+ *
+ * Only a STRING is carried across. Every retryable failure this module raises
+ * puts a string in `upstreamDetail` (the queue descriptor, the HTTP line, the
+ * network cause, the silence), so this keeps the clause honest for all of
+ * them instead of rendering an object as "[object Object]" next to a sentence
+ * the user is meant to read. A failure with no detail contributes no clause —
+ * better than inventing one.
+ *
+ * @param error - the retryable failure the ladder gave up on.
+ * @returns its `upstreamDetail` as trimmed text, else `''`.
+ */
+function lastFailureDetail(error: unknown): string {
+  const detail = (error as { upstreamDetail?: unknown } | null | undefined)?.upstreamDetail
+  return typeof detail === 'string' ? detail.trim() : ''
+}
+
+/**
  * Classify whatever came out of the handshake.
  *
  * Only the HANDSHAKE goes through this. A transport failure while reading the
@@ -858,6 +913,78 @@ class QueueRejection extends Error {
     this.retryable = true
     this.retryAfterSeconds = retryAfterSeconds
     this.upstreamDetail = detail
+  }
+}
+
+/**
+ * THE OTHER failure: the request was retryable, and the patience ran out.
+ *
+ * A `QueueRejection` that the ladder gave up on used to surface as itself, so
+ * the user read "Qoder is busy — the request was queued" no matter whether the
+ * queue had been waited out for four minutes or the failure was a reset socket
+ * at the first attempt. That sentence names no duration, no budget and no
+ * remedy, and after 0.7.4 narrowed the host's retry set this plugin's patience
+ * is the only patience a queued request gets (docs/adr/0001-patience-knob-exposure.md,
+ * 后果): the user has to be told what the wait cost and what re-sending buys.
+ *
+ * WHY THIS IS STILL `retryable = true`. The shim decides between a retryable
+ * status and a hard failure from this flag alone (shim.ts:438-445: any
+ * `retryable` error becomes `503 rate_limit` with the message as its text).
+ * The patience running out is a statement about OUR budget, not about the
+ * upstream's state: the request may well clear on the next attempt, and the
+ * host's policy is what decides whether to spend one. Flipping the flag would
+ * quietly change the host behaviour this ticket must preserve — a 502
+ * `upstream_error` instead of a retryable 503 — so it stays true, and the
+ * message is what changes.
+ *
+ * WHY `retryAfterSeconds = 0`. The old `QueueRejection` echoed the gateway's
+ * hint because the ladder was about to honour it. There is no next sleep here:
+ * we have given up, so the only thing a positive hint could do is make the
+ * shim publish a `Retry-After` for a wait this plugin will not perform — a
+ * promise it cannot keep. Zero says "no hint" (`retryAfterHeader` skips it).
+ *
+ * `retryable` and `retryAfterSeconds` are declared fields rather than values
+ * hung on a bare `Error`, for the same reason the other classes in this file
+ * do it: the shim reads them through `thrownFlag` off an `unknown` binding, and
+ * a declared field cannot drift from its reader.
+ */
+class PatienceExhaustedError extends Error {
+  /** Always true — see the class doc: the shim's 503 path is the behaviour being preserved. */
+  retryable: boolean
+  /** Always 0 — see the class doc: we have given up, so a hint would be a lie. */
+  retryAfterSeconds: number
+  /** The last failure's detail, as text (`''` when it carried none). */
+  upstreamDetail: unknown
+  /** How long THIS request waited before the ladder stopped, in milliseconds. */
+  waitedMs: number
+  /** The patience this request was given, in milliseconds. */
+  patienceMs: number
+
+  /**
+   * @param waitedMs - the real accumulated wait of this single request.
+   * @param patienceMs - the budget it was given.
+   * @param detail - the last failure's own detail; an empty string for no clause.
+   */
+  constructor(waitedMs: number, patienceMs: number, detail: string) {
+    const waited = durationText(waitedMs)
+    const patience = durationText(patienceMs)
+    // Both languages, English first, one line each — the host-side convention
+    // for user-visible failure messages. The three facts are the ticket: it was
+    // a QUEUE (not silence), how long we waited, and that re-sending restarts
+    // the clock rather than resuming this wait.
+    const last = detail !== '' ? ` Last response: ${detail}` : ''
+    const lastZh = detail !== '' ? ` 上游最后一次回答：${detail}` : ''
+    super(
+      `Qoder kept this request waiting for about ${waited} and the patience limit (${patience}) is spent; ` +
+        `sending it again restarts the wait.${last}\n` +
+        `Qoder 一直在排队：已等待约 ${waited}，等待耐心（${patience}）已用完；重新发送会重新计时。${lastZh}`,
+    )
+    this.name = 'PatienceExhaustedError'
+    this.retryable = true
+    this.retryAfterSeconds = 0
+    this.upstreamDetail = detail
+    this.waitedMs = waitedMs
+    this.patienceMs = patienceMs
   }
 }
 
