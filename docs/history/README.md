@@ -29,3 +29,13 @@ evidence from the 0.2.0-rc.2 host (which no longer carries
 `installSection` / `settingsScope`), what was removed and what stayed, and
 the `>=0.2.0-rc.0` floor rationale. Read it before touching the settings
 activation path again.
+
+## 2026-10-21-test-tree-type-debt.md
+
+Dated measurement of the test tree's type-error debt (the whole-tree
+`checkJs: true` program): total, per-error-code and per-file breakdown, plus
+the two non-test files the test tree drags into that program. It is a
+snapshot, not a promise — the ceiling itself lives in
+`scripts/ratchet-ledger.json`, and `npm run audit:test-type-errors` prints
+today's numbers. Read it to plan the debt reduction; do not quote its
+numbers as current.

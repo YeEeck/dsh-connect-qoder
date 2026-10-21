@@ -109,6 +109,11 @@ const FORBIDDEN = [
   [/# pass \d+/, 'hardcoded test counts drift; quote "# fail 0" or nothing'],
   [/KNOWN_GAPS\.md.{0,40}?第 \d+ 条(?![（(])/, 'a 第 N 条 reference must quote its target: 第 N 条（标题…）'],
   [/KNOWN_GAPS\.md.{0,40}?item \d+(?![（(])/, 'an "item N" reference must quote its target: item N（标题…）'],
+  [/\d+ 个测试文件/, 'a hardcoded test-file count drifts; point at the command output instead'],
+  [/\d+ 条错误/, 'a hardcoded type-error count drifts; point at the command output instead'],
+  [/\(budget \d+\)/, 'a hardcoded budget drifts; the ceilings live in scripts/ratchet-ledger.json'],
+  [/\(floor \d+\)/, 'a hardcoded ratchet floor drifts; the floors live in scripts/ratchet-ledger.json'],
+  [/下限是 \d+/, 'a hardcoded ratchet floor drifts; the floors live in scripts/ratchet-ledger.json'],
 ]
 
 for (const rel of LIVE_FILES) {
@@ -196,6 +201,56 @@ test('package.json points every self-referential URL at the repository it declar
   const owner = new URL(pkg.repository.url.replace(/^git\+/, '')).pathname.split('/')[1]
   for (const url of [pkg.homepage, pkg.bugs.url]) {
     assert.equal(new URL(url).pathname.split('/')[1], owner, `${url} is not under ${owner} (fork leftover)`)
+  }
+})
+
+/**
+ * The README's verify table and `package.json`'s verify chain must be the
+ * same list.
+ *
+ * WHY: the chain grew steps (the two any audits, the market-entry check)
+ * while the README kept calling itself "seven things" and listing seven
+ * rows. A reader who trusts the table skips a gate; a reader who trusts the
+ * chain reads a table that lies. Neither is visible from the outside, so
+ * the two lists are compared here instead of being kept in sync by hand.
+ *
+ * The table is found through the `<!-- verify-steps -->` marker, and each
+ * row's first backticked token is the script name (`npm run audit:any` in
+ * package.json is `audit:any` in the table).
+ */
+test('the README lists exactly the steps npm run verify runs', () => {
+  const pkg = JSON.parse(read('package.json'))
+  const chainText = /** @type {string} */ (pkg.scripts.verify)
+  const chain = chainText
+    .split('&&')
+    .map((step) => step.trim().replace(/^npm (?:run )?/, ''))
+  const readme = read('README.md')
+  const marker = '<!-- verify-steps -->'
+  const at = readme.indexOf(marker)
+  assert.notEqual(at, -1, 'the README must keep the <!-- verify-steps --> marker in front of the verify table')
+  const rows = []
+  for (const line of readme.slice(at + marker.length).split(/\r?\n/)) {
+    const m = /^\|\s*`([^`]+)`/.exec(line)
+    if (m === null) {
+      if (rows.length > 0) break // the table ended at the first line that is not a row
+      continue // the marker is followed by the table header, which is not a step row
+    }
+    rows.push(m[1])
+  }
+  assert.ok(rows.length > 0, 'the verify table must list at least one step')
+  assert.deepEqual(
+    [...rows].sort(),
+    [...chain].sort(),
+    `the README verify table must list exactly the steps package.json runs (table: ${rows.join(', ')})`,
+  )
+})
+
+test('the live docs point at the ratchet ledger that holds the thresholds', () => {
+  for (const rel of ['README.md', 'AGENTS.md', 'docs/KNOWN_GAPS.md']) {
+    assert.ok(
+      read(rel).includes('scripts/ratchet-ledger.json'),
+      `${rel} must point at scripts/ratchet-ledger.json — that is where the thresholds live now`,
+    )
   }
 })
 

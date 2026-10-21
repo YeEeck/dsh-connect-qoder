@@ -366,25 +366,34 @@ dsh plugin --profile web add <本仓库路径>
 ## 测试
 
 ```sh
-npm run verify          # typecheck + 两道 any 审计 + 测试树类型门禁 + build + test + 产物核验，全过才算过
+npm run verify          # typecheck + 两道 any 审计 + 测试树两道类型门禁 + build + test + 市场条目 + 产物核验，全过才算过
 npm run typecheck       # tsc -p tsconfig.json，源码全量类型检查（0 error）
-npm run audit:test-types # 测试树自己的类型程序：tsc -p tsconfig.test.json（13 个测试文件已 opt-in）
+npm run audit:test-types # 测试树自己的类型程序：tsc -p tsconfig.test.json（已 opt-in 的文件数见输出）
 npm test                # node --test "test/*.test.js"
 npm run test:coverage   # 同上 + 覆盖率门槛（行 68 / 分支 82 / 函数 66，跌破即失败）
 npm run build           # 从 src/ 重建 lib/（宿主 bundle + 卡片产物）
 ```
 
-`npm run verify` 跑七件事，每件回答一个不同的问题：
+`npm run verify` 是一条链，每一步回答一个不同的问题。下表与 `package.json` 的 `verify` 脚本
+一一对应——`test/docs-facts.test.js` 会核对这张表和那条链是不是同一份，改了一个忘了另一个，
+当场就红：
 
+<!-- verify-steps -->
 | 步骤 | 回答什么 | 全过时的输出 |
 |---|---|---|
 | `typecheck` | `src/**` 的每个 `.ts` 都过类型检查 | `tsc` 退出 0、无输出 |
-| `audit:test-types` | 测试文件自己也过类型检查（坏 import、改了名的导出、变了形的参数） | `opted in to type checking: 13 (floor 13)` |
-| `audit:test-type-errors` | 测试树的类型债不许涨：新债进不来，旧债只许降 | `test type errors: 2018 (budget 2018)` |
-| `npm test` | 卡片逻辑与宿主半边没被改坏；三道发布门禁仍能被打破 | 最后一行 `# fail 0` |
+| `audit:any` | 源码里没有隐式 any | `implicit-any sites: <数量> (budget <上限>)` |
+| `audit:explicit:any` | 源码里没有显式 any | `explicit-any sites: <数量> (budget <上限>)` |
+| `audit:test-types` | 测试文件自己也过类型检查（坏 import、改了名的导出、变了形的参数） | `opted in to type checking: <数量> (floor <下限>)` |
+| `audit:test-type-errors` | 测试树的类型债不许涨：新债进不来，旧债只许降 | `test type errors: <实测> (budget <上限>)` |
 | `build`（宿主 + 卡片） | `lib/index.js` 与 `lib/client.js` 确实由 `src/` 生成 | `MATCH: … byte-for-byte identical` |
+| `test` | 卡片逻辑与宿主半边没被改坏；发布门禁仍能被打破 | 最后一行 `# fail 0` |
+| `test:market-entry` | 市场条目还合规则吗（对着上游那份条目规则核一遍） | `market-entry.test.mjs: all checks passed` |
 | `verify:host` | 宿主 bundle 不陈旧、公开面与 peer 外置都还在 | `all 11 checks passed`（装了 `tsdown` 时 11 条；没装时 9 条，见下） |
 | `verify:bundle` | 重建产物与上一份已发布产物的行为一致 | `behaviour: IDENTICAL` + `OK: …` |
+
+四道类型/any 门禁的阈值都住在 `scripts/ratchet-ledger.json` 这本账里（谁、什么时候、为什么），
+不在脚本里——脚本里改阈值这件事本身会当场被账本对不上而红。
 
 中间那条是最要紧的：宿主与卡片两步都**只比较、不认账**。它过了，就说明产物不是手抄进来的
 副本——改 `src/` 而产物不变的情况会在这里红。`verify:host` 补的是迁移带来的新缺口：源码
@@ -395,13 +404,14 @@ npm run build           # 从 src/ 重建 lib/（宿主 bundle + 卡片产物）
 **测试树自己也有类型门禁。** 主 `tsconfig.json` 只管 `src/`（它的 `exclude` 里写着 `test`），
 所以测试文件过去完全不在任何编译器程序里：套件经 Node 的剥类型加载器 import `src/**/*.ts`，
 注解被抹掉，一个都没查；测试自身的 `.js` 更连解析都没发生过。`tsconfig.test.json` 是另一半——
-它把测试树放进一个程序，13 个测试文件用 `// @ts-check` 逐个 opt-in，`npm run audit:test-types`
+它把测试树放进一个程序，opt-in 的测试文件用 `// @ts-check` 逐个打开，`npm run audit:test-types`
 盯着这个程序。**两个程序是分开的**：`npm run typecheck` 仍然只意味着「每个 `src/**/*.ts` 是
 干净的」，测试程序有自己的门禁与自己的范围。
 
 `allowJs: true` 是让 `.js` 测试文件进程序的那一步，`checkJs: false` 是让没 opt-in 的文件
-只被解析、不被检查。**别把 `checkJs` 打开在 `tsconfig.test.json` 里**：整棵树是 2018 条错误的
-量级（`probe/` 占 64 条），那需要一次有预算的迁移，不是一次翻开关。整棵树打开的那份程序是
+只被解析、不被检查。**别把 `checkJs` 打开在 `tsconfig.test.json` 里**：整棵树是数千条错误的
+量级（今天的实测数见 `npm run audit:test-type-errors` 的输出），那需要一次有预算的迁移，不是一次
+翻开关。整棵树打开的那份程序是
 `tsconfig.test.budget.json`（同源、`checkJs: true`），它只用来**数债**：`npm run
 audit:test-type-errors` 把整棵树的错误总数与预算比，只许降不许涨。棘轮轴从「文件数」换成
 「错误数」是有理由的：给一个干净文件加 pragma，文件数 +1（有本事不要钱）；而给一个带着 60 条
@@ -411,27 +421,33 @@ audit:test-type-errors` 把整棵树的错误总数与预算比，只许降不�
 `extends` 会继承父配置的 `exclude`（`["node_modules","lib","test"]`），继承了之后 `include`
 里的 `test` 根本不进程序，门禁会报「0 error、0 个被检查的文件」，然后一脸无辜地绿着。
 pragma 的规则是实测出来的、不是猜的：只有 `//` 行注释算数（块注释里的 `@ts-check` 编译器
-根本不看），token 必须在注释开头，且最后一个 pragma 赢。剩下的 91 个测试文件还没 opt-in，
-缺口与代价记在 `docs/KNOWN_GAPS.md` 第 10 条（测试树的类型债被记成预算）。
+根本不看），token 必须在注释开头，且最后一个 pragma 赢。没 opt-in 的测试文件还剩一大半
+（总数见 `npm run audit:test-types` 的输出），缺口与代价记在
+`docs/KNOWN_GAPS.md` 第 10 条（测试树的类型债被记成预算）。
 
 **绿灯不等于门禁有效。** 这几道门禁每条都用故意的破坏验过：`build` 缺关键串时会拒绝写入
 （第一次构建摇掉全部模块、只剩 84 行，bundler 仍然退出 0）；`verify:host` 往 `lib/index.js`
 尾上追加一行就让 `fresh` 那条红（`the artifact is stale`）并以非 0 退出；`verify:bundle` 把
 探针下界从 `Math.max(0, …)` 改成 `1`，就会在 `formatCountdown|undefined|0` 上报出
 `00:00:00` → `00:00:01` 并以非 0 退出；`audit:test-types` 有四种破法——摘掉某个文件的
-`// @ts-check`（棘轮立刻点名「12 个文件 opt-in，下限是 13」）、给已 opt-in 的文件塞一个类型
+`// @ts-check`（棘轮立刻点名「opt-in 的文件数低于下限」）、给已 opt-in 的文件塞一个类型
 错误（tsc 点名到行）、把 `tsconfig.test.json` 的 `exclude` 加回 `test`（逐个点名「这个文件
 opt-in 了却不在程序里」）、在前导区补一行 `// @ts-nocheck`（点名「这个文件的检查被静默关掉
-了」）；`audit:test-type-errors` 有两种破法——把 `tsconfig.test.budget.json` 的 `checkJs` 翻成
-`false`（债数塌成 0、门禁从此永远绿）或把 `tsconfig.test.json` 的 `include` 里的 `test` 删掉
-（测试树整个离开程序、债数同样塌成 0），两种都会被当场点名。怀疑门禁时照这个法子再破一次，
-比看它绿不绿有用。
+了」）；`audit:test-type-errors` 有三种破法——把 `tsconfig.test.budget.json` 的 `checkJs` 翻成
+`false`（债数塌成 0、门禁从此永远绿）、把 `tsconfig.test.json` 的 `include` 里的 `test` 删掉
+（测试树整个离开程序、债数同样塌成 0），或者把上限本身悄悄抬高（账本对不上，门禁当场点名
+「这个阈值没有记录」）——三种都会被当场点名。四道门禁的阈值都住在
+`scripts/ratchet-ledger.json` 里，所以「抬阈值」永远是一笔带理由的记账，而不是改一行常量：
+单独改账本里的 `value`、不补一条 `changes`，门禁立刻红（`the ratchet ledger is not
+consistent`）。怀疑门禁时照这个法子再破一次，比看它绿不绿有用。
 
 **上面那几条破法现在自己会跑。** `test/gate-mutations.test.js` 把门禁要读的那些文件复制到
 `.verify-tmp/` 下的临时目录（**检出本身一个字节都不动**，所以它可以和别的套件并行跑），在副本
 上破一道门禁，要求那道门禁**自己**变红、并且用它自己的话作证（`the build is incomplete` /
-`the artifact is stale` / `does not behave like its baseline`），再跑一遍没破的副本当对照，
-证明红是这次破坏造成的、不是本来就在红。副本留在仓内是有原因的：`verify:host` 与
+`the artifact is stale` / `does not behave like its baseline` / `the debt is above the ceiling` /
+`the ratchet ledger is not consistent`），再跑一遍没破的副本当对照，
+证明红是这次破坏造成的、不是本来就在红。债那条的破法是往副本里塞一个带类型错误的测试文件
+（债真的涨了），账本那条是把账本里的上限改大却不记账（门槛被人悄悄抬了）。副本留在仓内是有原因的：`verify:host` 与
 `verify:bundle` 从 git 和 `node_modules` 读基准，放在系统临时目录里两道门禁都会因为
 「找不到基准」而直接放行——那正是这道测试要抓的空转绿。怀疑门禁时照上面的法子再破一次仍然
 有用；只是想确认门禁还活着，让这道测试跑一遍就行。
