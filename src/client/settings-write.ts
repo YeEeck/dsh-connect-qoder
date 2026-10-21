@@ -155,6 +155,24 @@ function fieldSnapshot(scope: SettingsScope, field: string): unknown {
 	}
 }
 /**
+ * Read one field back as a MERGE BASE, telling "absent" apart from "unreadable".
+ *
+ * `fieldSnapshot` collapses both into `null`, which is fine for a read-back
+ * COMPARISON (an unreadable field simply does not match). It is NOT fine for a
+ * merge base: an unreadable snapshot means the sibling regions are UNKNOWN, and
+ * merging the posted map on top of an empty base drops them — exactly the
+ * damage the per-region rule exists to prevent. A field the Host has not
+ * materialized yet is NOT unreadable: the snapshot comes back without it, and
+ * that is a base of `{}` (there are no siblings to preserve).
+ */
+function fieldSnapshotBase(scope: SettingsScope, field: string): { readable: boolean; value: unknown } {
+	try {
+		return { readable: true, value: scope.getSnapshot().value?.[field] ?? null };
+	} catch {
+		return { readable: false, value: null };
+	}
+}
+/**
  * Write one settings field, then confirm the value actually landed.
  *
  * The Host endpoint goes FIRST — it is the only writer that persists in
@@ -198,10 +216,24 @@ export async function writeSettingsField(scope: SettingsScope, field: string, va
 		// `enabledModelIds` is per-region on the Host, so its scope mirror
 		// must keep the regions the card did not edit — every other field
 		// is posted whole and replaces the field outright.
-		const nextValue =
-			field === "enabledModelIds"
-				? { ...(fieldSnapshot(scope, field) as Record<string, unknown> | null), ...(value as Record<string, unknown>) }
-				: value;
+		let nextValue = value;
+		if (field === "enabledModelIds") {
+			const base = fieldSnapshotBase(scope, field);
+			if (!base.readable) {
+				// The current per-region value could not be read, so the
+				// sibling regions are UNKNOWN. Writing the posted map alone
+				// would drop them; merging it onto an empty base would drop
+				// them just the same. A write that cannot preserve what it
+				// cannot see is not a write: the card shows the failure and
+				// the sibling allow-list stays as it was.
+				throw new QoderSettingsWriteError(
+					field,
+					"the current per-region value could not be read, so the sibling regions could not be preserved — nothing was written",
+					"refused",
+				);
+			}
+			nextValue = { ...(base.value as Record<string, unknown> | null), ...(value as Record<string, unknown>) };
+		}
 		let scopeDelivered = false;
 		try {
 			// The scope stores the value verbatim (no server-side merge on this

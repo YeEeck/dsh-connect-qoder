@@ -32,9 +32,11 @@ import { writeSettingsField } from '../src/client/settings-write.ts'
  *
  * `set` records every call, and its deliverability / throwing is configurable so
  * a test can model "the scope settled" vs "the scope rejected". `getSnapshot`
- * answers with what `set` stored, which is what the unconfirmed read-back reads.
+ * answers with what `set` stored, which is what the unconfirmed read-back reads;
+ * `snapshotThrows` models the other failure — the snapshot itself cannot be
+ * READ, which is a different thing from "the field is not there yet".
  */
-function makeScope({ stored = {}, setDelivers = true, setThrows = false } = {}) {
+function makeScope({ stored = {}, setDelivers = true, setThrows = false, snapshotThrows = false } = {}) {
   const scope = {
     stored: { ...stored },
     setCalls: [],
@@ -46,6 +48,7 @@ function makeScope({ stored = {}, setDelivers = true, setThrows = false } = {}) 
       return true
     },
     getSnapshot() {
+      if (snapshotThrows) throw new Error('scope.getSnapshot failed')
       return { value: this.stored }
     },
   }
@@ -172,5 +175,32 @@ test('the 404 fallback keeps the sibling region for the per-region field', async
     result.value,
     { 'qoder-cn': ['A', 'D'], qoder: ['B', 'C'] },
     'the unconfirmed value must keep the sibling region the card did not touch',
+  )
+})
+
+test('a 404 whose snapshot cannot be read refuses the per-region write instead of wiping the sibling region', async () => {
+  // The Host endpoint is absent (404) AND the scope's snapshot cannot be read.
+  // The sibling regions are then UNKNOWN: merging the posted map onto an
+  // empty base deletes them, which is the exact damage the per-region rule
+  // exists to prevent. A write that cannot preserve what it cannot see is not
+  // a write — the card shows the failure and the sibling allow-list stays.
+  const scope = makeScope({ stored: { enabledModelIds: { 'qoder-cn': ['A'], qoder: ['B', 'C'] } }, snapshotThrows: true })
+  stubFetchResponse(404, { error: 'Not Found' })
+
+  await assert.rejects(
+    () => writeSettingsField(scope, 'enabledModelIds', { 'qoder-cn': ['A', 'D'] }),
+    (error) => {
+      assert.ok(error instanceof Error, 'the failure must be an Error')
+      assert.ok('kind' in error, 'the failure must carry a kind')
+      assert.strictEqual(error.name, 'QoderSettingsWriteError')
+      assert.strictEqual(error.kind, 'refused')
+      assert.match(error.message, /sibling regions|preserved/)
+      return true
+    },
+  )
+  assert.deepStrictEqual(
+    scope.setCalls,
+    [],
+    'nothing may be written when the merge base could not be read',
   )
 })
