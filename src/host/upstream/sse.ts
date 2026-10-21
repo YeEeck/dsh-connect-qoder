@@ -10,7 +10,7 @@ import { authHeaders } from './cosy-sign.ts'
 import { chatUrl } from './endpoints.ts'
 import { ATTEMPT_TIMEOUT_MS, sleep, queueWaitFor } from './retry.ts'
 import type { QoderMessage } from './messages.ts'
-import { classifyUpstreamError, describeThrown, errorMessage, parseRetryAfterSeconds, ProtocolShapeChangedError, SignInExpiredError, thrownFlag } from '../errors.ts'
+import { classifyUpstreamError, describeThrown, errorMessage, parseRetryAfterSeconds, ProtocolShapeChangedError, redactSecrets, SignInExpiredError, thrownFlag } from '../errors.ts'
 import type { ChatTurnRequest, QoderCredential, Region, UpstreamChunk } from '../domain.ts'
 
 /**
@@ -413,7 +413,10 @@ export async function* streamChat(
     }
 
     if (!response.ok) {
-      const text = (await response.text()).slice(0, 500)
+      // Redact BEFORE the slice: the body is copied into the error messages
+      // below, and a credential riding its tail would otherwise be cut in half
+      // and slip past every shape rule.
+      const text = redactSecrets(await response.text()).slice(0, 500)
 
       // A non-2xx reply carries the same nested envelope as an in-band error
       // frame, so it is unwrapped the same way: the outer status is often a

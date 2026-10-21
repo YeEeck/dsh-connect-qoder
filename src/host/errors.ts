@@ -463,4 +463,61 @@ export class UpstreamRefusalError extends Error {
   }
 }
 
+/**
+ * Strip credential-shaped substrings out of text that is about to be shown or
+ * logged.
+ *
+ * Why this exists, in the plugin's own terms: the threat model in
+ * `src/host/handlers.ts` says a credential only ever travels in an
+ * `Authorization` header and never inside a URL, so a credential should not be
+ * able to reach a log — and the comment there carries its own tripwire ("if
+ * some call site ever moves a secret into a URL, this comment is the alarm").
+ * But the bytes that DO reach a log are the upstream's: an error body is copied
+ * into a message verbatim in a dozen places, and a gateway or proxy that echoes
+ * the request headers back (they do) carries the `Authorization` value
+ * straight into the panel and into `$DSH_HOME/logs`. The rule that keeps a
+ * credential out of a URL does not keep it out of an echo.
+ *
+ * So this is defence in depth rather than a repair of a known leak, and it is
+ * deliberately conservative: prose like "the token is expired" is left alone,
+ * because a redaction that eats ordinary words costs more diagnostics than it
+ * buys. What it matches is the SHAPE a credential takes — a header name, a
+ * `Bearer`/`Basic` prefix, a JWT, an `sk-`-style prefix, a named secret in a
+ * key/value or JSON shape.
+ *
+ * It is pure and import-free, so a test can feed it the exact strings an
+ * upstream might send and assert on the result — the same reason the rest of
+ * this module has no imports.
+ *
+ * @param text - the text to scrub.
+ * @returns the same text with credential-shaped substrings replaced.
+ */
+export function redactSecrets(text: string): string {
+  return text
+    // A credential with its scheme. This comes FIRST because the scheme and
+    // the credential are one unit: a rule that matched only the header name
+    // would replace the word `Bearer` and leave the credential standing next
+    // to it.
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/g, '$1 [REDACTED]')
+    // A header echoed back by a gateway: `Authorization: Bearer …`. The value
+    // is taken to the end of the line (a quote ends it, so a JSON body keeps
+    // its other fields) — a header-shaped line is redacted whole, because a
+    // value cut in half can match no shape rule.
+    .replace(/(\b(?:proxy-)?authorization\s*[:=]\s*)([^\r\n"']+)/gi, '$1[REDACTED]')
+    // A cookie jar, echoed whole.
+    .replace(/\b((?:set-)?cookie\s*:\s*)[^\r\n]+/gi, '$1[REDACTED]')
+    // A JWT with no key name in front of it — the shape a token takes when the
+    // upstream names it in prose ("token eyJhbGciOi…").
+    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g, '[REDACTED]')
+    // The `sk-` / `cpk-` prefixes the Qoder-family plugins use.
+    .replace(/\b(?:sk|cpk)-[A-Za-z0-9._-]{8,}/g, '[REDACTED]')
+    // A named secret in a key/value or JSON shape. The key list is closed, so
+    // an unknown field name is not covered by this rule — the shape rules above
+    // are what cover those.
+    .replace(
+      /("?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|client[_-]?secret|token|secret|password)"?\s*[:=]\s*)("?)[^"'\s,}&;]+("?)/gi,
+      '$1$2[REDACTED]$3',
+    )
+}
+
 export { classifyUpstreamError }

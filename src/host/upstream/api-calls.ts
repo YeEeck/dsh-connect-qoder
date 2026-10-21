@@ -8,7 +8,7 @@ import { authHeaders } from './cosy-sign.ts'
 import { openApiHeaders } from './headers.ts'
 import { modelListUrl, exchangeUrl, userInfoUrl, campaignsUrl, claimCampaignUrl } from './endpoints.ts'
 import { normalizePromotion } from './fetch-usage.ts'
-import { parseRetryAfterSeconds, ProtocolShapeChangedError, UpstreamRefusalError } from '../errors.ts'
+import { parseRetryAfterSeconds, ProtocolShapeChangedError, UpstreamRefusalError, redactSecrets } from '../errors.ts'
 import { toEpochMs } from '../time.ts'
 import type { QoderCredential, Region } from '../domain.ts'
 
@@ -31,7 +31,7 @@ export async function readJson(response: Response, context: string): Promise<unk
     return JSON.parse(text)
   } catch {
     const ct = response.headers.get('content-type') ?? 'no content-type'
-    throw new Error(`${context}: response is not valid JSON (${ct}) — ${text.slice(0, 300)}`)
+    throw new Error(`${context}: response is not valid JSON (${ct}) — ${redactSecrets(text).slice(0, 300)}`)
   }
 }
 
@@ -111,7 +111,7 @@ export async function readCampaigns(
     throw new UpstreamRefusalError(
       `Qoder campaigns failed: HTTP ${response.status}`,
       response.status,
-      (await response.text()).slice(0, 300),
+      redactSecrets(await response.text()).slice(0, 300),
       response.headers.get('retry-after'),
     )
   }
@@ -148,9 +148,9 @@ export async function claimCampaign(
   const text = await response.text()
   if (!response.ok) {
     throw new UpstreamRefusalError(
-      `Qoder check-in failed: HTTP ${response.status} ${text.slice(0, 200)}`,
+      `Qoder check-in failed: HTTP ${response.status} ${redactSecrets(text).slice(0, 200)}`,
       response.status,
-      text.slice(0, 300),
+      redactSecrets(text).slice(0, 300),
       response.headers.get('retry-after'),
     )
   }
@@ -158,7 +158,7 @@ export async function claimCampaign(
     return JSON.parse(text)
   } catch {
     const ct = response.headers.get('content-type') ?? 'no content-type'
-    throw new Error(`Qoder check-in: response is not valid JSON (${ct}) — ${text.slice(0, 300)}`)
+    throw new Error(`Qoder check-in: response is not valid JSON (${ct}) — ${redactSecrets(text).slice(0, 300)}`)
   }
 }
 
@@ -223,7 +223,9 @@ export async function fetchModels(
     ...(signal === undefined ? {} : { signal }),
   })
   if (!response.ok) {
-    const text = (await response.text()).slice(0, 300)
+    // Redact BEFORE the slice: a credential riding the tail of a body would
+    // otherwise be cut in half and slip past every shape rule.
+    const text = redactSecrets(await response.text()).slice(0, 300)
     throw new UpstreamRefusalError(
       `Qoder model list failed: HTTP ${response.status} ${text}`,
       response.status,
@@ -334,7 +336,9 @@ export async function exchangePat(
     ...(signal === undefined ? {} : { signal }),
   })
   if (!response.ok) {
-    const text = (await response.text()).slice(0, 300)
+    // Redact BEFORE the slice: a credential riding the tail of a body would
+    // otherwise be cut in half and slip past every shape rule.
+    const text = redactSecrets(await response.text()).slice(0, 300)
     // Carry what a throttle gate needs to honour the platform's own window
     // rather than invent one: the HTTP status classifies the refusal (a 429 is
     // a rate limit, a 401/403 is a dead credential), and `Retry-After` — read
@@ -440,7 +444,9 @@ export async function fetchUserInfo(
     ...(signal === undefined ? {} : { signal }),
   })
   if (!response.ok) {
-    const text = (await response.text()).slice(0, 300)
+    // Redact BEFORE the slice: a credential riding the tail of a body would
+    // otherwise be cut in half and slip past every shape rule.
+    const text = redactSecrets(await response.text()).slice(0, 300)
     throw new UpstreamRefusalError(
       `Qoder userinfo failed: HTTP ${response.status} ${text}`,
       response.status,
