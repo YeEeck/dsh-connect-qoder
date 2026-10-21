@@ -24,7 +24,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -177,4 +177,35 @@ test('the build script derives the loader id instead of hardcoding it', () => {
     /id:\s*"@?[\w/-]+",\s*\n?\s*'?\s*\\t?factory/m,
     'build-client.mjs must not hardcode a loader id literal in the bundle header',
   )
+})
+
+test('the client bundle guard pins every plugin route and every mounted panel', () => {
+  // The bundle guard (scripts/build-client.mjs) refuses to write an artifact
+  // that lost a string the card needs. A PINNED set that quietly misses one
+  // route is the same silence with a smaller footprint: the route vanishes
+  // from the bundle, the guard stays green, and the button that used it stops
+  // working. The route table has exactly one source of truth
+  // (src/client/paths.ts) — so the guard has to cover ALL of it, and the
+  // panels have to be covered by the same rule.
+  const paths = readFileSync(join(root, 'src', 'client', 'paths.ts'), 'utf8')
+  const script = readFileSync(join(root, 'scripts', 'build-client.mjs'), 'utf8')
+
+  const routes = [...paths.matchAll(/export const \w+ = "(\/plugins\/dsh-connect-qoder\/[^"]+)"/g)].map((m) => m[1])
+  assert.ok(routes.length >= 9, `the route table must be read from paths.ts; found ${routes.length}`)
+  for (const route of routes) {
+    assert.ok(script.includes(`'${route}'`), `the bundle guard must pin the ${route} route`)
+  }
+
+  // Every panel the client can mount: the `Qoder*` components are the surfaces
+  // the host renders, and each of them has to survive the build.
+  const panels = new Set()
+  for (const name of readdirSync(join(root, 'src', 'client'))) {
+    if (!name.endsWith('.tsx')) continue
+    const source = readFileSync(join(root, 'src', 'client', name), 'utf8')
+    for (const match of source.matchAll(/function (Qoder\w+)\(/g)) panels.add(match[1])
+  }
+  assert.ok(panels.size >= 4, `the panel set must be read from src/client; found ${[...panels].join(', ')}`)
+  for (const panel of panels) {
+    assert.ok(script.includes(`function ${panel}(`), `the bundle guard must pin the ${panel} component`)
+  }
 })
