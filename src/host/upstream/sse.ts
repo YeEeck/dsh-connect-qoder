@@ -231,11 +231,24 @@ export async function* streamChat(
     const decoder = new TextDecoder()
     let buffer = ''
     let streamDone = false
+    let endOfStream = false
     try {
       while (!streamDone) {
         const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
+        if (done) {
+          // The stream ENDED: flush the decoder and hand the residual buffer
+          // to the SAME line path below. A last frame that arrives without a
+          // trailing newline used to be dropped here, and the drop was silent:
+          // the user saw a complete-looking answer that was missing its last
+          // sentence, and nothing anywhere said so. Flushing the decoder too
+          // releases a multi-byte character that was cut between the last two
+          // chunks (it would otherwise be replaced by nothing at all).
+          endOfStream = true
+          buffer += decoder.decode()
+          if (buffer.trim() !== '') buffer += '\n'
+        } else {
+          buffer += decoder.decode(value, { stream: true })
+        }
         let newline
         while ((newline = buffer.indexOf('\n')) !== -1) {
           const line = buffer.slice(0, newline).trim()
@@ -304,6 +317,9 @@ export async function* streamChat(
           if (failure.kind === 'sign-in-expired') throw new SignInExpiredError(message)
           throw new Error(message)
         }
+        // The end of the body is the end of the turn: the residual buffer was
+        // handed to the line path above, so there is nothing left to wait for.
+        if (endOfStream) break
       }
     } finally {
       // On a retryable rejection the body is abandoned mid-stream; cancelling
