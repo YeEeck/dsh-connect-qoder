@@ -256,6 +256,16 @@ export async function* streamChat(
   // Only time in which a read was actually outstanding is upstream's to answer
   // for. `noteResume` runs only after a real chunk has been yielded, so a
   // heartbeat cannot reach it.
+  //
+  // WHERE THIS DEPARTS FROM A LITERAL READING OF THE DEFINITION. CONTEXT.md says
+  // the window measures "距离上一次产出可解析帧的间隔" (the gap since the last
+  // parsed frame), and a slow consumer makes that gap look long through no
+  // fault of the upstream. Measured, not hypothetical: without this stamp the
+  // consumer's own pause is charged to the wire and the very next read expires
+  // instantly, so a legitimate turn is killed and blamed on Qoder. The window's
+  // JOB is to bound silence on the wire, so it is armed only while a read is
+  // outstanding — the stamp narrows the measurement to the thing it is for,
+  // rather than widening it. `test/stream-idle-window.test.js` pins it.
   let lastProgressAt = Date.now()
   const idleRemaining = () => Math.max(0, idleWindowMs - (Date.now() - lastProgressAt))
   /** The generator is about to hand control back to its consumer, not to the wire. */
@@ -284,18 +294,39 @@ export async function* streamChat(
   function underIdleWindow<T>(work: Promise<T>, controller: AbortController): Promise<T> {
     work.catch(() => {})
     let timer: ReturnType<typeof setTimeout> | undefined
-    const expired = new Promise<never>((_resolve, reject) => {
+    let expired = false
+    const expiry = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
+        // The flag goes up BEFORE the abort, and the ordering is load-bearing.
+        // On a real socket the abort rejects the outstanding `reader.read()`
+        // synchronously, so its reaction reaches the race FIRST and would
+        // otherwise hide this sentinel behind an `AbortError` — which the
+        // phase classification cannot recognise, so a genuine stall would be
+        // reported as a transport failure and never retried before the first
+        // frame. The flag makes "the window fired" a fact of this function
+        // rather than a race outcome.
+        expired = true
         controller.abort()
         reject(new IdleWindowExpiredError(idleWindowMs))
       }, idleRemaining())
     })
-    return Promise.race([work, expired]).finally(() => {
-      // Disarmed the moment the step settles, the same way the handshake
-      // deadline is disarmed when headers arrive. This is the property the old
-      // `AbortSignal.timeout` comment claimed and did not have.
-      if (timer !== undefined) clearTimeout(timer)
-    })
+    return Promise.race([work, expiry])
+      .catch((error: unknown) => {
+        // MEASURED, not defensive: with the abort above, the pending read
+        // rejects and that rejection is what the race returns. Re-reporting it
+        // as the sentinel is what keeps this module's own stall distinguishable
+        // from every other throw — without it the classification silently
+        // degrades to "transport error" on real sockets and only the fake-stream
+        // tests (whose reads ignore the signal) still see a stall.
+        if (expired) throw new IdleWindowExpiredError(idleWindowMs)
+        throw error
+      })
+      .finally(() => {
+        // Disarmed the moment the step settles, the same way the handshake
+        // deadline is disarmed when headers arrive. This is the property the
+        // old `AbortSignal.timeout` comment claimed and did not have.
+        if (timer !== undefined) clearTimeout(timer)
+      })
   }
 
   /**
@@ -781,8 +812,10 @@ function reclassifyIdle(error: unknown, idleWindowMs: number, region: Region): u
  * Two facts have to survive into the wording, because they are what the user
  * decides on: WHAT happened (the upstream went silent) and WHY re-sending is not
  * free (it regenerates the answer and repeats what was already read). Both
- * languages, English first — the host-side convention for user-visible failure
- * messages. This deliberately borrows none of the queue vocabulary: waiting is
+ * languages, English first and ONE LINE EACH — the host-side convention for
+ * user-visible failure messages (the patience-exhausted sentence does the same;
+ * a single mixed line would read as one language switching mid-sentence).
+ * This deliberately borrows none of the queue vocabulary: waiting is
  * not the remedy here, and ticket 03's patience-exhausted message is the one
  * that talks about queues.
  */
@@ -795,7 +828,7 @@ function stalledMidAnswerMessage(idleWindowMs: number, region: Region): string {
   const silence = seconds >= 1 ? `${seconds}s` : `${idleWindowMs}ms`
   return (
     `${region.displayName}'s stream sent no content for about ${silence}, so this reply was cut off; ` +
-    'sending it again regenerates from the start and repeats what you already saw. ' +
+    'sending it again regenerates from the start and repeats what you already saw.\n' +
     `上游已经约 ${silence} 没有输出任何内容，这条回答被判为卡死并中断；重发会从头再生成，已输出的部分会重复。`
   )
 }
