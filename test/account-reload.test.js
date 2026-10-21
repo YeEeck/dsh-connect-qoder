@@ -142,3 +142,63 @@ test('a region start already in flight is not started a second time', () => {
     'the in-flight marker must be set before awaiting startRegion, or the second caller still wins the race',
   )
 })
+
+test('a start that lands after the fiber was disposed releases its own entry', () => {
+  // `disposeFiber` reads `started` — the list the entry joins only AFTER
+  // `await startRegion` resolves. A reload in flight when the fiber is torn
+  // down therefore lands after that snapshot, and nothing else will ever
+  // release it: its shim's HTTP server keeps serving and its catalog interval
+  // keeps firing for the life of the process.
+  //
+  // Three parts, all asserted: the dispose effect raises the flag, the start
+  // path reads it after the await, and the late entry is released instead of
+  // being kept.
+  const disposeEffect = slice('ctx.effect(() => async () => {', '\n  })')
+
+  assert.match(
+    source,
+    /let disposed = false/,
+    'the disposal flag must be one shared flag: the dispose effect raises it and the start path reads it',
+  )
+
+  const flagAt = disposeEffect.indexOf('disposed = true')
+  const disposeAt = disposeEffect.indexOf('disposeFiber(')
+  assert.ok(flagAt !== -1, 'the dispose effect must raise the disposal flag')
+  assert.ok(disposeAt !== -1, 'the dispose effect must still delegate to disposeFiber')
+  assert.ok(
+    flagAt < disposeAt,
+    'the flag must go up BEFORE disposeFiber reads `started`, or a start that lands in that window still leaks',
+  )
+
+  const startAwaitAt = startStoppedRegionsBody.indexOf('await startRegion(')
+  const checkAt = startStoppedRegionsBody.indexOf('if (disposed)')
+  assert.ok(checkAt !== -1, 'the start path must check whether the fiber is already gone')
+  assert.ok(
+    checkAt > startAwaitAt,
+    'the disposal check must come AFTER the await: before it, the flag cannot yet be set',
+  )
+
+  assert.match(
+    startStoppedRegionsBody,
+    /if \(disposed\) \{[\s\S]*?await disposeLateEntry\(/,
+    'a start that lands after disposal must release its own entry',
+  )
+  assert.match(
+    startStoppedRegionsBody,
+    /disposeLateEntry\([\s\S]*?runtime: entry\.runtime[\s\S]*?shim: entry\.shim/,
+    'the release must undo the late entry itself, not some other runtime',
+  )
+
+  // And the released entry must NOT join `started`: a later reader would
+  // believe the region is live, and the fiber would try to dispose it twice.
+  const releaseAt = startStoppedRegionsBody.indexOf('await disposeLateEntry(')
+  const pushAt = startStoppedRegionsBody.indexOf('started.push(entry)')
+  assert.ok(pushAt !== -1, 'a live entry must still join `started`')
+  assert.ok(releaseAt < pushAt, 'the release must come before the entry joins `started`')
+  const branch = startStoppedRegionsBody.slice(checkAt, pushAt)
+  assert.match(
+    branch,
+    /\n {8}return\n/,
+    'the late entry must be released and the loop abandoned, not pushed onto `started`',
+  )
+})

@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { mountRouteGroup } from '../src/host/route-mount.ts'
-import { disposeFiber } from '../src/host/dispose-order.ts'
+import { disposeFiber, disposeLateEntry } from '../src/host/dispose-order.ts'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -324,6 +324,55 @@ test('a fiber with nothing started still disposes', async () => {
   const report = await disposeFiber(deps)
   assert.equal(report.runtimes, 0)
   assert.equal(report.closed, 0)
+})
+
+// ---------------------------------------------------------------------------
+// disposeLateEntry
+// ---------------------------------------------------------------------------
+
+test('a start that landed after the disposal is released, not kept', async () => {
+  // The entry joins `started` only after `await startRegion` resolves, so a
+  // start in flight when the fiber was torn down lands after `disposeFiber`
+  // took its snapshot. Left alone, its shim keeps a listening socket and its
+  // catalog interval keeps firing for the life of the process.
+  const r = { disposed: false }
+  let closed = 0
+  const report = await disposeLateEntry(
+    { timers: { clearInterval: () => {} } },
+    { runtime: r, shim: { close: async () => { closed += 1 } } },
+  )
+  assert.equal(r.disposed, true, 'the late runtime must be marked dead')
+  assert.equal(closed, 1, 'the late shim must be closed')
+  assert.deepEqual(report, { releasedRoutes: 0, runtimes: 1, closed: 1 })
+})
+
+test('a late entry is marked dead BEFORE its interval is cleared', async () => {
+  // The same invariant the fiber-wide dispose keeps: a `then` running between
+  // "clear the timer" and "set disposed" would install a FRESH interval on a
+  // runtime that no longer has one to clear.
+  //
+  // A real handle, not the file's token stand-in: this one is typed, and the
+  // stub clears it for real so the suite does not outlive its own timer.
+  const timer = setInterval(noop, 60000)
+  const r = { disposed: false, refreshTimer: timer }
+  let disposedWhenCleared
+  await disposeLateEntry(
+    { timers: { clearInterval: (t) => { disposedWhenCleared = r.disposed; clearInterval(t) } } },
+    { runtime: r, shim: { close: async () => {} } },
+  )
+  assert.equal(disposedWhenCleared, true)
+})
+
+test('a late entry does not touch the fiber-wide registrations', async () => {
+  // The provider registrations and the card routes belong to the fiber, and
+  // the fiber already released them. A late entry that released them again
+  // would unregister a provider another fiber has since registered.
+  const r = { disposed: false }
+  const report = await disposeLateEntry(
+    { timers: { clearInterval: () => {} } },
+    { runtime: r, shim: { close: async () => {} } },
+  )
+  assert.equal(report.releasedRoutes, 0, 'a late entry must not run the fiber route releases')
 })
 
 // ---------------------------------------------------------------------------

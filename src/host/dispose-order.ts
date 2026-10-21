@@ -111,3 +111,44 @@ export async function disposeFiber(deps: DisposeDeps): Promise<DisposeReport> {
 
   return { releasedRoutes, runtimes: deps.runtimes.length, closed: deps.shims.length }
 }
+
+/** The parts of a region start that a late release has to undo. */
+export interface LateEntry {
+  /** The runtime the start built. */
+  runtime: DisposableRuntime
+  /** The shim the start built. */
+  shim: ClosableShim
+}
+
+/**
+ * Release a region start that landed AFTER the fiber was disposed.
+ *
+ * A start joins the `started` list only once `await startRegion` resolves, so
+ * a start that was in flight when the fiber was torn down lands after
+ * `disposeFiber` has taken its snapshot of that list. Nothing else will ever
+ * release it: its shim's HTTP server keeps serving and its catalog interval
+ * keeps firing for the life of the process.
+ *
+ * The late entry gets the same treatment a normal one gets — marked dead
+ * BEFORE its interval is cleared, aborting whatever it had in flight, then its
+ * shim closed — but it touches nothing else: the provider registrations and
+ * the card routes belong to the fiber, and the fiber already released them.
+ *
+ * @param deps - the clock handles; see {@link DisposeDeps}.
+ * @param entry - the start that landed too late.
+ * @returns what was undone, for the caller's own logging.
+ */
+export async function disposeLateEntry(
+  deps: Pick<DisposeDeps, 'timers'>,
+  entry: LateEntry,
+): Promise<DisposeReport> {
+  return disposeFiber({
+    releaseAdapter: undefined,
+    releaseDirectory: undefined,
+    releaseRoutes: () => 0,
+    routeSink: [],
+    runtimes: [entry.runtime],
+    shims: [entry.shim],
+    timers: deps.timers,
+  })
+}

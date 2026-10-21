@@ -56,7 +56,7 @@ import { applyCatalogOutcome, isRefreshObsolete } from './catalog-refresh.ts'
 import { releaseRoutes } from './lifecycle.ts'
 import { mountRouteGroup } from './route-mount.ts'
 import { requireInjected } from './injected.ts'
-import { disposeFiber } from './dispose-order.ts'
+import { disposeFiber, disposeLateEntry } from './dispose-order.ts'
 import { publishRegions as publishRegionSet } from './publish-regions.ts'
 import { __dshQoderUmidState, exchangePat, fetchModels, fetchUsage } from './upstream.ts'
 import type { UsageSnapshot } from './upstream.ts'
@@ -1089,6 +1089,17 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
    * cannot witness a concurrent start. See the guard there.
    */
   const pendingStarts = new Set<string>()
+  /**
+   * Whether this fiber's dispose effect has run.
+   *
+   * A region start that is STILL IN FLIGHT when the fiber is torn down lands
+   * after `disposeFiber` has read `started` — the entry is pushed only once
+   * `await startRegion` resolves — so nothing else would ever release it: the
+   * shim's HTTP server would keep serving and its catalog interval would keep
+   * firing for the life of the process. This flag is how a late start learns
+   * that it must release its own entry instead of joining `started`.
+   */
+  let disposed = false
   // 本地请求计数器：按 region + 上海本地日分文件，落在 $DSH_HOME。每次对话轮
   // 由 shim 调 bump，今日读数由 usage 路由随 region 下发。计数失败只降级、不
   // 阻塞对话；越界防护在模块内（region/日期白名单），绝不写目录外。
@@ -1305,6 +1316,12 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
   }
 
   ctx.effect(() => async () => {
+    // The fiber is going away, so the flag goes up FIRST. A region start that
+    // is in flight right now resolves AFTER `disposeFiber` has read `started`
+    // — the entry is pushed only once `await startRegion` returns — and it has
+    // to see that the fiber is gone, so it releases its own entry instead of
+    // joining a list nobody will read again.
+    disposed = true
     // The order, and why each step is where it is, live in `dispose-order.ts`
     // — extracted so the `disposed`-before-`clearInterval` invariant (the one
     // that keeps a racing `refreshCatalog().then` from installing a zombie
@@ -1382,6 +1399,19 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
         pendingStarts.delete(region.id)
       }
       if (entry === undefined) continue
+      if (disposed) {
+        // The fiber was torn down while this start was in flight, so
+        // `disposeFiber` read `started` before this entry existed: nothing
+        // else will ever release it. Left alone, its shim's HTTP server keeps
+        // serving and its catalog interval keeps firing for the life of the
+        // process. Release it here — and keep it out of `started`, so a later
+        // reader does not believe the region is live.
+        await disposeLateEntry(
+          { timers: { clearInterval: (timer) => clearInterval(timer) } },
+          { runtime: entry.runtime, shim: entry.shim },
+        )
+        return
+      }
       started.push(entry)
       wireRuntime(entry.runtime)
       beginCatalogUpdates(entry.runtime)
