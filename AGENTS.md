@@ -114,7 +114,6 @@ npm run verify             # typecheck + 两道 any 审计 + 测试树两道类�
   （这是 issue 03 事故换来的，曾经 16 字节桩替换掉整个卡片而构建"成功"）。
 - **改 host 后**：`npm run build:host`；`verify:host` / `verify:bundle` 是产物级行为比对。
 - 覆盖率门槛：lines 68 / branches 82 / functions 66（`npm run test:coverage`），只看自己域的增减。
-- 测试数随并行会话变化，某个时点的总数不是契约。
 - **测试树有两个程序，别混**：`tsconfig.json` 只管 `src/`（它的 `exclude` 里写着 `test`），
   `tsconfig.test.json` 管测试树。`npm run typecheck` 绿**不等于**测试文件被检查过——套件是经
   Node 的剥类型加载器 import `src/**/*.ts` 的，注解一个都没查。想让某个测试文件进类型检查：
