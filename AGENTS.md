@@ -173,3 +173,17 @@ npm run verify             # typecheck + 两道 any 审计 + 测试树两道类�
 | 动设置激活路径 / 宿主代际问题前 | `docs/history/0.5.0-abi-cutover.md`（0.5.0 砍 0.1.x ABI 的取证、决定与"为什么下限是 `>=0.2.0-rc.0`"） |
 | client 恢复源码的来龙去脉与旧补丁 | `docs/history/`（含 `restore-client-src.mjs`） |
 | 上架提交材料 | `awesome-dsh-plugin-submission/`、根目录 `README.md` / `CHANGELOG.md` |
+
+## Agent skills
+
+### Issue tracker
+
+工作项落在仓库内的 `.scratch/<effort>/issues/NN-<slug>.md`（GitHub Issues 在本 fork 已禁用）。见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+五档状态词表沿用默认：`needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`。见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+single-context：根 `CONTEXT.md` + `docs/adr/`。见 `docs/agents/domain.md`。
