@@ -799,10 +799,9 @@ class IdleWindowExpiredError extends Error {
  */
 function reclassifyIdle(error: unknown, idleWindowMs: number, region: Region): unknown {
   if (!(error instanceof IdleWindowExpiredError)) return error
-  const seconds = Math.round(idleWindowMs / 1000)
   return new QueueRejection(
     0,
-    `${region.displayName} sent no content for about ${seconds >= 1 ? `${seconds}s` : `${idleWindowMs}ms`} before the first frame`,
+    `${region.displayName} sent no content for about ${durationText(idleWindowMs)} before the first frame`,
   )
 }
 
@@ -824,8 +823,7 @@ function stalledMidAnswerMessage(idleWindowMs: number, region: Region): string {
   // injects tens of MILLISECONDS would round to "about 0s", which reads as a
   // broken message rather than a small window, so the sub-second case says what
   // it actually is.
-  const seconds = Math.round(idleWindowMs / 1000)
-  const silence = seconds >= 1 ? `${seconds}s` : `${idleWindowMs}ms`
+  const silence = durationText(idleWindowMs)
   return (
     `${region.displayName}'s stream sent no content for about ${silence}, so this reply was cut off; ` +
     'sending it again regenerates from the start and repeats what you already saw.\n' +
@@ -837,12 +835,16 @@ function stalledMidAnswerMessage(idleWindowMs: number, region: Region): string {
  * A human-readable duration: seconds for anything from a second up, the raw
  * milliseconds below that.
  *
- * The sub-second branch exists for the same reason as in the stall sentence
- * above: real waits are minutes, but a test injects tens of milliseconds, and
- * a message that rounded those to "about 0s" would read as broken rather than
- * as a small budget. It is deliberately NOT shared with that sentence: ticket
- * 01's wording is pinned by its own tests, and one formatter for both would put
- * this ticket's needs in the way of that.
+ * The single formatter for every user-visible duration in this module: the
+ * stall sentence, the pre-first-frame rejection and the patience-exhausted
+ * message all call it. Three copies of "round to seconds, fall back to
+ * milliseconds below one second" had accumulated, and the copies are the thing
+ * that drifts (one of them would eventually round 90 s to "2min" and the others
+ * would not).
+ *
+ * The sub-second branch exists because real waits are minutes but a test
+ * injects tens of milliseconds: a message that rounded those to "about 0s"
+ * would read as broken rather than as a small budget.
  *
  * @param ms - a duration in milliseconds.
  * @returns e.g. `240s`, or `80ms` below one second.
@@ -923,29 +925,59 @@ function classifyHandshakeFailure(error: unknown, signal?: AbortSignal): unknown
 }
 
 /**
+ * The three flags every waitable failure carries, in one place.
+ *
+ * Both classes below are read by the shim through `thrownFlag` off an `unknown`
+ * binding, and both must answer the same three fields — `retryable` (503 vs
+ * 502), `retryAfterSeconds` (the `Retry-After` header) and `upstreamDetail`
+ * (what a UI can show). Declaring the trio once means a class that forgets one
+ * is a compile error rather than a silently absent flag, which is the failure
+ * mode that would make the shim answer the wrong status.
+ *
+ * `name` is set by each subclass so the two failures stay distinguishable in a
+ * log without either one having to repeat the field block.
+ */
+abstract class WaitableFailure extends Error {
+  /** Whether waiting can clear this failure — the shim's 503 vs 502 decision. */
+  retryable: boolean
+  /** Seconds to wait before retrying; 0 means "no hint". */
+  retryAfterSeconds: number
+  /** The upstream detail, in a form a human can act on. */
+  upstreamDetail: unknown
+
+  /**
+   * @param name - the concrete failure's name, so logs tell them apart.
+   * @param message - the user-visible sentence.
+   * @param retryable - see the field.
+   * @param retryAfterSeconds - see the field.
+   * @param detail - see the field.
+   */
+  constructor(name: string, message: string, retryable: boolean, retryAfterSeconds: number, detail: unknown) {
+    super(message)
+    this.name = name
+    this.retryable = retryable
+    this.retryAfterSeconds = retryAfterSeconds
+    this.upstreamDetail = detail
+  }
+}
+
+/**
  * A queue rejection that can be waited out.
  *
  * `retryable` is what the shim reads to decide between a retryable status and a
  * hard failure, so this stays a plain `Error` carrying the same flags the shim
  * already understood.
  */
-class QueueRejection extends Error {
-  /** Always true: waiting can clear a queue. */
-  retryable: boolean
-  /** Seconds to wait before retrying. */
-  retryAfterSeconds: number
-  /** The upstream detail, in a form a human can act on. */
-  upstreamDetail: unknown
-
+class QueueRejection extends WaitableFailure {
   constructor(retryAfterSeconds: number, detail: unknown) {
     super(
+      'QueueRejection',
       `Qoder is busy — the request was queued` +
         `${retryAfterSeconds > 0 ? ` (retry in ~${retryAfterSeconds}s)` : ''}`,
+      true,
+      retryAfterSeconds,
+      detail,
     )
-    this.name = 'QueueRejection'
-    this.retryable = true
-    this.retryAfterSeconds = retryAfterSeconds
-    this.upstreamDetail = detail
   }
 }
 
@@ -961,8 +993,11 @@ class QueueRejection extends Error {
  * 后果): the user has to be told what the wait cost and what re-sending buys.
  *
  * WHY THIS IS STILL `retryable = true`. The shim decides between a retryable
- * status and a hard failure from this flag alone (shim.ts:438-445: any
- * `retryable` error becomes `503 rate_limit` with the message as its text).
+ * status and a hard failure from this flag alone (`shim.ts`, the
+ * `thrownFlag(error, 'retryable')` branch: any retryable error becomes
+ * `503 rate_limit` with the message as its text). Named by its predicate rather
+ * than by a line range — a citation into another file's line numbers is stale
+ * the moment either file moves, and this one already was.
  * The patience running out is a statement about OUR budget, not about the
  * upstream's state: the request may well clear on the next attempt, and the
  * host's policy is what decides whether to spend one. Flipping the flag would
@@ -976,18 +1011,11 @@ class QueueRejection extends Error {
  * shim publish a `Retry-After` for a wait this plugin will not perform — a
  * promise it cannot keep. Zero says "no hint" (`retryAfterHeader` skips it).
  *
- * `retryable` and `retryAfterSeconds` are declared fields rather than values
- * hung on a bare `Error`, for the same reason the other classes in this file
- * do it: the shim reads them through `thrownFlag` off an `unknown` binding, and
- * a declared field cannot drift from its reader.
+ * The three inherited flags come from {@link WaitableFailure}, which is where
+ * the shim's reader and both classes are tied together; only the two durations
+ * this failure alone knows about are declared here.
  */
-class PatienceExhaustedError extends Error {
-  /** Always true — see the class doc: the shim's 503 path is the behaviour being preserved. */
-  retryable: boolean
-  /** Always 0 — see the class doc: we have given up, so a hint would be a lie. */
-  retryAfterSeconds: number
-  /** The last failure's detail, as text (`''` when it carried none). */
-  upstreamDetail: unknown
+class PatienceExhaustedError extends WaitableFailure {
   /** How long THIS request waited before the ladder stopped, in milliseconds. */
   waitedMs: number
   /** The patience this request was given, in milliseconds. */
@@ -1008,14 +1036,14 @@ class PatienceExhaustedError extends Error {
     const last = detail !== '' ? ` Last response: ${detail}` : ''
     const lastZh = detail !== '' ? ` 上游最后一次回答：${detail}` : ''
     super(
+      'PatienceExhaustedError',
       `Qoder kept this request waiting for about ${waited} and the patience limit (${patience}) is spent; ` +
         `sending it again restarts the wait.${last}\n` +
         `Qoder 一直在排队：已等待约 ${waited}，等待耐心（${patience}）已用完；重新发送会重新计时。${lastZh}`,
+      true,
+      0,
+      detail,
     )
-    this.name = 'PatienceExhaustedError'
-    this.retryable = true
-    this.retryAfterSeconds = 0
-    this.upstreamDetail = detail
     this.waitedMs = waitedMs
     this.patienceMs = patienceMs
   }

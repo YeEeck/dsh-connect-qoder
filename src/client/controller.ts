@@ -102,6 +102,14 @@ export interface EditableState {
  * something else.
  */
 export function patienceTierOf(stored: unknown): string {
+	// NOTE the deliberate name collision with the HOST's `patienceTierOf`
+	// (`src/host/patience.ts`), which answers `{ tier, invalid }` instead of a
+	// bare string: the host has to REPORT that it replaced a bad value (red line
+	// 1 — the card renders a warning from that flag), while the card, having
+	// been told, only needs the value to render. Same rule, two answers, and
+	// renaming either one would move the question away from its answer. The two
+	// are separate modules on separate sides of the browser boundary and neither
+	// imports the other.
 	// `find` rather than `includes` with a widened receiver: the list is a
 	// readonly tuple of literals, and comparing element-wise needs no cast to
 	// widen it to `readonly string[]` — the predicate itself is the narrowing.

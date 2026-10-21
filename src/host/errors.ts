@@ -375,7 +375,7 @@ export function isStaleCredentialError(error: unknown): boolean {
  * renamed product-surface group, a new wrapper object, an HTML SSO page where
  * JSON used to be). Before this error existed, every one of those arrived as
  * "0 models", indistinguishable from an account that genuinely has none, and
- * the plugin's own queue budget turned the rejection-shaped variants into a
+ * the plugin's own queue patience turned the rejection-shaped variants into a
  * long wait instead of a diagnosis.
  *
  * The class carries `retryable = false` so {@link queueWaitFor} leaves it

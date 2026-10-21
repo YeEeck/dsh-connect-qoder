@@ -74,8 +74,19 @@ export const QUEUE_WAIT_MIN_SLEEP_MS = 1000
  *   ended and it would be a knob that does nothing.
  *
  * This constant is the DEFAULT for a request that brings no limits of its own;
- * `streamChat` takes `idleWindowMs` per request. The DEFAULT tier derives it as
- * half the patience, so both constraints hold by construction.
+ * `streamChat` takes `idleWindowMs` per request, and the wiring supplies the
+ * derived pair (`src/host/patience.ts`) on every real request.
+ *
+ * WHY IT IS A LITERAL AND NOT A DERIVATION. It cannot be `QUEUE_WAIT_BUDGET_MS / 2`
+ * without recreating the problem the derivation exists to remove: this module is
+ * the LOWER layer, and `patience.ts` derives BOTH numbers from one table. Making
+ * the default here a second derivation would be a second formula that merely
+ * agrees with the first today — the exact "two literals that happen to be
+ * ordered" failure the ADR forbids. So the two defaults are independent
+ * constants on purpose, and their agreement with the default tier is asserted by
+ * `test/patience.test.js` (a gate, not a construction): that test turns red the
+ * moment either constant is tuned, which is what the construction claim was
+ * trying to buy.
  */
 export const IDLE_WINDOW_MS = 120000
 
@@ -125,6 +136,16 @@ export function sleep(ms: number, signal?: AbortSignal) {
  *   stop retrying. Exported so the budget invariant ("never more than remains")
  *   is asserted against the real function rather than a copy of the arithmetic —
  *   the old clamp broke it in a way no reader of `streamChat` could see.
+ *
+ * WHY `waitedMs` AND `patienceMs` ARE SEPARATE ARGUMENTS, not one `{waitedMs,
+ * patienceMs}` object. They travel together through the ERROR as well
+ * (`PatienceExhaustedError` carries both), so the pair looks like it wants a
+ * type. It is kept apart here because the two are not always known together: the
+ * budget invariant is asserted by calling this function with a swept `waitedMs`
+ * against a FIXED patience (test/upstream-protocol.test.js walks the whole tail of
+ * the budget), and every caller that omits the patience gets the default without
+ * having to construct a pair. A Wrapper type would move the same two numbers into
+ * an allocation on the request path and make that sweep no clearer.
  */
 export function queueWaitFor(
   error: unknown,

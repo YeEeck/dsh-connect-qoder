@@ -13,9 +13,11 @@
  * combination that breaks it.
  *
  * That ruling needs one module that owns the tier list, because the same three
- * strings are read by the host schema, the settings-save whitelist, the model
- * route's payload and the card's `<select>` — and two places spelling them is
- * two places they can drift. This is that module.
+ * strings are read by the host schema, the settings-save whitelist and the model
+ * route's payload — and two places spelling them is two places they can drift.
+ * This is that module. The card keeps its own copy of the three option values,
+ * which it must (it renders them), and `test/contract.test.js` compares the two
+ * lists so a fourth tier cannot reach one side only.
  *
  * It is deliberately peer-free (no settings service, no Cordis, not even the
  * retry module): the resolver is read on every card render and on every
@@ -30,11 +32,19 @@
  * 1. the vocabulary and the READ side — which tiers exist, which one is the
  *    default, and how to resolve a stored value without ever falling back
  *    silently; and
- * 2. the DERIVATION — `limitsFor` and `streamIdleCeilingFor` at the bottom,
- *    the only place in the plugin where the patience, the idle window and the
- *    stream-idle ceiling become numbers. The adapters and the shim both read
- *    them through resolvers, once per request / per profile build, so a tier
- *    saved on the card reaches the request path without a restart.
+ * 2. the DERIVATION — `limitsFor` and `streamIdleCeilingFor` at the bottom.
+ *    These are the only DERIVATIONS: every number the request path uses comes
+ *    out of the single table below through them, and the adapters and the shim
+ *    both read them through resolvers, once per request / per profile build, so
+ *    a tier saved on the card reaches the request path without a restart.
+ *
+ *    Two constants elsewhere restate the DEFAULT tier and cannot be deleted:
+ *    `retry.ts`'s `QUEUE_WAIT_BUDGET_MS` / `IDLE_WINDOW_MS` are the layer's
+ *    fallbacks for a caller that supplies no limits, and `adapter.ts`'s
+ *    `DEFAULT_STREAM_IDLE_TIMEOUT_MS` is the fallback for a caller that supplies
+ *    no ceiling resolver. They are not a second source of truth — they are what
+ *    this module's numbers must EQUAL, and `test/patience.test.js` fails the
+ *    moment any of them is tuned away from the default tier.
  *
  * Still nothing of its own: no timeout is declared here, only arithmetic over
  * the one table below, and the module stays peer-free so a bare
@@ -96,6 +106,14 @@ export interface PatienceResolution {
 
 /**
  * Resolve the patience tier out of a (possibly volatile) settings document.
+ *
+ * The CLIENT has a function of the same name (`src/client/controller.ts`) that
+ * answers a bare string rather than this pair. The asymmetry is deliberate: the
+ * host is the side that must REPORT a replacement (the card renders a warning
+ * from `.invalid`), and by the time the value reaches the card the reporting has
+ * already happened — so the card only needs something to put in a `<select>`.
+ * Neither side imports the other; they are the two halves of one browser
+ * boundary, not a shared module.
  *
  * Three different states collapse to `tier: DEFAULT_PATIENCE_TIER`, and they
  * are NOT the same fact:
@@ -196,8 +214,13 @@ const IDLE_WINDOW_DIVISOR = 2
  *   so a genuinely dead stream is still noticed promptly instead of being left
  *   to a proportionally later deadline.
  *
- * It is an ADDITION, not a multiplier, so the slack is the same at every tier:
- * choosing 6m buys patience, not a later Host watchdog.
+ * It is an ADDITION, not a multiplier, so the SLACK — the gap between the
+ * plugin's own verdict and the Host's watchdog — is the same at every tier.
+ * The absolute ceiling does move with the tier (6m declares 420 s against the
+ * default's 300 s), and it must: the outer bound is defined relative to the
+ * patience it has to stay outside of. What the addition buys is that a user who
+ * chooses more patience gets exactly that much more before the Host steps in,
+ * never a proportionally larger blind window on top of it.
  */
 const STREAM_IDLE_SLACK_MS = 60000
 
