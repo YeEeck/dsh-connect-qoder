@@ -217,7 +217,8 @@ test('the two module defaults satisfy the inequality their own comments claim', 
   // reconnect" would be killed by the window itself), and it must be below the
   // patience (or it could never fire before the patience ran out and would be a
   // knob that does nothing). The tier derivation that scales all three together
-  // is ticket 05's; this pins the defaults this ticket ships.
+  // lives in `src/host/patience.ts` and is pinned by test/patience.test.js;
+  // this pins the module defaults a request with no limits gets.
   assert.ok(
     IDLE_WINDOW_MS >= QUEUE_WAIT_MAX_SLEEP_MS,
     `the idle window (${IDLE_WINDOW_MS}) must not be shorter than one max sleep (${QUEUE_WAIT_MAX_SLEEP_MS})`,

@@ -292,7 +292,7 @@ dsh plugin --profile web add <本仓库路径>
 | `src/host/region-gate.ts` | 一个区域能否作为 provider 上线：三档拒绝（无登录 / 已过期 / 读不到）各自的判定与日志级别（从 `index.ts` 抽出以便直测，无 peer 依赖） |
 | `src/host/lifecycle.ts` | 插件 fiber 退出时要撤销的东西：路由注册的注销句柄收集与释放（宿主是否随 fiber 回收无法从插件侧确认，故两种语义都正确；无 peer 依赖） |
 | `src/host/preferences.ts` | 设置项的读取与 volatile 解包（`enabledRegions` 区域开关：缺失/非对象一律读作开启，只有显式 `false` 才关；排队耐心档位的读取在下一行的 `patience.ts`） |
-| `src/host/patience.ts` | 排队耐心档位的**单一词表**：`PatienceTier` / `PATIENCE_TIERS` / `DEFAULT_PATIENCE_TIER` 与解析器 `patienceTierOf`（返回 `{ tier, invalid }`——回落默认档时必须带 `invalid: true`，卡片据此显示告警，不许静默，无 peer 依赖）；三个推导数值（`limitsFor` / `streamIdleCeilingFor`）按 ADR 也落在此文件，由让档位生效的那张票补上 |
+| `src/host/patience.ts` | 排队耐心档位的**单一词表与唯一推导处**：`PatienceTier` / `PATIENCE_TIERS` / `DEFAULT_PATIENCE_TIER` 与解析器 `patienceTierOf`（返回 `{ tier, invalid }`——回落默认档时必须带 `invalid: true`，卡片据此显示告警，不许静默）；`limitsFor(tier)` 给出该档的排队耐心（2/4/6 分钟 = 120000/240000/360000 ms）与**推出**的空闲窗口（耐心 ÷ 2 = 60000/120000/180000 ms），`streamIdleCeilingFor(tier)` 给出流空闲天花板（耐心 + 60 s = 180000/300000/420000 ms）。三项由**派生**而非三个并列常量保证「空闲窗口 < 排队耐心 < 流空闲天花板」，档位由 shim 每单次请求读一次、adapter 每次建 profile 读一次（无 peer 依赖） |
 | `src/host/offpeak.ts` | 错峰窗口与费率算术（无 peer 依赖） |
 | `src/host/single-flight.ts` | 同类异步任务的并发合并：刷新在途时，后来的调用并入同一次请求（目录/用量刷新用，无 peer 依赖） |
 | `src/host/claim.ts` | 每日签到：当轮活动的挑选、可领状态判定与领取结果的归一化（纯函数，无 peer 依赖） |

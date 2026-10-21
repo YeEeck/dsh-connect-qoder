@@ -31,6 +31,7 @@ import type {
   PluginLogger,
   QoderCredential,
   Region,
+  RequestLimits,
   RunChat,
   UpstreamChunk,
   UpstreamFailure,
@@ -60,6 +61,21 @@ export interface ShimOptions {
   resolveUpstreamKey?: (modelId: string) => string | undefined
   resolveAlwaysThinking?: (modelId: string) => boolean | undefined
   resolveEnabledIds?: () => unknown
+  /**
+   * This single request's limits, resolved on the request path.
+   *
+   * Read ONCE per single request, at the moment the chat handler is about to
+   * call `runChat`, and handed over as its fifth argument. That timing is the
+   * contract, not an implementation detail: a tier saved on the card must
+   * reach the NEXT request, and a request already in flight must keep the
+   * limits it started with — reading it a second time mid-stream would let a
+   * settings save move the deadline under a turn that is already running.
+   *
+   * Optional so an older caller (or a test that only cares about the
+   * translation) keeps working: absent means `runChat` gets no limits and
+   * `streamChat`'s own defaults apply, which is exactly the old behaviour.
+   */
+  resolveLimits?: () => RequestLimits
   invalidateCredential?: () => void
   region: Region
   logger?: PluginLogger
@@ -239,6 +255,12 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
  * @param options.resolveEnabledIds - `() => string[]`, the models the user has
  *   enabled for this region. Read per request so a change in settings reaches
  *   the picker on the next listing without restarting anything.
+ * @param options.resolveLimits - `() => RequestLimits`, the idle window and
+ *   patience of one single request. Read ONCE per single request, immediately
+ *   before `runChat` is called, and passed as its fifth argument: a tier the
+ *   user saves reaches the next request without a restart, and a request
+ *   already in flight keeps the pair it started with. Absent leaves `runChat`
+ *   on its module defaults, which are the default tier's numbers.
  * @param options.invalidateCredential - optional `() => void`, called when the
  *   upstream rejects a request with a sign-in failure; the next
  *   `resolveCredential` re-reads the app's store so a fresh sign-in is
@@ -253,6 +275,7 @@ export function createQoderShim(options: ShimOptions): ShimHandle {
     resolveUpstreamKey,
     resolveAlwaysThinking,
     resolveEnabledIds,
+    resolveLimits,
     invalidateCredential,
     region,
     logger,
@@ -417,7 +440,13 @@ export function createQoderShim(options: ShimOptions): ShimHandle {
       // 一发；计数器缺失（宿主未启用）则静默跳过，不阻塞对话链路（红线 1：计数
       // 失败不得把对话也拖垮）。
       requestCounter?.bump(region.id)
-      iterator = runChat(region, credential, request, controller.signal)
+      // The limits are read HERE, once, for THIS single request: a settings
+      // save lands on the next request and never moves the deadline under a
+      // turn that is already running. Absent resolver ⇒ `undefined`, which
+      // leaves `streamChat` on its module defaults (the default tier's
+      // numbers) — exactly the behaviour before this option existed.
+      const limits = resolveLimits?.()
+      iterator = runChat(region, credential, request, controller.signal, limits)
       // Pull the first chunk before committing to a status code, so an auth or
       // quota failure surfaces as an HTTP error rather than a broken stream.
       first = await iterator.next()

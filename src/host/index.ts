@@ -47,12 +47,29 @@ import {
   resolvePreferences,
 } from './preferences.ts'
 import type { Preferences } from './preferences.ts'
-import { DEFAULT_PATIENCE_TIER, PATIENCE_TIERS } from './patience.ts'
+import {
+  DEFAULT_PATIENCE_TIER,
+  PATIENCE_TIERS,
+  limitsFor,
+  patienceTierOf,
+  streamIdleCeilingFor,
+} from './patience.ts'
+import type { PatienceTier } from './patience.ts'
+import { unwrapVolatile } from './volatile.ts'
 import { CatalogStore, CATALOG_TTL_MS as catalogTtlMs } from './catalog-store.ts'
 import { normalizeEntry } from './catalog-entry.ts'
 import type { FetchedEntry } from './catalog-entry.ts'
 import type { RouteRelease } from './lifecycle.ts'
-import type { CatalogEntry, CatalogOutcome, HostContext, PluginLogger, RefreshFailure, RefreshFailureReason, Region } from './domain.ts'
+import type {
+  CatalogEntry,
+  CatalogOutcome,
+  HostContext,
+  PluginLogger,
+  RefreshFailure,
+  RefreshFailureReason,
+  Region,
+  RequestLimits,
+} from './domain.ts'
 import { applyCatalogOutcome, isRefreshObsolete } from './catalog-refresh.ts'
 import { releaseRoutes } from './lifecycle.ts'
 import { mountRouteGroup } from './route-mount.ts'
@@ -858,6 +875,10 @@ class RegionRuntime {
  * @param enabledIdsFor - `(regionId) => string[]`, the user's roster choice. The
  *   shim needs it so `GET /v1/models` — the endpoint the picker's discovery
  *   reads — narrows the catalog the same way the adapter does.
+ * @param resolveLimits - `() => RequestLimits`, handed straight to the shim so
+ *   each single request reads the patience tier in force at the moment it
+ *   starts. A resolver rather than values: the tier can change between
+ *   requests, and this function runs once per region start.
  * @returns the runtime plus its shim, or `undefined` when the shim could not
  *   listen (the region is then simply absent rather than fatal).
  */
@@ -865,6 +886,7 @@ async function startRegion(
   region: Region,
   ctx: HostContext,
   enabledIdsFor: (regionId: string) => string[],
+  resolveLimits: () => RequestLimits,
   sources: RegionSources | undefined,
   requestCounter: RequestCounter,
   tokenCounter: TokenCounter,
@@ -904,6 +926,10 @@ async function startRegion(
     resolveAlwaysThinking: (id) => runtime.entryFor(id)?.alwaysThinking === true,
     // Read on every listing so curating the roster reaches the picker live.
     resolveEnabledIds: () => enabledIdsFor(region.id),
+    // Read ONCE per single request, inside the chat handler just before
+    // `runChat` is called: a tier saved on the card reaches the next request,
+    // and a request already streaming keeps the limits it started with.
+    resolveLimits,
     // A sign-in failure from the upstream means the cached credential is
     // stale; the next resolveCredential re-reads the app's store.
     invalidateCredential: () => runtime.invalidateCredential(),
@@ -1034,6 +1060,95 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
   /** The models the user enabled for one region; empty means "no filter". */
   const enabledIdsFor = (regionId: string): string[] => resolveEnabledIds(current(), regionId)
 
+  /**
+   * The fingerprint of the last bad patience value already warned about.
+   *
+   * The tier is read on EVERY single request and on every adapter build, so
+   * warning at the read site would put a line in the log per turn — and a user
+   * with a hand-edited settings file would learn to ignore the one line that
+   * matters. One line per DISTINCT bad value is the visibility 红线 1 asks for
+   * without the flood: fixing the value (or corrupting it differently) is a
+   * new fact, and it gets its own line.
+   *
+   * `undefined` means "nothing warned yet"; a JSON fingerprint is always a
+   * string, so the two states cannot be confused.
+   */
+  let lastBadPatienceFingerprint: string | undefined
+
+  /**
+   * The patience tier in force, read live, with a bad stored value announced.
+   *
+   * `patienceTierOf` is the authority on what the stored value means; this
+   * wrapper adds the one thing a pure resolver cannot do — tell somebody — and
+   * is the single reader both the request path and the adapter go through, so
+   * the shim's limits and the declared ceiling can never come from different
+   * tiers.
+   *
+   * The fallback itself is correct and must stay (a corrupt document must not
+   * stop the plugin from answering); what must not happen is the fallback
+   * being SILENT. The card gets the same fact as `patienceInvalid` on the
+   * models payload (ticket 04); this is the log half, for whoever reads the
+   * host log instead of the card.
+   */
+  const patienceTier = (): PatienceTier => {
+    const settings = current()
+    const resolution = patienceTierOf(settings)
+    if (resolution.invalid) {
+      const stored: unknown = unwrapVolatile(settings.patienceTier)
+      // The value is DESCRIBED, and the description doubles as the "have we
+      // already warned about this one" key. JSON first because it tells
+      // `'5m'` from `5` from `['5m']`; `Object.prototype.toString` is the
+      // fallback for a value JSON cannot represent (a cycle, a BigInt), and it
+      // cannot itself throw — `String(stored)` can, for an object with no
+      // prototype, which would turn a warning into an exception on the
+      // request path. The shown form drops JSON's quotes around a plain
+      // string so the log line reads like the settings file does.
+      let fingerprint: string
+      try {
+        fingerprint = JSON.stringify(stored) ?? Object.prototype.toString.call(stored)
+      } catch {
+        fingerprint = Object.prototype.toString.call(stored)
+      }
+      const shown = typeof stored === 'string' ? stored : fingerprint
+      if (fingerprint !== lastBadPatienceFingerprint) {
+        lastBadPatienceFingerprint = fingerprint
+        ctx.logger.warn?.(
+          `dsh-connect-qoder: the stored queue-patience tier (${shown}) is not one this plugin knows, so the default "${DEFAULT_PATIENCE_TIER}" is in force until a tier is saved; pick one on the card and save. ` +
+            `设置里存的排队耐心档位（${shown}）无法识别，暂按默认档「${DEFAULT_PATIENCE_TIER}」处理；在卡片上重新选择并保存即可覆盖。`,
+        )
+      }
+    } else if (lastBadPatienceFingerprint !== undefined) {
+      // The value became readable again, so the memory is dropped: breaking it
+      // a second time LATER is a new event and must be visible again. Keeping
+      // the old fingerprint would make the warn fire once per process, which
+      // is the other failure mode of a de-duplicating log line — silence for
+      // the occurrence the user is actually living through.
+      lastBadPatienceFingerprint = undefined
+    }
+    return resolution.tier
+  }
+
+  /**
+   * The limits ONE single request is judged by — the shim's `resolveLimits`.
+   *
+   * Read per request (not captured): the shim calls it once, at the moment it
+   * is about to call `runChat`, so a save reaches the NEXT request and never
+   * moves the deadline under one already streaming. Both numbers come from
+   * `limitsFor`, the one place they are derived.
+   */
+  const limitsForCurrentTier = (): RequestLimits => limitsFor(patienceTier())
+
+  /**
+   * The Host-facing stream-idle ceiling — the adapter's `streamIdleCeiling`.
+   *
+   * Derived per read and read inside every profile build: the save →
+   * invalidate → rebuild path is what carries a new tier to the Host without a
+   * restart. It deliberately goes through the SAME tier reader as the limits
+   * above, or the two layers could be derived from different tiers and the
+   * outer watchdog could fire before the inner patience.
+   */
+  const streamIdleCeiling = (): number => streamIdleCeilingFor(patienceTier())
+
   // Give the credential layer a logger. Without one, a failed OSCrypt unwrap
   // was completely silent — the region simply never appeared in the picker.
   setCredentialDiagnosticSink((message: string) => ctx.logger.warn?.(message))
@@ -1146,7 +1261,15 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
   // 多日历史的进程内缓存（usage 路由轮询时复用），与计数器同生命周期。
   const globalTokenHistoryCache = createTokenHistoryCache()
   for (const region of REGIONS) {
-    const entry = await startRegion(region, ctx, enabledIdsFor, regionSources.get(region.id), globalRequestCounter, globalTokenCounter)
+    const entry = await startRegion(
+      region,
+      ctx,
+      enabledIdsFor,
+      limitsForCurrentTier,
+      regionSources.get(region.id),
+      globalRequestCounter,
+      globalTokenCounter,
+    )
     if (entry !== undefined) started.push(entry)
   }
   if (started.length === 0) {
@@ -1207,6 +1330,14 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
       // next refresh without re-registering: off → empty model list → DSH hides
       // the group; on → the models (with their saved curation) come back.
       regionEnabled: (regionId) => resolveRegionEnabled(current(), regionId),
+      // Read inside EVERY profile build, so saving a new patience tier
+      // reaches the Host's watchdog on the existing save → refreshPicker →
+      // invalidate → rebuild → `llm/adapters-updated` path, with no restart.
+      // Same tier reader as the shim's limits: if the two ever read different
+      // tiers, the outer ceiling could fire before the inner patience and the
+      // Host would blind-retry a turn the plugin was about to give up on
+      // visibly.
+      streamIdleCeiling,
       // Image input must be wired or every request carrying an image fails the
       // whole turn with UNSUPPORTED_CONTENT. Both services are optional by
       // contract (`ctx.get` + undefined check), so a host without them keeps
@@ -1419,7 +1550,15 @@ async function activate(ctx: HostContext, config: Record<string, unknown>): Prom
       pendingStarts.add(region.id)
       let entry: Awaited<ReturnType<typeof startRegion>>
       try {
-        entry = await startRegion(region, ctx, enabledIdsFor, regionSources.get(region.id), globalRequestCounter, globalTokenCounter)
+        entry = await startRegion(
+          region,
+          ctx,
+          enabledIdsFor,
+          limitsForCurrentTier,
+          regionSources.get(region.id),
+          globalRequestCounter,
+          globalTokenCounter,
+        )
       } finally {
         // Cleared on both paths, so a failed start does not wedge the region
         // out of every future reload — that would trade a leak for a region

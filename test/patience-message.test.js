@@ -444,10 +444,13 @@ test('through the real shim: still a 503 rate_limit, now with the patience sente
     resolveEnabledIds: () => ['model-key'],
     resolveUpstreamKey: (id) => id,
     // The REAL `streamChat`, with the tiny limits injected through its own
-    // parameter. The shim does not forward limits yet (that is ticket 05), so
-    // this is the only way to reach the give-up branch in a test's lifetime —
-    // and it keeps everything under test real: the ladder, the class, the
-    // sentence, and the shim's own translation of the thrown value.
+    // parameter. They are injected HERE rather than through the shim's
+    // `resolveLimits` option on purpose: this file is about the give-up
+    // SENTENCE, so it must not depend on the patience tier wiring (ticket 05)
+    // or on the module defaults — a test that had to save a tier first would
+    // fail for reasons that are not its subject. Everything below stays real:
+    // the ladder, the class, the sentence, and the shim's translation of the
+    // thrown value.
     runChat: (region, credential, request, signal) =>
       streamChat(region, credential, request, signal, { idleWindowMs: 60, patienceMs: 80 }),
     logger: { warn() {} },

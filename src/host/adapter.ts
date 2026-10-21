@@ -53,6 +53,23 @@ export interface AdapterSwitches {
   imageModeFor?: (modelId: string) => ImageMode
   enabledIdsFor?: (regionId: string) => string[]
   regionEnabled?: (regionId: string) => boolean
+  /**
+   * `() => number`, the Host-facing stream-idle ceiling for the tier in force.
+   *
+   * A RESOLVER rather than a number, and read inside every `buildProfiles()`:
+   * that is what makes a settings save reach the running adapter without a
+   * restart — save → `refreshPicker` → `adapter.invalidate` → a new profile
+   * map → `llm/adapters-updated`. A constant captured at construction would
+   * keep the old ceiling until DSH restarted, which is the bug this field
+   * exists to fix.
+   *
+   * It must stay strictly ABOVE the patience the request path uses for the
+   * same tier (see `patience.ts`): the Host retries a `TIMEOUT` with a fresh
+   * patience, so a ceiling that fires first turns the plugin's own visible
+   * give-up into five blind retries. Absent means
+   * {@link DEFAULT_STREAM_IDLE_TIMEOUT_MS}.
+   */
+  streamIdleCeiling?: () => number
   /** Omitting this breaks every image request — see the option's documentation. */
   resolveAttachments?: unknown
   resolveImageAccess?: unknown
@@ -70,8 +87,16 @@ export interface AdapterSwitches {
  */
 export { toPiModel } from './pi-model.ts'
 
-/** Idle ceiling while one stream read is outstanding. */
-const STREAM_IDLE_TIMEOUT_MS = 300000
+/**
+ * The stream-idle ceiling when the wiring supplies no resolver.
+ *
+ * Kept as a literal ON PURPOSE, and it is the DEFAULT TIER's ceiling rather
+ * than "the value this route happens to have always used": a plugin built
+ * without the switch must still declare a ceiling, and the safe one is the
+ * same number the default tier derives (4m patience + 60 s of slack). The
+ * real wiring passes a resolver, so the saved tier reaches this profile.
+ */
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300000
 
 /**
  * Image budgets at the `dsh-llm-pi-ai` defaults. They bound requests to models
@@ -160,6 +185,14 @@ export { filterByEnabled } from './catalog-entry.ts'
  *   a fresh install has saved nothing and must still show every model, which is
  *   the same convention the WorkBuddy bundle uses. Read per build so curating
  *   the roster reaches the picker on the next `llm/adapters-updated`.
+ * @param options.streamIdleCeiling - `() => number`, the stream-idle ceiling the
+ *   Host arms on this route's SSE stream. Read inside EVERY profile build, so
+ *   saving a new patience tier reaches the running adapter through the existing
+ *   `invalidate()` + `llm/adapters-updated` path with no restart. It must stay
+ *   above the patience of the same tier (`patience.ts`): the Host retries a
+ *   `TIMEOUT` with a fresh patience, so a ceiling that fires first replaces a
+ *   visible give-up with five blind retries. Absent means
+ *   DEFAULT_STREAM_IDLE_TIMEOUT_MS — the default tier's number.
  * @param options.regionEnabled - `(regionId) => boolean`, whether that region's
  *   provider is offered to DSH at all. The account panel's per-region switch is
  *   what writes it: a switched-off region contributes an **empty** model list,
@@ -206,6 +239,12 @@ export function createQoderAdapter(
   // offered unless its entry is explicitly `false` (`regionEnabledFor`) — so a
   // reader who follows either default into this line should land here.
   const regionEnabled = options.regionEnabled ?? (() => true)
+  // Same shape as the switch above: a resolver so a saved tier reaches the
+  // profile on the next build, and a fallback for a caller that supplies
+  // none. The fallback is deliberately NOT `patience.ts`'s derivation: this
+  // module must not need the tier vocabulary to describe a route nobody
+  // configured, and a caller that wants the derivation passes the resolver.
+  const streamIdleCeiling = options.streamIdleCeiling ?? (() => DEFAULT_STREAM_IDLE_TIMEOUT_MS)
   const resolveAttachments = options.resolveAttachments
   const resolveImageAccess = options.resolveImageAccess
 
@@ -250,7 +289,11 @@ export function createQoderAdapter(
       profiles.set(providerId, {
         provider: providerId,
         displayName,
-        streamIdleTimeoutMs: STREAM_IDLE_TIMEOUT_MS,
+        // Read HERE, inside the per-build loop, not lifted to a constant: a
+        // settings save invalidates the adapter and this map is rebuilt, so
+        // the ceiling follows the tier without a DSH restart. Read per region
+        // as well, in case a future wiring ever makes the ceiling per-route.
+        streamIdleTimeoutMs: streamIdleCeiling(),
         // Narrowed on purpose — see `route-retry-policy.ts` and docs/issues/24.
         retryPolicy: resolveRetryPolicy(ROUTE_RETRY_POLICY, `dsh-connect-qoder.${providerId}.retryPolicy`),
         configuredMaxTokens: new Map(),
