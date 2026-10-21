@@ -207,7 +207,7 @@ function classifyUpstreamError(
   // order is the whole point: the gateway answers this one with a `Retry-After`
   // measured in HOURS (7350 s in the one report this rule is written from), so
   // the queue-marker fallback below would otherwise read it as a queue and the
-  // plugin would burn a two-minute budget waiting for something that resets at
+  // plugin would burn its whole queue patience waiting for something that resets at
   // the day boundary and is not improved by waiting at all.
   //
   // The code is matched explicitly: upstream used to send the numeric `110`
@@ -379,8 +379,8 @@ export function isStaleCredentialError(error: unknown): boolean {
  * long wait instead of a diagnosis.
  *
  * The class carries `retryable = false` so {@link queueWaitFor} leaves it
- * alone: waiting cannot fix a shape, and burning the two-minute budget on it
- * is what produced "the plugin needs an update" arriving as a two-minute hang.
+ * alone: waiting cannot fix a shape, and burning the queue patience on it is
+ * what produced "the plugin needs an update" arriving as a minute-long hang.
  *
  * The flag is on the error rather than in its name so the classifier can read
  * it from a caught value that lost its prototype (a cross-realm throw, a

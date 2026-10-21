@@ -2,16 +2,23 @@
  * sse — moved verbatim from `src/host/upstream.ts` during the protocol split
  * (docs/issues/22-upstream-split.md); only imports and exports were tidied. The
  * protocol facts live in the header of `crypto.ts`.
+ *
+ * NO LONGER A VERBATIM COPY: stream-idle-patience ticket 01 replaced the
+ * per-attempt absolute deadline with an idle window that measures SILENCE (see
+ * `IDLE_WINDOW_MS` in `retry.ts` and the idle clock in `streamChat`), and split
+ * what a stall MEANS by phase — retryable before the first yielded frame,
+ * terminal after it. Ticket 02 moves the progress stamp from "bytes arrived" to
+ * "a frame was reached"; ticket 03 replaces the give-up branch's wording.
  */
 
 import crypto from 'node:crypto'
 import { encodeBody } from './crypto.ts'
 import { authHeaders } from './cosy-sign.ts'
 import { chatUrl } from './endpoints.ts'
-import { ATTEMPT_TIMEOUT_MS, sleep, queueWaitFor } from './retry.ts'
+import { IDLE_WINDOW_MS, QUEUE_WAIT_BUDGET_MS, sleep, queueWaitFor } from './retry.ts'
 import type { QoderMessage } from './messages.ts'
 import { classifyUpstreamError, describeThrown, errorMessage, parseRetryAfterSeconds, ProtocolShapeChangedError, redactSecrets, SignInExpiredError, thrownFlag } from '../errors.ts'
-import type { ChatTurnRequest, QoderCredential, Region, UpstreamChunk } from '../domain.ts'
+import type { ChatTurnRequest, QoderCredential, Region, RequestLimits, UpstreamChunk } from '../domain.ts'
 
 /**
  * Classify one error frame into `{ kind, retryAfterSeconds, code, detail }`.
@@ -93,6 +100,13 @@ function noteUnreadableFrame(probe: ChatShapeProbe, payload: string): void {
  * @param request - `{ model, messages, tools, maxTokens, enableThinking, alwaysThinking, reasoningEffort, sessionId }`.
  *   `alwaysThinking` marks a model that rejects `enable_thinking: false`; for
  *   those the flag is omitted entirely rather than sent as `false`.
+ * @param signal - the caller's abort. Whatever it rejects with is surfaced
+ *   unchanged, never reclassified as a stall or a queue.
+ * @param limits - this single request's idle window and patience. Absent means
+ *   the module defaults ({@link IDLE_WINDOW_MS} / {@link QUEUE_WAIT_BUDGET_MS}),
+ *   which are the default patience tier's numbers; the parameter exists so a
+ *   request can be given its own limits (and so a test can drive the whole
+ *   policy with tens of milliseconds).
  * @yields OpenAI-shaped chat completion chunks.
  */
 export async function* streamChat(
@@ -100,7 +114,13 @@ export async function* streamChat(
   credential: QoderCredential,
   request: ChatTurnRequest,
   signal?: AbortSignal,
+  limits?: RequestLimits,
 ): AsyncGenerator<UpstreamChunk> {
+  // The two numbers this request is judged by. Cheap to read up front, and
+  // reading them ONCE is what keeps one request on one policy even if a caller
+  // mutates the object it passed in.
+  const idleWindowMs = limits?.idleWindowMs ?? IDLE_WINDOW_MS
+  const patienceMs = limits?.patienceMs ?? QUEUE_WAIT_BUDGET_MS
   const model = request.model
   const recordID = crypto.randomUUID()
   const messages = request.messages as QoderMessage[]
@@ -210,13 +230,80 @@ export async function* streamChat(
   // them was usable (see ChatShapeProbe).
   const shapeProbe: ChatShapeProbe = { skipped: 0, sample: undefined }
 
+  // ---- the idle clock ------------------------------------------------------
+  //
+  // One clock for the attempt in flight. It is stamped BEFORE the handshake,
+  // re-stamped when response headers arrive, and — in this ticket — stamped
+  // again for every chunk of bytes the body yields.
+  //
+  // It is ALSO stamped whenever this generator resumes from a `yield` (see
+  // `noteResume`): a consumer that takes its time is not upstream silence, and
+  // without that stamp a slow consumer would spend the window and the next read
+  // would expire on the spot without giving the upstream a chance to answer.
+  // Only time in which a read was actually outstanding is upstream's to answer
+  // for. Heartbeats do not yield, so they cannot use this to stay alive.
+  //
+  // TICKET 02 moves the per-byte stamp to "a frame was actually reached"
+  // (heartbeat comments, blank lines and unparseable payloads are not
+  // progress); `noteResume` is already the right place for it, because this
+  // module only ever yields a real chunk.
+  let lastProgressAt = Date.now()
+  const idleRemaining = () => Math.max(0, idleWindowMs - (Date.now() - lastProgressAt))
+  /** The generator is about to hand control back to its consumer, not to the wire. */
+  const noteResume = () => {
+    lastProgressAt = Date.now()
+  }
+
+  /**
+   * Await one step of the attempt (the handshake, or one body read) under this
+   * request's idle window.
+   *
+   * WHY A RACE AND NOT JUST AN ABORT. Aborting alone does not release a hung
+   * read reliably (measured), and it does not release a `fetch` stub that
+   * ignores its signal at all. The race is what SETTLES the step; the abort is
+   * what releases a real socket. Both are needed, for different jobs.
+   *
+   * The losing read is deliberately left dangling on the socket — the abort is
+   * what closes it — which is why `work` gets a `.catch()`. Without that,
+   * Node reports the eventual rejection as unhandled and fails the process for
+   * a reason that has nothing to do with this turn.
+   *
+   * @param work - the step to await; it may reject on its own.
+   * @param controller - the attempt's controller, aborted when the window
+   *   expires so the transport lets go of the connection.
+   */
+  function underIdleWindow<T>(work: Promise<T>, controller: AbortController): Promise<T> {
+    work.catch(() => {})
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const expired = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort()
+        reject(new IdleWindowExpiredError(idleWindowMs))
+      }, idleRemaining())
+    })
+    return Promise.race([work, expired]).finally(() => {
+      // Disarmed the moment the step settles, the same way the handshake
+      // deadline is disarmed when headers arrive. This is the property the old
+      // `AbortSignal.timeout` comment claimed and did not have.
+      if (timer !== undefined) clearTimeout(timer)
+    })
+  }
+
   /**
    * Open one attempt and hand back its frame stream.
    *
    * Nothing is yielded until the first frame arrives, so a queue rejection
    * raised here is still safe to retry: the caller has seen no output yet.
+   *
+   * @param response - the handshake's response.
+   * @param probe - the turn's shape probe; shared by every attempt.
+   * @param controller - the abort handle that releases this attempt's socket.
    */
-  async function* readFrames(response: Response, probe: ChatShapeProbe): AsyncGenerator<UpstreamChunk> {
+  async function* readFrames(
+    response: Response,
+    probe: ChatShapeProbe,
+    controller: AbortController,
+  ): AsyncGenerator<UpstreamChunk> {
     // A response with no body is not a stream that ended — it is an answer this
     // transport cannot read, and `getReader()` on `null` would throw a
     // TypeError that the caller would classify as an ordinary fetch failure.
@@ -234,7 +321,14 @@ export async function* streamChat(
     let endOfStream = false
     try {
       while (!streamDone) {
-        const { done, value } = await reader.read()
+        // Every read is bounded by the idle window, so a body that goes quiet
+        // mid-answer is judged stuck instead of parking this generator on a
+        // socket that will never speak again.
+        const { done, value } = await underIdleWindow(reader.read(), controller)
+        // TICKET 01: any bytes at all count as progress. Ticket 02 narrows this
+        // to "a frame was actually reached", because SSE comments, blank lines
+        // and unparseable payloads are the upstream breathing, not working.
+        lastProgressAt = Date.now()
         if (done) {
           // The stream ENDED: flush the decoder and hand the residual buffer
           // to the SAME line path below. A last frame that arrives without a
@@ -286,6 +380,8 @@ export async function* streamChat(
           // failure: the shim turns it into the counts DSH records per turn.
           if (chunk?.choices !== undefined || (chunk?.usage !== undefined && chunk.usage !== null)) {
             yield chunk
+            // Back from the consumer: whatever it spent deciding is not silence.
+            noteResume()
             continue
           }
 
@@ -325,15 +421,41 @@ export async function* streamChat(
       // On a retryable rejection the body is abandoned mid-stream; cancelling
       // releases the socket now instead of leaving it to the garbage collector,
       // which matters because the retry loop may open several of these.
+      //
+      // BOUNDED, and the bound is not a nicety: cancelling awaits the transport,
+      // and a stuck socket can park this `finally` forever — in which case the
+      // classified error never reaches the retry loop and the user sees an
+      // idle hang instead of a verdict. The cancel is raced against a short
+      // timer that is cleared on success; the controller has already been
+      // aborted by the time this runs on the stuck path, which is what actually
+      // releases a real connection.
+      let cancelTimer: ReturnType<typeof setTimeout> | undefined
       try {
-        await reader.cancel()
+        await Promise.race([
+          reader.cancel(),
+          new Promise<void>((resolve) => {
+            cancelTimer = setTimeout(resolve, CLEANUP_TIMEOUT_MS)
+          }),
+        ])
       } catch {
         // Already closed or errored — nothing left to release.
+      } finally {
+        if (cancelTimer !== undefined) clearTimeout(cancelTimer)
       }
     }
   }
 
-  /** Send one request. Throws for terminal failures, returns the open stream. */
+  /**
+   * Send one request. Throws for terminal failures, returns the open stream.
+   *
+   * The attempt's controller is created here and handed back WITH the response:
+   * the body outlives this scope, so the idle window has to be able to abort the
+   * body for as long as this attempt is the one being read. It is aborted (and
+   * therefore released) when `readFrames` gives up on the body.
+   *
+   * @returns `{ response, controller }` — the body handshake cleared for, and
+   *   the abort handle that releases it.
+   */
   async function openAttempt() {
     let response
     // Build headers outside the try so that a programming error (e.g.
@@ -348,75 +470,64 @@ export async function* streamChat(
       'X-Model-Source': 'system',
       ...authHeaders(bodyBytes, url, credential),
     }
-    // Bound this attempt on its own, and still honour the caller's abort. The
-    // returned response body outlives this scope, so the deadline must NOT stay
-    // armed for the whole stream — only the handshake up to response headers.
-    // `AbortSignal.any` is used rather than a manual controller so the timer is
-    // always cleared once `fetch` settles, with no listener to leak per attempt.
-    const deadline = AbortSignal.timeout(ATTEMPT_TIMEOUT_MS)
-    const attemptSignal = signal === undefined ? deadline : AbortSignal.any([signal, deadline])
+    // One controller for this attempt. Its ONLY trigger is the idle window in
+    // `underIdleWindow`: it owns no timer, so nothing here can fire on its own.
+    const controller = new AbortController()
+    // What `fetch` actually sees: the caller's abort, and this attempt's
+    // controller. `AbortSignal.any` is right for THIS pair because the composite
+    // dies with the request — there is no deadline inside it to disarm, which is
+    // exactly what was wrong before. The old code passed
+    // `AbortSignal.any([signal, AbortSignal.timeout(ATTEMPT_TIMEOUT_MS)])`: a
+    // healthy body was aborted a minute into the answer because that timer was
+    // still armed long after the headers arrived.
+    const attemptSignal =
+      signal === undefined ? controller.signal : AbortSignal.any([signal, controller.signal])
+    // The handshake gets the same idle window as the body, re-stamped the moment
+    // headers arrive (see `lastProgressAt`). The returned response body outlives
+    // this scope, so this deadline MUST NOT stay armed past the headers — which
+    // is exactly what the race in `underIdleWindow` guarantees, since it clears
+    // its timer as soon as `fetch` settles.
+    lastProgressAt = Date.now()
     try {
-      response = await fetch(url, {
-        method: 'POST',
-        headers,
-        // `Buffer` is a `Uint8Array` and `fetch` accepts binary bodies at
-        // runtime, but `BodyInit` in the DOM/Node lib types does not list it —
-        // it is spelled as the `URLSearchParams` / `Blob` / `ReadableStream`
-        // union. The bytes handed over are exactly the encoded body
-        // `authHeaders` just signed, and the signature is computed over THESE
-        // bytes, so re-encoding or re-copying them here would break the
-        // pairing. One cast at the type boundary, with no runtime effect.
-        body: bodyBytes as unknown as BodyInit,
-        redirect: 'error',
-        signal: attemptSignal,
-      })
-    } catch (error) {
-      // A caller abort is the user's own doing and must surface unchanged.
-      if (signal?.aborted) throw error
-      // A deadline that fired is a stuck attempt, not a code bug. It is
-      // retryable for the same reason a reset socket is: nothing was received,
-      // so no output is duplicated by trying again.
-      if (deadline.aborted) {
-        throw new QueueRejection(
-          0,
-          `no response headers within ${Math.round(ATTEMPT_TIMEOUT_MS / 1000)}s`,
-        )
-      }
-      // Network-level failures (ECONNRESET, DNS, proxy timeout, undici socket
-      // errors) are transient and safe to retry before the first frame. The
-      // caller's `queueWaitFor` will apply the escalation ladder.
-      // `cause` is an undici `Error` wrapping the socket failure, and its `code`
-      // is where the real diagnosis lives; `error.code` is the fallback for a
-      // throw that carried no cause. Both reads are narrowed rather than
-      // assumed, so a non-object throw answers `undefined` for each and falls
-      // through to the `message` test below instead of matching a code by luck.
-      const cause = thrownFlag(error, 'cause')
-      const code = thrownFlag(cause, 'code') ?? thrownFlag(error, 'code') ?? ''
-      if (
-        code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'EPIPE' ||
-        code === 'ENOTFOUND' || code === 'UND_ERR_SOCKET' ||
-        code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'UND_ERR_HEADERS_TIMEOUT' ||
-        String(thrownFlag(error, 'message') ?? '').includes('fetch failed')
-      ) {
-        // Prefer the cause's own message — it names the socket failure — and
-        // fall back to the wrapper's when the throw carried no usable cause.
-        const detail = errorMessage(cause) !== '' ? errorMessage(cause) : describeThrown(error)
-        throw new QueueRejection(0, `network: ${detail}`)
-      }
-      // A bare `TypeError` used to land in that list, on the theory that undici
-      // wraps transport failures in one. It does not: `TypeError` is also what a
-      // malformed URL or an illegal header value throws, so a plain coding bug
-      // was retried as though the network were flaky — silently, for the whole
-      // budget. Only the transport-shaped ones are retried now; everything else
-      // propagates and is reported as itself.
-      throw error
+      response = await underIdleWindow(
+        fetch(url, {
+          method: 'POST',
+          headers,
+          // `Buffer` is a `Uint8Array` and `fetch` accepts binary bodies at
+          // runtime, but `BodyInit` in the DOM/Node lib types does not list it —
+          // it is spelled as the `URLSearchParams` / `Blob` / `ReadableStream`
+          // union. The bytes handed over are exactly the encoded body
+          // `authHeaders` just signed, and the signature is computed over THESE
+          // bytes, so re-encoding or re-copying them here would break the
+          // pairing. One cast at the type boundary, with no runtime effect.
+          body: bodyBytes as unknown as BodyInit,
+          redirect: 'error',
+          signal: attemptSignal,
+        }),
+        controller,
+      )
+    } catch (thrown) {
+      throw classifyHandshakeFailure(thrown, signal)
     }
+    // The handshake is over: its deadline was disarmed as soon as `fetch`
+    // settled (see `underIdleWindow`), and the body's clock starts now. THIS is
+    // the disarm the old code promised in a comment and never performed.
+    lastProgressAt = Date.now()
 
     if (!response.ok) {
+      // The error body is a READ like any other, so it is bounded by the same
+      // idle window: a gateway that answers 429 and then dribbles (or stalls)
+      // its body would otherwise park the turn with no verdict at all, which is
+      // the exact failure mode this ticket exists to remove. The clock was
+      // re-stamped above, so this gets a full window of its own.
+      //
       // Redact BEFORE the slice: the body is copied into the error messages
       // below, and a credential riding its tail would otherwise be cut in half
-      // and slip past every shape rule.
-      const text = redactSecrets(await response.text()).slice(0, 500)
+      // and slip past every shape rule. The read goes through `redactSecrets`
+      // on the spot — not into a raw variable — because `test/redaction-closure`
+      // fences exactly that shape, and the fence is right: a captured raw body
+      // is one later use away from an unredacted message.
+      const text = redactSecrets(await underIdleWindow(response.text(), controller)).slice(0, 500)
 
       // A non-2xx reply carries the same nested envelope as an in-band error
       // frame, so it is unwrapped the same way: the outer status is often a
@@ -425,13 +536,16 @@ export async function* streamChat(
       // because the status is not a reliable signal for the terminal verdicts a
       // body can carry — see the daily-limit check.
       const failure = readFailure({ code: String(response.status), message: text }, String(response.status))
+      // (An expired window while reading `text` throws `IdleWindowExpiredError`
+      // out of this block; the retry loop's phase-1 classification turns it into
+      // a retryable rejection, because no frame has been yielded yet.)
 
       // A spent daily allowance is checked ahead of the transient branch, at
       // every status, for the same reason the frame path checks it ahead of its
       // queue branch: it carries queue markers and a multi-hour hint, and it
       // must not become a sleep. Reading the status FIRST is what let the newer
       // gateway's `429` + `daily_limit_exceeded` reply run the escalation ladder
-      // for its full two-minute budget and twelve attempts, then hand DSH a
+      // for its full queue patience and twelve attempts, then hand DSH a
       // `rate_limit` it retried five more times (docs/issues/23-upstream-429-daily-limit.md);
       // the failure does not become less final by arriving under a 429.
       if (failure !== undefined && failure.kind === 'daily-limit') {
@@ -475,32 +589,38 @@ export async function* streamChat(
       )
     }
     if (response.body === null) throw new Error('Qoder chat returned no body')
-    return response
+    return { response, controller }
   }
 
   // Qoder queues rather than rejecting, and tells us how long to wait. That wait
   // belongs here, not in DSH's retry loop: DSH's policy is fixed (5 attempts,
-  // 500 ms doubling to 10 s, ignoring the hint) and its budget is often shorter
-  // than the queue. Waiting internally also keeps the turn alive, so the user
-  // does not have to send the message again and restart it.
+  // 500 ms doubling to 10 s, ignoring the hint) and its patience is often
+  // shorter than the queue. Waiting internally also keeps the turn alive, so the
+  // user does not have to send the message again and restart it.
   let waitedMs = 0
   for (let attempt = 1; ; attempt++) {
     let stream
     let first
-    // Everything this attempt costs — the handshake, the first frame, and any
-    // retry delay — is charged to the budget, not just the delay. Counting only
-    // the sleep is what made the budget decorative: a slow-but-progressing
+    // Everything this request costs — the handshake, the first frame, and any
+    // retry delay — is charged to the patience, not just the delay. Counting
+    // only the sleep is what made the patience decorative: a slow-but-progressing
     // attempt could spend unbounded time without ever exhausting it.
     const attemptStartedAt = Date.now()
     try {
-      stream = readFrames(await openAttempt(), shapeProbe)
+      const opened = await openAttempt()
+      stream = readFrames(opened.response, shapeProbe, opened.controller)
       // Pull the first frame before committing to a response, so a queue
       // rejection surfaces here rather than mid-stream where it could not be
       // retried without duplicating output.
       first = await stream.next()
-    } catch (error) {
+    } catch (thrown) {
       waitedMs += Date.now() - attemptStartedAt
-      const queueWaitMs = queueWaitFor(error, waitedMs, attempt)
+      // PHASE 1 of the stall classification, applied BEFORE the ladder is asked:
+      // nothing has been yielded yet, so an idle expiry is retryable and is
+      // translated into the queue shape, exactly like a real queue rejection.
+      // Every other failure passes through unchanged.
+      const error = signal?.aborted === true ? thrown : reclassifyIdle(thrown, idleWindowMs, region)
+      const queueWaitMs = queueWaitFor(error, waitedMs, attempt, patienceMs)
       if (queueWaitMs === undefined) throw error
       // The caller aborted while we were deciding, so stop rather than sleep.
       if (signal?.aborted) throw error
@@ -534,18 +654,168 @@ export async function* streamChat(
     // covers the case where the consumer stops early (the shim aborts on client
     // disconnect): without it the upstream socket would stay open until the
     // gateway closed it on its own.
+    //
+    // PHASE 2 of the stall classification: the answer is partly delivered, so an
+    // idle expiry here is NOT retryable — re-sending regenerates the reply from
+    // the start and repeats what the user already read. It is wrapped so it
+    // surfaces as a plain error about silence; the caller's own abort passes
+    // through untouched.
     try {
       yield first.value
+      noteResume()
       for (;;) {
         const step = await stream.next()
         if (step.done === true) break
         yield step.value
+        noteResume()
       }
+    } catch (error) {
+      if (signal?.aborted === true) throw error
+      // An error frame raised by the reader is a real upstream verdict, not a
+      // stall; only the idle window's own error is re-worded here.
+      if (!(error instanceof IdleWindowExpiredError)) throw error
+      throw new Error(stalledMidAnswerMessage(error.idleWindowMs, region))
     } finally {
       await stream.return(undefined).catch(() => {})
     }
     return
   }
+}
+
+/**
+ * How long the bounded body cleanup waits before abandoning the cancel.
+ *
+ * Cancelling is how the socket is released early, so it normally answers at
+ * once; a socket that never does must not keep this generator parked in its
+ * `finally`, because the classified error is what the retry loop needs to see.
+ * The abort that accompanied the idle expiry is what actually closes a real
+ * connection, so giving up on the cancel costs nothing but a little garbage.
+ */
+const CLEANUP_TIMEOUT_MS = 1000
+
+/**
+ * The idle window expired while one step of an attempt was outstanding.
+ *
+ * PRIVATE on purpose (named, not exported): it is the marker that tells this
+ * module's own stall apart from every other throw, and it must not become part
+ * of any caller's vocabulary. The classification — retryable before the first
+ * frame, terminal after it — happens where the phase is known.
+ */
+class IdleWindowExpiredError extends Error {
+  /** The window that expired, so the user-facing sentence can name it. */
+  idleWindowMs: number
+
+  constructor(idleWindowMs: number) {
+    super(
+      `Qoder's stream sent nothing for about ${Math.round(idleWindowMs / 1000)}s`,
+    )
+    this.name = 'IdleWindowExpiredError'
+    this.idleWindowMs = idleWindowMs
+  }
+}
+
+/**
+ * The pre-first-frame half of the phase classification.
+ *
+ * A stall before anything was yielded is retryable for the same reason a reset
+ * socket is: the caller has seen no output, so trying again duplicates nothing.
+ * It is translated into the queue shape — a `QueueRejection` carrying the
+ * silence as its detail — so that `queueWaitFor`'s ladder waits it out under
+ * the request's patience, exactly as it waits a real queue. "No response
+ * headers at all" therefore keeps the path it already had.
+ *
+ * Anything that is NOT this module's idle expiry is returned unchanged: a
+ * caller abort, a sign-in rejection, a daily limit and a protocol-shape verdict
+ * all have their own answers and must not be re-read as a stall.
+ *
+ * @param error - whatever the attempt threw.
+ * @param idleWindowMs - the window this request is judged by.
+ * @param region - for the display name in the detail.
+ */
+function reclassifyIdle(error: unknown, idleWindowMs: number, region: Region): unknown {
+  if (!(error instanceof IdleWindowExpiredError)) return error
+  const seconds = Math.round(idleWindowMs / 1000)
+  return new QueueRejection(
+    0,
+    `${region.displayName} sent no content for about ${seconds >= 1 ? `${seconds}s` : `${idleWindowMs}ms`} before the first frame`,
+  )
+}
+
+/**
+ * The post-first-frame half: a stall is terminal, and the sentence says so.
+ *
+ * Two facts have to survive into the wording, because they are what the user
+ * decides on: WHAT happened (the upstream went silent) and WHY re-sending is not
+ * free (it regenerates the answer and repeats what was already read). Both
+ * languages, English first — the host-side convention for user-visible failure
+ * messages. This deliberately borrows none of the queue vocabulary: waiting is
+ * not the remedy here, and ticket 03's patience-exhausted message is the one
+ * that talks about queues.
+ */
+function stalledMidAnswerMessage(idleWindowMs: number, region: Region): string {
+  // Real windows are tens of seconds, so the sentence names seconds; a test that
+  // injects tens of MILLISECONDS would round to "about 0s", which reads as a
+  // broken message rather than a small window, so the sub-second case says what
+  // it actually is.
+  const seconds = Math.round(idleWindowMs / 1000)
+  const silence = seconds >= 1 ? `${seconds}s` : `${idleWindowMs}ms`
+  return (
+    `${region.displayName}'s stream sent no content for about ${silence}, so this reply was cut off; ` +
+    'sending it again regenerates from the start and repeats what you already saw. ' +
+    `上游已经约 ${silence} 没有输出任何内容，这条回答被判为卡死并中断；重发会从头再生成，已输出的部分会重复。`
+  )
+}
+
+/**
+ * Classify whatever came out of the handshake.
+ *
+ * Only the HANDSHAKE goes through this. A transport failure while reading the
+ * BODY is deliberately left alone: once the attempt is committed the retry
+ * decision belongs to the phase split (an idle expiry is the only thing this
+ * module re-reads mid-body), and dressing a mid-body socket reset up as a
+ * retryable queue would tell the shim to answer 503 for a turn whose output has
+ * already started. That is pre-existing behaviour, preserved on purpose.
+ *
+ * The caller's abort always wins inside this function: it is the user's own
+ * doing and must surface unchanged, even when the underlying socket error
+ * happens to look transient.
+ *
+ * @param error - the thrown value.
+ * @param signal - the caller's abort signal, when there is one.
+ */
+function classifyHandshakeFailure(error: unknown, signal?: AbortSignal): unknown {
+  if (signal?.aborted === true) return error
+  // The idle window expiring is not a network verdict; the callers classify it
+  // by phase (see `reclassifyIdle`).
+  if (error instanceof IdleWindowExpiredError) return error
+  // Network-level failures (ECONNRESET, DNS, proxy timeout, undici socket
+  // errors) are transient and safe to retry before the first frame. The
+  // caller's `queueWaitFor` will apply the escalation ladder.
+  // `cause` is an undici `Error` wrapping the socket failure, and its `code`
+  // is where the real diagnosis lives; `error.code` is the fallback for a
+  // throw that carried no cause. Both reads are narrowed rather than
+  // assumed, so a non-object throw answers `undefined` for each and falls
+  // through to the `message` test below instead of matching a code by luck.
+  const cause = thrownFlag(error, 'cause')
+  const code = thrownFlag(cause, 'code') ?? thrownFlag(error, 'code') ?? ''
+  if (
+    code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'EPIPE' ||
+    code === 'ENOTFOUND' || code === 'UND_ERR_SOCKET' ||
+    code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'UND_ERR_HEADERS_TIMEOUT' ||
+    String(thrownFlag(error, 'message') ?? '').includes('fetch failed')
+  ) {
+    // Prefer the cause's own message — it names the socket failure — and
+    // fall back to the wrapper's when the throw carried no usable cause.
+    const detail = errorMessage(cause) !== '' ? errorMessage(cause) : describeThrown(error)
+    return new QueueRejection(0, `network: ${detail}`)
+  }
+  // A bare `TypeError` used to land in that list, on the theory that undici
+  // wraps transport failures in one. It does not: `TypeError` is also what a
+  // malformed URL or an illegal header value throws, so a plain coding bug
+  // was retried as though the network were flaky — silently, for the whole
+  // patience. Only the transport-shaped ones are retried now; everything else
+  // propagates and is reported as itself.
+  return error
 }
 
 /**

@@ -264,7 +264,7 @@ dsh plugin --profile web add <本仓库路径>
 | `src/host/upstream/cosy-sign.ts` | `authHeaders`：COSY 签名头组装（AES 加密签名 info 块、RSA 包 AES key、MD5 over payload/key/ts/body/path） |
 | `src/host/upstream/headers.ts` | `openApiHeaders` 与 umid 机器身份头（Windows 定位 `runtime-info.exe`；读不到时显式降级，`__dshQoderUmidState` 报原因） |
 | `src/host/upstream/endpoints.ts` | 各 API 端点 URL 构造（目录/对话/兑换/账号/用量/签到） |
-| `src/host/upstream/retry.ts` | 重试与队列等待预算（`QUEUE_WAIT_*`、`queueWaitFor`，含两分钟预算的 rationale） |
+| `src/host/upstream/retry.ts` | 重试与排队耐心（`QUEUE_WAIT_*`、`queueWaitFor`，以及衡量**沉默**而非总时长的空闲窗口 `IDLE_WINDOW_MS`） |
 | `src/host/upstream/sse.ts` | 双层包裹 SSE 解码与对话流（`streamChat`，含重试循环与 `Retry-After` 处理） |
 | `src/host/upstream/fetch-usage.ts` | 用量快照（`fetchUsage` / `UsageSnapshot` / `normalizeQuotaBucket` / `normalizeDedicatedPackage` / `normalizePromotion`）；促销读失败时**具名降级**而非静默（`campaignsError`） |
 | `src/host/upstream/api-calls.ts` | 各调用的编排与 JSON 读取（`readJson` / `readCampaigns` / `claimCampaign` / `fetchModels` / `readModelCatalogShape` / `exchangePat` / `fetchUserInfo`） |

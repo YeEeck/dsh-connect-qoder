@@ -336,14 +336,17 @@ test('authHeaders omits a body when none is supplied', () => {
 })
 
 /**
- * The queue-wait budget: a promise that a queued turn stops waiting — and
- * keeps that promise — once `QUEUE_WAIT_BUDGET_MS` of waiting has been spent.
+ * The queue patience: a promise that a queued request stops waiting — and
+ * keeps that promise — once its patience has been spent. `queueWaitFor` takes
+ * the patience per call (stream-idle-patience ticket 01); `QUEUE_WAIT_BUDGET_MS`
+ * is the default it falls back to, and `patienceMs` is what `streamChat`
+ * forwards for a request that brought its own limits.
  *
  * The regression these pin: the clamp was once `Math.max(MIN, Math.min(target,
- * MAX, remaining))`, which puts the floor OUTSIDE the budget cap — so with any
- * budget below MIN_SLEEP the function returned MIN_SLEEP anyway and overshot,
- * silently, in a term of code that read as if it capped. The old shape failed
- * the sweep below with "waited N ms past the budget".
+ * MAX, remaining))`, which puts the floor OUTSIDE the patience cap — so with
+ * any patience below MIN_SLEEP the function returned MIN_SLEEP anyway and
+ * overshot, silently, in a term of code that read as if it capped. The old
+ * shape failed the sweep below with "waited N ms past the budget".
  */
 const QUEUED = { retryable: true, retryAfterSeconds: 5 }
 
@@ -364,11 +367,26 @@ test('a queue sleep never exceeds what is left of the budget', () => {
   assert.deepEqual(failures, [])
 })
 
-test('an exhausted budget, or a non-retryable error, ends the wait', () => {
+test('an exhausted patience, or a non-retryable error, ends the wait', () => {
   assert.equal(queueWaitFor(QUEUED, QUEUE_WAIT_BUDGET_MS, 1), undefined)
   assert.equal(queueWaitFor(QUEUED, QUEUE_WAIT_BUDGET_MS + 1, 9), undefined)
   assert.equal(queueWaitFor({ retryable: false, retryAfterSeconds: 5 }, 0, 1), undefined)
   assert.equal(queueWaitFor(undefined, 0, 1), undefined)
+})
+
+test('a per-request patience replaces the module default, in both directions', () => {
+  // stream-idle-patience ticket 01: `patienceMs` is what `streamChat` forwards
+  // from the request's own limits. A test drives the ladder with tens of
+  // milliseconds instead of minutes, and a request with MORE patience than the
+  // default must actually get it — otherwise the parameter is decoration and the
+  // ladder would still stop at the module constant.
+  assert.equal(queueWaitFor(QUEUED, 5000, 1, 5000), undefined, 'a spent short patience stops the wait')
+  assert.ok(
+    (queueWaitFor(QUEUED, 5000, 1, 5000 - 1) ?? 0) <= 1,
+    'the cap follows the patience that was passed, not the module default',
+  )
+  assert.ok(queueWaitFor(QUEUED, QUEUE_WAIT_BUDGET_MS, 1, QUEUE_WAIT_BUDGET_MS * 2) !== undefined,
+    'more patience than the default must buy more waiting')
 })
 
 test('mid-budget sleeps stay inside the retry policy band', () => {

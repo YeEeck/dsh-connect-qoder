@@ -455,10 +455,38 @@ export interface ChatTurnRequest {
 export type ChatStream = AsyncIterator<UpstreamChunk>
 
 /**
+ * How much waiting one SINGLE request is allowed, in the two dimensions the
+ * stream watches (CONTEXT.md: 空闲窗口 / 排队耐心).
+ *
+ * Both are per request on purpose: every tool step is its own `streamChat`, so
+ * every step starts its clock fresh rather than inheriting what earlier steps
+ * spent.
+ */
+export interface RequestLimits {
+  /**
+   * How long the upstream may stay silent (no parsed frame) before this single
+   * request is judged stuck. It measures SILENCE, not total duration — a
+   * generation that keeps producing is never cut off for being long.
+   */
+  idleWindowMs: number
+  /**
+   * How long ONE single request may spend waiting for Qoder's queue, handshake
+   * and retry sleeps included.
+   */
+  patienceMs: number
+}
+
+/**
  * The upstream call the shim makes per request.
  *
  * Takes the abort signal so a client disconnect cancels the upstream fetch —
  * without it a dropped request keeps billing the account until Qoder answers.
+ *
+ * `limits` is optional and the fifth parameter so that a call site which knows
+ * nothing about patience (or an older one) keeps working exactly as before:
+ * absent limits mean the module defaults, which are the default tier's numbers.
+ * It carries the idle window and the patience of THIS request only; nothing
+ * here is persisted or shared between requests.
  *
  * Returns a PULL iterator rather than an `AsyncIterable` because the shim drives
  * it by hand: it pulls the first chunk before committing to a status code, and
@@ -470,6 +498,7 @@ export type RunChat = (
   credential: QoderCredential,
   request: ChatTurnRequest,
   signal: AbortSignal,
+  limits?: RequestLimits,
 ) => AsyncIterator<UpstreamChunk>
 
 /**

@@ -178,7 +178,7 @@ test('the daily limit is never waited out, however much budget is left', () => {
  *
  * The classifier was already right about that body. The gate in FRONT of it was
  * not: `streamChat` read the HTTP status first, so a 429 became a queue before
- * any body was read, and the plugin spent its full two-minute budget on twelve
+ * any body was read, and the plugin spent its full queue patience on twelve
  * attempts (measured: probe/http-429-daily-limit-probe.mjs) and then handed DSH
  * a `rate_limit`, which the host retried five more times.
  *
@@ -251,9 +251,10 @@ test('a 429 carrying the daily-limit body is not retried at all', async () => {
   assert.strictEqual(error?.name, 'DailyLimitRejection')
   assert.strictEqual(error?.dailyLimit, true)
   assert.strictEqual(error?.retryable, false)
-  // Before the fix this was twelve attempts and ~120 s (the whole budget). The
-  // bound is loose on purpose: what it separates is "no ladder" from "one
-  // ladder", which differ by two orders of magnitude.
+  // Before the fix this was twelve attempts and the whole queue patience (120 s
+  // then, 240 s at the default tier now). The bound is loose on purpose: what it
+  // separates is "no ladder" from "one ladder", which differ by two orders of
+  // magnitude.
   assert.ok(elapsedMs < 5000, `no ladder wait expected, took ${elapsedMs} ms`)
 })
 

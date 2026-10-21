@@ -36,9 +36,11 @@ test('宿主自己的预算与退避不归我们定：maxRetries / backoff 都�
   assert.equal('backoff' in ROUTE_RETRY_POLICY, false)
 })
 
-test('不再重试 RATE_LIMIT：队列的 120 s 预算只能花一次', () => {
-  // 插件阶梯（upstream/retry.ts 的 QUEUE_WAIT_BUDGET_MS）花完 120 s 放弃后 shim 回
-  // 503 rate_limit；宿主若重试 RATE_LIMIT，每次都会重开同样的 120 s（最坏 ~12 min）。
+test('不再重试 RATE_LIMIT：排队耐心只能花一次', () => {
+  // 插件阶梯（upstream/retry.ts 的 QUEUE_WAIT_BUDGET_MS，默认档 240 s）花完耐心
+  // 放弃后 shim 回 503 rate_limit；宿主若重试 RATE_LIMIT，每次都会重开同样的
+  // 一整份耐心（默认档下最坏 ~24 min）。这里只断言「不在集合里」，不复述具体秒数：
+  // 秒数随档位推导（stream-idle-patience），写死就会在下一次调参时变成假话。
   assert.equal(ROUTE_RETRY_POLICY.retryableCodes.includes('RATE_LIMIT'), false)
 })
 

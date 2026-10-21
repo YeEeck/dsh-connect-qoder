@@ -12,8 +12,8 @@
  * specific: a changed envelope arrives as a **successful HTTP 200**, so
  * `fetchModels` read it as "zero models" — indistinguishable from an account
  * that genuinely has none — while the rejection-shaped variants were absorbed
- * by the plugin's own two-minute queue budget, so the user watched a long wait
- * instead of learning that the plugin needs an update.
+ * by the plugin's own queue patience, so the user watched a long wait instead
+ * of learning that the plugin needs an update.
  *
  * The three states are now kept apart, and the boundary between them is a fact
  * about the wire that was MEASURED rather than guessed
