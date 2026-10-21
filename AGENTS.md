@@ -119,15 +119,10 @@ npm run verify             # typecheck + 两道 any 审计 + 测试树两道类�
   Node 的剥类型加载器 import `src/**/*.ts` 的，注解一个都没查。想让某个测试文件进类型检查：
   在**前导区**写 `// @ts-check`（只认 `//` 行注释；块注释里的 `@ts-check` 编译器不看；token
   必须在注释开头；最后一个 pragma 赢；写在 import 之后无效），并把 opt-in 集合的棘轮下限
-  一起抬（记在 `scripts/ratchet-ledger.json` 这本账里：from/to、日期、理由；门禁核对账实
-  相符，单独改阈值当场红）。`checkJs` 仍是关的：整棵树打开是数千条错误的
-  量级，代价见 `docs/KNOWN_GAPS.md` 第 10 条（测试树的类型债被记成预算）——另一道门禁
-  `npm run audit:test-type-errors` 按**错误预算**管着整棵树的债（只许降不许涨；棘轮轴从
-  「文件数」换成「错误数」，因为给干净文件加 pragma 让文件数 +1、而给带 60 条错的文件
-  opt-in 反而当场变红，文件数买不到风险）。
-- 四道门禁的阈值（opt-in 下限、测试树错误预算、两道 any 预算）都住在
-  `scripts/ratchet-ledger.json`，不在脚本里：改阈值 = 记一笔账（from/to、日期、理由），
-  门禁核对账实相符，单独改 `value` 会当场红（`the ratchet ledger is not consistent`）。
+  一起抬（记账规则与阈值单一真源见 `docs/ratchet-ledger.md`）。
+- 类型门禁与四道阈值的棘轮记账机制（opt-in 下限、测试树错误预算、两道 any 预算）见
+  `docs/ratchet-ledger.md`：`scripts/ratchet-ledger.json` 是阈值单一真源，改阈值 = 记一笔账
+  （from/to、日期、理由），账实不符门禁当场红（`the ratchet ledger is not consistent`）。
 
 ## 红线（违反任一都会炸到用户机器）
 
