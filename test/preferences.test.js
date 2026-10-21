@@ -3,11 +3,13 @@
  *
  * Run: node --test test/preferences.test.js
  *
- * These three settings are read on every model build and on every card render,
- * so their resolution is on a hot path — and it was inlined in `activate`, which
- * cannot be imported. Two of the three are read through a 0.1.7 volatile
- * `{ get() }` shell, which is the shape that quietly returns the wrapper
- * instead of the value if you forget to unwrap.
+ * These settings are read on every model build and on every card render, so
+ * their resolution is on a hot path — and it was inlined in `activate`, which
+ * cannot be imported. Several are read through a 0.1.7 volatile `{ get() }`
+ * shell, which is the shape that quietly returns the wrapper instead of the
+ * value if you forget to unwrap. The queue-patience tier is the one setting not
+ * resolved here: it answers a value plus an "invalid" flag, so its reader lives
+ * with the tier list in `src/host/patience.ts`.
  *
  * The prototype-chain cases are here because a bare `dict[key]` lookup reads the
  * prototype chain, and a model id or region id arrives from a settings document
