@@ -42,13 +42,22 @@ on:
     # not arrive at once and get skimmed as one.
     - cron: '45 3 * * *'
   workflow_dispatch:
-  # Editing the draft is the one moment a red is OUR regression, so it also runs
-  # on those pushes. Nothing else triggers it: this is not a gate on your work.
-  push:
-    paths:
-      - 'awesome-dsh-plugin-submission/**'
-      - 'test/submission-drift.mjs'
-      - '.github/workflows/submission-drift.yml'
+  # NOT on push, deliberately (changed 2026-10-22).
+  #
+  # It used to run when the draft or this script changed, on the reasoning that
+  # editing the draft is "the one moment a red is OUR regression". That holds
+  # only once the listing EXISTS. Before the marketplace accepts an entry there
+  # is nothing upstream to compare, so every push to the draft reded the run —
+  # and a red that means "you are not listed yet" is noise, not a signal. The
+  # draft now carries a `# not-listed:` declaration (see test/submission-drift.mjs)
+  # that turns that state into a labelled SKIP and expires by itself once the
+  # entry appears.
+  #
+  # What is lost: a push that breaks the draft's SHAPE is caught on the same push
+  # by the offline gate (test/market-entry.test.mjs, wired into ci.yml), which is
+  # where shape rules belong. Only the live-vs-draft comparison waits for the
+  # clock or a manual run — and when no live entry exists there is nothing for a
+  # push to compare anyway.
 
 jobs:
   submission-drift:

@@ -6,6 +6,12 @@
 # do not put screenshots here (the market reads this repo's `screenshots.json`).
 # Rules live in `./contributing.md` (upstream copy) — do not restate them anywhere.
 #
+# not-listed: This entry has never been accepted into the marketplace; the draft
+# is the text of the PR that will add it. `test/submission-drift.mjs` treats a
+# 404 for this repository as "not listed yet" ONLY while this line is present,
+# and reds the day the entry appears so the line gets deleted. Replace the URL
+# with the real pull request before opening it.
+#
 # `description.zh` is the text of record; `description.en` is its sentence-by-sentence
 # counterpart. Re-check a claim against these modules, not against this comment:
 #   desktop login state             lib/credentials.js

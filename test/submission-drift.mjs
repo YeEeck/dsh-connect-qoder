@@ -103,6 +103,45 @@ function parseEntry(text) {
   };
 }
 
+// --- the not-yet-listed declaration ---------------------------------------
+
+/**
+ * The draft's declaration that this repository has never been accepted into the
+ * marketplace, read from a comment line in the draft:
+ *
+ *   # not-listed: <why it is absent, and what will end that>
+ *
+ * A comment rather than a YAML field on purpose: the draft is copied verbatim to
+ * upstream, and an unknown field would be rejected by the marketplace's own
+ * validator (test/market-entry.test.mjs checks that shape). The declaration has
+ * to be invisible to upstream and meaningful to this run.
+ *
+ * It expires on its own, which is why no URL is demanded: the condition it
+ * excuses is "upstream has no file at this path", and the run that first finds
+ * the file reds and says to delete this line. A PR URL would rot the moment the
+ * PR was opened, merged, or renumbered — and the expiry check does not read it.
+ *
+ * Returns undefined when absent, which restores the strict behaviour: no entry
+ * and no declaration is still a red.
+ *
+ * @param {string} text
+ * @returns {{ key: string, reason: string } | undefined}
+ */
+function notListedDeclaration(text) {
+  const prefix = "# not-listed:";
+  const line = text
+    .split("\n")
+    .map((candidate) => candidate.trim())
+    .find((candidate) => candidate.startsWith(prefix));
+  if (line === undefined) return undefined;
+  const reason = line.slice(prefix.length).trim();
+  // An empty declaration is not a declaration — it would turn the strict path
+  // into a pass while saying nothing, which is the mute button this file exists
+  // to prevent.
+  if (reason === "") return undefined;
+  return { key: "not-listed", reason };
+}
+
 // --- reporting ------------------------------------------------------------
 
 const SKIP_TAG = "SKIP submission-drift";
@@ -292,6 +331,55 @@ if (upstream.kind === "gone") {
   // that checkout predates the entry). Nothing was asked of the marketplace in
   // the second case, so it must not claim an answer.
   const local = target.kind === "file";
+
+  // NOT-YET-LISTED, declared rather than inferred.
+  //
+  // A repository that has never been accepted into the marketplace has a draft
+  // and no live entry, so "gone" is not a finding — it is the starting state.
+  // Inferring it would be the mute button this file spends its header arguing
+  // against, so it is a dated declaration in the draft itself and it is checked
+  // from BOTH sides, exactly like pending-drift.json:
+  //
+  //   - no declaration + no entry  → red (unchanged: silence is not a pass)
+  //   - declaration + no entry     → SKIP, printing the PR that ends it
+  //   - declaration + entry exists → RED, "delete the declaration"
+  //
+  // The last line is the point: the day the listing lands, this run must tell
+  // its owner to stop excusing it. A pass that cannot expire is a lie.
+  const notListed = notListedDeclaration(readFileSync(join(ROOT, draftRel), "utf8"));
+  if (notListed !== undefined) {
+    if (local) {
+      // ⚠️ `--from` is a local checkout: a missing file there may simply mean
+      // the checkout predates the entry. Nothing was asked of the marketplace,
+      // so the declaration cannot be tested and must not be honoured.
+      summarise([
+        `submission-drift: no such file in the checkout you pointed --from at`,
+        "",
+        `  asked:    ${upstream.label}`,
+        `  draft:    ${draftRel}`,
+        "",
+        "The draft declares this entry not listed, but --from reads a local checkout,",
+        "where a missing file may simply mean the checkout predates the entry. Nothing",
+        "was asked of the marketplace, so the declaration cannot be tested here. Point",
+        "it at a current `<checkout>/data/plugins`, or drop the flag to ask upstream.",
+      ]);
+      process.exit(1);
+    }
+    skip(`the draft declares this entry not listed yet`, [
+      `  asked:    ${upstream.label}`,
+      `  declaration: ${notListed.key}`,
+      "",
+      "Upstream answered 404, which is what a repository that has not been accepted",
+      "into the marketplace looks like — so this run has nothing to compare and says",
+      "so, instead of reporting drift against an entry that does not exist.",
+      "",
+      `Reason given: ${notListed.reason}`,
+      "",
+      "This pass expires by itself: the run that first finds the entry reds with",
+      "\"the entry exists, delete the declaration\" rather than staying green.",
+    ]);
+  }
+
   summarise([
     `submission-drift: ${local ? "no such file in the checkout you pointed --from at" : "the marketplace entry is GONE"}`,
     "",
@@ -336,6 +424,24 @@ if (upstream.kind === "unavailable") {
 }
 
 const live = parseEntry(upstream.text);
+
+// The declaration's counterweight: it excused a missing entry, so it must red the
+// moment the entry exists. Without this the declaration would be a permanent
+// mute — the exact failure pending-drift.json is checked from both sides to avoid.
+const stillNotListed = notListedDeclaration(readFileSync(join(ROOT, draftRel), "utf8"));
+if (stillNotListed !== undefined) {
+  summarise([
+    "submission-drift: the entry EXISTS, but the draft still declares it not listed",
+    "",
+    `  upstream:    ${upstream.label}`,
+    `  declaration: ${stillNotListed.key}`,
+    "",
+    "The entry exists, so the declaration has served its purpose. Delete it from",
+    `${draftRel} — a declaration that outlives its reason turns this gate into a`,
+    "comment, and the next real drift would hide behind it.",
+  ]);
+  process.exit(1);
+}
 
 const report = [
   `submission-drift: ${slug}`,
