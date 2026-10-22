@@ -6,14 +6,14 @@
 
 从 [`../PLAN.md`](../PLAN.md) 拆出来的可直接提交的 issue 草稿。优先级与规模见每份文件顶部。
 
-**提交方式**（本机 `gh` 已登录 `eghrhegpe`，仓库即本 fork）：
+**提交方式**（本机 `gh` 已登录 `YeEeck`，仓库即本 fork）：
 
 ```sh
 # 一次性建标签（已存在会报错，可忽略）
-for l in P0 P1 P2 P3; do gh label create "$l" --repo eghrhegpe/dsh-connect-qoder --force; done
+for l in P0 P1 P2 P3; do gh label create "$l" --repo YeEeck/dsh-connect-qoder --force; done
 
 # 逐条建 issue
-gh issue create --repo eghrhegpe/dsh-connect-qoder --label P0 --title "$(head -1 01-sweep-junction-zeroing.md | sed 's/^# //')" --body-file 01-sweep-junction-zeroing.md
+gh issue create --repo YeEeck/dsh-connect-qoder --label P0 --title "$(head -1 01-sweep-junction-zeroing.md | sed 's/^# //')" --body-file 01-sweep-junction-zeroing.md
 ```
 
 | 文件 | 优先级 | 一句话 |

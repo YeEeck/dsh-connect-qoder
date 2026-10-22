@@ -1,4 +1,4 @@
-# 发布流程（Release Flow）— @eghrhegpe/dsh-connect-qoder
+# 发布流程（Release Flow）— @yeeeck/dsh-connect-qoder
 
 > 本文档是本仓库的**唯一权威发布流程**。发布前请通读一遍。
 > 母版来自兄弟插件 `dsh-connect-sensenova-token-plan` 的 `RELEASING.md`，按本仓库的事实改过——
@@ -40,8 +40,8 @@ grep '"version"' package.json
 head -n 10 CHANGELOG.md
 
 # D. npm 侧
-npm view @eghrhegpe/dsh-connect-qoder version --registry=https://registry.npmjs.org
-npm view @eghrhegpe/dsh-connect-qoder@X.Y.Z version --registry=https://registry.npmjs.org   # 版本号是否已被占用
+npm view @yeeeck/dsh-connect-qoder version --registry=https://registry.npmjs.org
+npm view @yeeeck/dsh-connect-qoder@X.Y.Z version --registry=https://registry.npmjs.org   # 版本号是否已被占用
 ```
 
 | 状态 | 特征 | 还缺什么 | 下一步 |
@@ -66,20 +66,20 @@ npm view @eghrhegpe/dsh-connect-qoder@X.Y.Z version --registry=https://registry.
 判断某个 tag 是否还能动：
 
 ```bash
-npm view @eghrhegpe/dsh-connect-qoder versions --registry=https://registry.npmjs.org
+npm view @yeeeck/dsh-connect-qoder versions --registry=https://registry.npmjs.org
 ```
 
 目标版本已在列 → 不要移 tag，只发下一版。
 
 ## 前置条件（preflight，逐项当检查做，不当背景知识）
 
-- **npm 登录**：`npm whoami --registry=https://registry.npmjs.org` 应返回 `eghrhegpe`。
+- **npm 登录**：`npm whoami --registry=https://registry.npmjs.org` 应返回 `yeeeck`（大写账号名 `YeEeck` 在 npm 上按小写 `yeeeck` 处理，scope 名也一样）。
   返回 `E401 Unauthorized` 就是没登录——此时 `npm publish` 会**先跑完 `prepack` 构建再失败**，
   失败信息看起来像构建问题。补救只有一条命令：`npm login --registry=https://registry.npmjs.org`
   （交互式、需要凭据，**AI 不做代理**——这是人机交接点，见 §4.6）。
   **不带 `--registry` 的 whoami 会骗人**：本机默认 registry 是镜像，显示「已登录」可能是镜像账号，
   与能否 publish 到 npmjs 无关。
-- **gh 已登录**且带 `repo` 权限：`gh auth status` 应显示 `Logged in to github.com account eghrhegpe`。
+- **gh 已登录**且带 `repo` 权限：`gh auth status` 应显示 `Logged in to github.com account YeEeck`。
 - **工作树干净、可发布**：`git status --short` 无未提交内容（他人半改除外，按 §1.5 纪律处理）。
 - **lib/ 与 src/ 同步**（docs/issues/19）：`npm run build` 后 `git status` 干净，
   即提交的 `lib/` 能被一次干净重建字节级复现。CI 的新鲜度门禁会兜底，但发布前本地先过一遍。
@@ -134,7 +134,7 @@ git push origin vX.Y.Z
 
 ```bash
 git push origin main
-gh run watch "$(gh run list -R eghrhegpe/dsh-connect-qoder --limit 1 --json databaseId -q '.[0].databaseId')" --exit-status
+gh run watch "$(gh run list -R YeEeck/dsh-connect-qoder --limit 1 --json databaseId -q '.[0].databaseId')" --exit-status
 git tag -a vX.Y.Z -m "vX.Y.Z: <一句话说明>" && git push origin vX.Y.Z
 npm publish
 ```
@@ -156,14 +156,14 @@ npm publish
 git status -sb                       # 工作树干净、没有 ahead（自身文件）
 git log --oneline -1 origin/main     # 版本提交已在远端
 git rev-list -n1 vX.Y.Z             # 与 git rev-parse HEAD 一致
-gh run list -R eghrhegpe/dsh-connect-qoder --limit 1   # 该提交的 CI 结论 success
+gh run list -R YeEeck/dsh-connect-qoder --limit 1   # 该提交的 CI 结论 success
 npm run verify && npm run test:coverage   # 本地全量门禁绿
 ```
 
 **② 人：`npm login`（若未登录）→ `npm publish` → 回报一行**
 
 ```bash
-npm view @eghrhegpe/dsh-connect-qoder@X.Y.Z version --registry=https://registry.npmjs.org
+npm view @yeeeck/dsh-connect-qoder@X.Y.Z version --registry=https://registry.npmjs.org
 ```
 
 **③ AI：拿到那一行之后才做 §5.5 内容核验，再按 §8 收口。**
@@ -176,7 +176,7 @@ npm view @eghrhegpe/dsh-connect-qoder@X.Y.Z version --registry=https://registry.
 npm publish            # 仓库内：.npmrc 已钉 registry=npmjs.org + publishConfig 双保险
                       # 仓库外执行则显式带 --registry=https://registry.npmjs.org
 npm pack --dry-run    # 发布前预览 tarball 内容（files 白名单：lib/、locale/、cordis.patch.yml、README、CHANGELOG）
-npm view @eghrhegpe/dsh-connect-qoder version --registry=https://registry.npmjs.org   # 应显示 X.Y.Z
+npm view @yeeeck/dsh-connect-qoder version --registry=https://registry.npmjs.org   # 应显示 X.Y.Z
 ```
 
 - `prepack` 会现场从 `src/` 重建 `lib/` 进 tarball——**tarball 里的产物永远比 git 提交的更新鲜**，
@@ -190,8 +190,8 @@ npm view @eghrhegpe/dsh-connect-qoder version --registry=https://registry.npmjs.
 
 ```bash
 # 1) 拉已发布版本（包名必须带 @版本，不带版本会打包本地目录！）
-npm pack @eghrhegpe/dsh-connect-qoder@X.Y.Z --registry=https://registry.npmjs.org --pack-destination .build
-tar -xzf .build/eghrhegpe-dsh-connect-qoder-X.Y.Z.tgz -C .build
+npm pack @yeeeck/dsh-connect-qoder@X.Y.Z --registry=https://registry.npmjs.org --pack-destination .build
+tar -xzf .build/yeeeck-dsh-connect-qoder-X.Y.Z.tgz -C .build
 
 # 2) 与本机候选提交的构建产物逐文件比 SHA256
 ```
@@ -233,7 +233,7 @@ HEAD 的 tag）、`--title "vX.Y.Z — <一句话>"`（破折号）、正文独�
 - [ ] **main 可查**：`git log --oneline -1 origin/main` 追得到版本提交
 - [ ] **tag 可查**：`git rev-list -n1 vX.Y.Z` 指向该提交
 - [ ] **版本文件可查**：`package.json` version == X.Y.Z；`CHANGELOG.md` 顶部是本节且无「（未发布）」
-- [ ] **npm 可查**：`npm view @eghrhegpe/dsh-connect-qoder version --registry=https://registry.npmjs.org` 返回 X.Y.Z
+- [ ] **npm 可查**：`npm view @yeeeck/dsh-connect-qoder version --registry=https://registry.npmjs.org` 返回 X.Y.Z
 
 推荐（不参与完整判定，但是质量事实）：版本提交的 CI run 结论 `success`。
 
@@ -244,7 +244,7 @@ HEAD 的 tag）、`--title "vX.Y.Z — <一句话>"`（破折号）、正文独�
 - **`gh` 在 PowerShell 里 `-q` 报 jq 解析错**：引号被吃了；用单引号包 jq 表达式，
   或改 `--json <字段>` 后自己看。
 - **`gh` 命令解析到了 `upstream`（hdhgsysh）仓库**：本仓库有 `upstream` 远端，
-  一律显式 `-R eghrhegpe/dsh-connect-qoder`。
+  一律显式 `-R YeEeck/dsh-connect-qoder`。
 - **文档/README 改了用户看不到**：它们不在 tarball 里就不会到用户手里——
   `files` 白名单只有 `lib/ locale/ cordis.patch.yml README.md CHANGELOG.md`，
   改完仓库文件 ≠ 用户读到新版，必须随下一版 publish。

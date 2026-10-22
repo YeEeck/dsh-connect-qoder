@@ -6,7 +6,22 @@
 
 ---
 
-## 0.8.0 — 2026-10-22（未发布）
+## 0.8.0 — 2026-10-22
+
+**包名迁到 `@yeeeck/dsh-connect-qoder`**
+
+- 此前：包名与仓库地址都在旧账号 `eghrhegpe` 下，而仓库实际托管与推送发生在 `YeEeck`。
+- 现在两者统一：npm 包是 `@yeeeck/dsh-connect-qoder`，仓库是 `github:YeEeck/dsh-connect-qoder`。
+  scope 用全小写是 npm 的硬规则（大写 scope 发不出去），不是笔误。
+- **升级方式：先卸旧再装新。** DSH 暂不支持插件自动更新，旧包 `@eghrhegpe/dsh-connect-qoder`
+  仍留在 npm 上但不再更新，两个包同时装会互相掩盖。先在插件页卸掉旧包（或从 profile 的
+  `package.json` 移除那条依赖），再装新的：
+
+  ```
+  dsh plugin --profile web add @yeeeck/dsh-connect-qoder
+  ```
+
+- 市场源同步改为 `github:YeEeck/dsh-connect-qoder`；从市场装过的用户需要重新添加这个源。
 
 **长回答不再被自己的看门狗掐断**
 

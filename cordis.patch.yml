@@ -11,4 +11,4 @@
 # package name, breaks the card the same way the 0.3.2 scoped rename did.
 - insert:
     - id: llm-qoder
-      name: "@eghrhegpe/dsh-connect-qoder"
+      name: "@yeeeck/dsh-connect-qoder"

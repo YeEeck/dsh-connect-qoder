@@ -1,6 +1,6 @@
 # Submission draft for awesome-dsh-plugin.
 #
-# Copy this file to `data/plugins/eghrhegpe__dsh-connect-qoder.yml` in a fork of
+# Copy this file to `data/plugins/YeEeck__dsh-connect-qoder.yml` in a fork of
 # awesome-dsh-plugin/awesome-dsh-plugin and open a PR that touches only it.
 # Do not edit that repository's READMEs (they are generated), do not add an `npm:` field,
 # do not put screenshots here (the market reads this repo's `screenshots.json`).
@@ -11,8 +11,8 @@
 #   desktop login state             lib/credentials.js
 #   rate / off-peak / check-in      src/client/card-model.ts, card.tsx
 #   card pill, credits              src/client/composer-usage-pill.tsx
-url: https://github.com/eghrhegpe/dsh-connect-qoder
-name: eghrhegpe/dsh-connect-qoder
+url: https://github.com/YeEeck/dsh-connect-qoder
+name: YeEeck/dsh-connect-qoder
 category: model
 description:
   en: 'Registers Qoder CN and international language models into DSH, fetching each model''s rate automatically as it shifts with off-peak hours. It also provides a daily check-in, a usage pill and a credit lookup. Needs the Qoder login state on this machine, or one browser login.'

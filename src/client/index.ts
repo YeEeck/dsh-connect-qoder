@@ -181,7 +181,7 @@ function apply(ctx: ClientContext) {
 	 * installs as a dependency is invisible even though `apply` ran.
 	 * The 0.3.2 scoped rename made that real: profiles may carry this
 	 * bundle as either bare `dsh-connect-qoder` (the historical name) or
-	 * scoped `@eghrhegpe/dsh-connect-qoder` (the npm name), so each key is
+	 * scoped `@yeeeck/dsh-connect-qoder` (the npm name), so each key is
 	 * registered in both identities. Registration itself degrades to a
 	 * read-only card when no settings surface is served, instead of
 	 * throwing into the loader.
@@ -203,7 +203,7 @@ function apply(ctx: ClientContext) {
 			console.error(`[dsh-connect-qoder] card slot "${slotName}" failed to register (host provider unaffected):`, error);
 		}
 	};
-	for (const bundle of ["@eghrhegpe/dsh-connect-qoder", "dsh-connect-qoder"]) {
+	for (const bundle of ["@yeeeck/dsh-connect-qoder", "dsh-connect-qoder"]) {
 		registerCard("plugins.bundle.config", bundle);
 		registerCard("plugins.row.config", `${bundle}#${PROVIDER_NS}`);
 	}

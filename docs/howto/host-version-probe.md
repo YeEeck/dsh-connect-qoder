@@ -69,7 +69,7 @@ semver 把 `<0.2` 脱糖成 `<0.2.0-0`。宿主还开了 `includePrerelease: tru
 | **web 端** CLI 版本 | `~/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh/package.json`。注意它和桌面版**不是同一个宿主**，可能对不上 |
 | 上游有什么版本可升 | `npm view @deepseek-ai/dsh dist-tags`——`latest` 与 `next` 常常不是一回事（0.2.0-rc.1 当时只在 `next` 上） |
 | 谁被判不兼容 | `~/.dsh/logs/startup-*.log`：不兼容的插件会**点名**（`sensenova`、`trae` 就是这么发现的） |
-| 插件副本形态 | 看那条路径**现在**是不是符号链接：`dir ~/.dsh/profiles/<profile>/node_modules/@eghrhegpe/`（`<JUNCTION>` / `<SYMLINKDIR>` 是链接，真目录是拷贝）；链接指向本仓库才是"永远最新" |
+| 插件副本形态 | 看那条路径**现在**是不是符号链接：`dir ~/.dsh/profiles/<profile>/node_modules/@yeeeck/`（`<JUNCTION>` / `<SYMLINKDIR>` 是链接，真目录是拷贝）；链接指向本仓库才是"永远最新" |
 | 运行时是否真的可用 | web 服务监听 `3080`，卡片路由在 `/plugins/<plugin>/...`，可以直接 `fetch` 打——`/account` 返回裸 400 就是这样定位到"handler 进去后炸了"的 |
 
 **关于 3080 那条**：宿主 web server 的 catch-all 会把 handler 里抛出的异常应答成**没有 body 的 400**，

@@ -53,12 +53,12 @@ import { parseEntry } from "./helpers/submission-entry.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "..");
-const DRAFT_REL = "awesome-dsh-plugin-submission/eghrhegpe__dsh-connect-qoder.yml";
+const DRAFT_REL = "awesome-dsh-plugin-submission/YeEeck__dsh-connect-qoder.yml";
 const DRAFT_PATH = join(REPO, DRAFT_REL);
 const CONTRIBUTING_PATH = join(REPO, "awesome-dsh-plugin-submission", "contributing.md");
 
-const OWNER_REPO = "eghrhegpe/dsh-connect-qoder";
-const DRAFT_SLUG = "eghrhegpe__dsh-connect-qoder";
+const OWNER_REPO = "YeEeck/dsh-connect-qoder";
+const DRAFT_SLUG = "YeEeck__dsh-connect-qoder";
 
 /**
  * 一条合规条目（镜像规则的测试底座）。

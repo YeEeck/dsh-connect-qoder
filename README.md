@@ -115,7 +115,7 @@ CI 的 Ubuntu 绿灯说明**测试**在那边能跑，不等于零配置在 Linu
 ### 从 npm 安装（推荐）
 
 ```
-dsh plugin --profile web add @eghrhegpe/dsh-connect-qoder
+dsh plugin --profile web add @yeeeck/dsh-connect-qoder
 ```
 
 ### 从 DSH 市场安装（DSH 桌面用户）
@@ -125,7 +125,7 @@ dsh plugin --profile web add @eghrhegpe/dsh-connect-qoder
 可在 DSH 的「插件市场」里粘贴这个源：
 
 ```
-github:eghrhegpe/dsh-connect-qoder
+github:YeEeck/dsh-connect-qoder
 ```
 
 `github:` 源是**零配置**的：宿主产物 `lib/`（host + client bundle）随仓库提交，克隆即可加载，
@@ -134,7 +134,7 @@ github:eghrhegpe/dsh-connect-qoder
 入库，CI 有新鲜度门禁）。
 
 > 注意：npm 上不带 scope 的 `dsh-connect-qoder` 由上游发布，**装到的是上游那份**；
-本 fork 自己发的是 scoped 包 `@eghrhegpe/dsh-connect-qoder`（上面那条），二者不是同一个包。
+本 fork 自己发的是 scoped 包 `@yeeeck/dsh-connect-qoder`（上面那条），二者不是同一个包。
 npm 安装每次发布都会现场重建产物（`prepack`），**同版本号下 npm 的产物比仓库提交里更新的
 可能性更大**——追新走 npm，`github:` 源装的是对应提交时刻的产物。
 

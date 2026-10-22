@@ -65,11 +65,11 @@ DSH 插件：把本机已登录的 **Qoder**（国内版 `qoder-cn` / 国际版 
 ## 工作目录与装载方式（先搞清你改的东西怎么生效）
 
 - 本目录 `~/.dsh/plugins/dsh-connect-qoder` 是**开发副本**，web 端以符号链接载入：
-  `~/.dsh/profiles/web/node_modules/@eghrhegpe/dsh-connect-qoder` → 本目录。
+  `~/.dsh/profiles/web/node_modules/@yeeeck/dsh-connect-qoder` → 本目录。
 - 浏览器与 Host 实际执行的是 **`lib/` 产物，不是 `src/`**。只改 `src/` 不 rebuild，界面不会变。
 - **两个 profile 的装法不同，这是有意的，别当漂移去追**：web 是 `link:` 到本目录（开发态，改完
   刷新即生效）；desktop 走 **npm 官方安装**（`profiles/desktop/package.json` 里是
-  `"@eghrhegpe/dsh-connect-qoder": "<已发布版本>"`），与真实用户同形态，跑的是**已发布版、不含本仓库
+  `"@yeeeck/dsh-connect-qoder": "<已发布版本>"`），与真实用户同形态，跑的是**已发布版、不含本仓库
   未发布的提交**——两边 `version` 相同 ≠ 内容相同，那是"版本陷阱"而不是缺陷。桌面端要试本地代码
   才临时 `dsh plugin add <本仓库路径> --profile desktop`（那会破坏"官方安装"这个形态）。
   以 `~/.dsh/profiles/{web,desktop}/node_modules` 里的实际形态为准，别信文档。
