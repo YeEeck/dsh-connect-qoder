@@ -209,6 +209,43 @@ tar -xzf .build/yeeeck-dsh-connect-qoder-X.Y.Z.tgz -C .build
 - 不做这一步的后果：没有任何东西报错——npm 上是一份、tag 指的是另一份，
   在下次有人对比之前一直「看起来都对」。
 
+### 5.6 备用通道：OIDC trusted publishing（.github/workflows/publish.yml）
+
+本仓库还备了一条**不用任何 token** 的发布路径：推一个 `v*` tag，GitHub Actions 用它自己的
+OIDC 身份直接发布。它与 §5 的手动 `npm publish` 是**两条独立通道**，谁先跑谁占号——
+同一个版本号不要两边都跑，第二次会以 `cannot publish over` 失败。
+
+**为什么会有这条**：npm 正在收紧 bypass-2FA 的 granular token（2026-07 起它已不能做
+包管理类动作，官方计划 2027-01 连直接发布一并收回）。长期方案是 OIDC，不是再发一个 token。
+
+**一次性配置**（只能人做，npm 网页）：
+
+1. 打开 `https://www.npmjs.com/package/@yeeeck/dsh-connect-qoder` → **Settings** → **Trusted publishing**。
+2. Provider 选 **GitHub Actions**，填：
+
+   | 字段 | 值 |
+   |---|---|
+   | Organization or user | `YeEeck` |
+   | Repository | `dsh-connect-qoder` |
+   | Workflow filename | `publish.yml`（**只填文件名**，必须带 `.yml`，且该文件已在 `.github/workflows/`） |
+
+3. **Allowed actions 里勾上 `Allow npm publish`**。只留默认（stage publish）时，工作流最后一步
+   会被拒——默认权限只够「暂存待批」。
+4. **这些字段建立后不可修改**，要换只能删掉连接重建；改文件名 = 静默失效。
+
+**两个硬性版本要求**（工作流里已处理，别删那两行）：npm CLI ≥ 11.5.1、Node ≥ 22.14。
+runner 镜像自带 npm 10.x，所以 `npm install -g npm@11` 是必需的。
+
+**发布方式**：把版本提交与 tag 一起推上去即可，工作流会先跑四道闸再发：
+
+```sh
+git push origin main
+git push origin vX.Y.Z
+```
+
+四道闸分别拦：tag 与 `package.json#version` 不一致、tag 指的不是 main 上的提交、
+`lib/` 无法从 `src/` 复现、测试红。任一道红都在 publish 之前退出——失败发生在不可逆步骤**之前**。
+
 ## 6. GitHub Release：本仓库不设（显式决定）
 
 市场读的是 **tarball 里的 CHANGELOG**，GitHub 首屏读的是 README；0.4.x 期没有建过任何

@@ -1,0 +1,89 @@
+name: publish
+
+# Publishes to npm over OpenID Connect (trusted publishing) — no long-lived token
+# anywhere in this repository or on any maintainer's machine. The job mints a
+# short-lived GitHub OIDC token; the npm CLI exchanges it for a short-lived
+# publish token scoped to THIS repository and THIS workflow filename.
+#
+# The npm-side connection (Package settings -> Trusted publishing) pins three
+# fields: owner, repository, and this filename. They cannot be edited after the
+# connection is created — renaming this file silently breaks publishing until
+# someone deletes and recreates the connection. The publish step fails loudly
+# when that happens, which is why it says why it failed.
+#
+# Tag-filtered on purpose: a bare `push` would publish on every commit. A tag is
+# the committed statement "this tree is version X", and RELEASING.md §4.5
+# requires it to point at a commit that already passed CI.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  # The one permission OIDC cannot work without: it lets the job mint the token
+  # npm exchanges for a publish token. Everything else stays read-only.
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The ancestry guard below compares HEAD against origin/main, which
+          # needs the remote refs — a shallow clone has none.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          # Trusted publishing needs Node >= 22.14 and npm >= 11.5.1; the
+          # runner image ships npm 10.x, so the CLI is upgraded explicitly
+          # rather than inherited from the image.
+          #
+          # registry-url is deliberately NOT set: it makes setup-node write an
+          # `_authToken=${NODE_AUTH_TOKEN}` line into .npmrc, and this workflow
+          # has no such token. This repository's .npmrc already pins
+          # registry=https://registry.npmjs.org/, which is all that is needed.
+          package-manager-cache: false
+
+      - run: npm install -g npm@11
+      - run: npm install --no-audit --no-fund
+
+      # Guards before the irreversible step. Each one exists because the failure
+      # it catches is otherwise silent until someone installs the package.
+      - name: the tag names the version in package.json
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match package.json version ${version} — publishing would ship a version the manifest never declared"
+            exit 1
+          fi
+
+      - name: the tagged commit is already on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::this commit is not an ancestor of origin/main — RELEASING.md §4.5 requires the tag to point at a commit that passed CI"
+            exit 1
+          fi
+
+      - name: the committed lib/ is reproducible from src/
+        # lib/ is a VERSIONED artifact (docs/issues/19). A tag whose lib/ does
+        # not rebuild byte-for-byte would ship an entry point that no source
+        # produces — the `github:` install path reads exactly these bytes.
+        run: |
+          npm run build
+          git diff --exit-code -- lib/ || {
+            echo "::error::npm run build changed lib/ — the tagged commit carries a stale artifact"
+            exit 1
+          }
+
+      - run: npm test
+
+      - name: publish over OIDC
+        run: npm publish
+        # No NODE_AUTH_TOKEN, no .npmrc token: the CLI detects the OIDC
+        # environment and authenticates with the exchanged token. Requires
+        # "Allow npm publish" on the trusted-publisher connection; with only the
+        # default (stage publish) this step is refused.
