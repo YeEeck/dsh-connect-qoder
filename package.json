@@ -5,13 +5,13 @@
   "version": "0.8.0",
   "icon": "./icon.svg",
   "author": "eghrhegpe",
-  "homepage": "https://github.com/eghrhegpe/dsh-connect-qoder",
+  "homepage": "https://github.com/YeEeck/dsh-connect-qoder",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/eghrhegpe/dsh-connect-qoder.git"
+    "url": "git+https://github.com/YeEeck/dsh-connect-qoder.git"
   },
   "bugs": {
-    "url": "https://github.com/eghrhegpe/dsh-connect-qoder/issues"
+    "url": "https://github.com/YeEeck/dsh-connect-qoder/issues"
   },
   "keywords": [
     "dsh-plugin",
