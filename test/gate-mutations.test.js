@@ -5,7 +5,7 @@
  *
  * WHY THIS FILE EXISTS
  *
- * The README tells the reader how to break each gate on purpose: drop a string
+ * The testing doc tells the reader how to break each gate on purpose: drop a string
  * the bundle needs, tamper with the shipped host artifact, move a probe's
  * lower bound. Those recipes are the only proof that a gate can fail at all —
  * and they only run when a human remembers to run them, by hand, once. A gate
@@ -19,7 +19,7 @@
  *   1. stages a scratch copy of the files the gate reads;
  *   2. runs the gate on the unmutated copy — the control, which proves the
  *      scratch is a faithful copy rather than a broken one;
- *   3. applies the mutation the README describes;
+ *   3. applies the mutation the testing doc describes;
  *   4. runs the gate again and requires it to go RED — and to go red with the
  *      gate's OWN complaint, because a mutation that trips an unrelated crash
  *      is not a proof that the gate is load-bearing.
@@ -220,7 +220,7 @@ test(
     const dir = stage(files)
     try {
       linkNodeModules(dir)
-      // The README's recipe: append a line to the shipped artifact. The rebuild
+      // The testing doc's recipe: append a line to the shipped artifact. The rebuild
       // inside the gate overwrites it, so the committed bytes no longer match
       // what the sources produce — the exact drift the gate exists to catch.
       const artifact = join(dir, 'lib', 'index.js')

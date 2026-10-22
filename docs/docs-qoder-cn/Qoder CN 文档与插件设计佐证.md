@@ -10,16 +10,16 @@
 | 文档出处 | 文档内容 | 插件代码佐证 |
 | --- | --- | --- |
 | `最新模型：Qwen3.8-Flash.md` | `reasoning_effort` / `enable_thinking`、深度思考档位 | `src/host/shim.ts`（`DEFAULT_THINKING_EFFORT='low'`、`THINKING_LEVEL_RANK`）、`src/host/pi-model.ts`（`thinkingLevelMapFor`，注释明确提到 `provider_error 1210`） |
-| `README.md:118` | `GLM-5.3-Flash`、`Kimi-K3` 声明推理档位但**不允许关闭思考**，发 `enable_thinking:false` 会被上游以 `provider_error 1210` 拒绝；插件**完全省略**该字段 | `src/host/domain.ts:414`：`alwaysThinking` 与 `enableThinking` 区分——前者标记"拒绝 `enable_thinking:false` 的模型"，后者是请求里的开关；`pi-model.ts:251-254` 注释直接写出 `provider_error 1210` |
+| `docs/behavior.md`（模型与请求） | `GLM-5.3-Flash`、`Kimi-K3` 声明推理档位但**不允许关闭思考**，发 `enable_thinking:false` 会被上游以 `provider_error 1210` 拒绝；插件**完全省略**该字段 | `src/host/domain.ts:414`：`alwaysThinking` 与 `enableThinking` 区分——前者标记"拒绝 `enable_thinking:false` 的模型"，后者是请求里的开关；`pi-model.ts:251-254` 注释直接写出 `provider_error 1210` |
 
-**结论**：文档中"Qwen3.8-Flash 默认开启思考、可用 `reasoning_effort` 调节"与插件对 `alwaysThinking` 模型的特殊处理（省略字段而非发送 `false`）互为印证；README 点名的 `GLM-5.3-Flash`/`Kimi-K3` 也出现在系数调整通知表里，是同一批模型。
+**结论**：文档中"Qwen3.8-Flash 默认开启思考、可用 `reasoning_effort` 调节"与插件对 `alwaysThinking` 模型的特殊处理（省略字段而非发送 `false`）互为印证；`docs/behavior.md` 点名的 `GLM-5.3-Flash`/`Kimi-K3` 也出现在系数调整通知表里，是同一批模型。
 
 ## 2. 错峰折扣（22:00–08:00）
 
 | 文档出处 | 文档内容 | 插件代码佐证 |
 | --- | --- | --- |
 | `Qwen 系列模型特惠折扣.md` | 错峰时段 **北京时间 22:00–08:00**，Qwen3.8-Max / Qwen3.7-Plus 享 4 折（0.2x / 0.04x） | `src/host/offpeak.ts`：`windowIsOpen` 专门处理"结束不晚于开始"的跨午夜窗口（`22:00`–`08:00` 正是该 case），并强制按 `Asia/Shanghai` 解析；`effectiveRate` 用 `before × discount` 还原折前/折后价 |
-| `README.md:127` | 日次数用尽时给出"22:00-08:00 错峰价"作为仍有效的路 | `src/host/offpeak.ts` 顶部注释："reading `price_factor` alone understates the cost … during working hours these models bill at the *before* rate, which is 2.5x to 5x higher"——与文档"常规时段无折扣、折后仅影响计价"一致 |
+| `docs/behavior.md`（额度与每日限额） | 日次数用尽时给出"22:00-08:00 错峰价"作为仍有效的路 | `src/host/offpeak.ts` 顶部注释："reading `price_factor` alone understates the cost … during working hours these models bill at the *before* rate, which is 2.5x to 5x higher"——与文档"常规时段无折扣、折后仅影响计价"一致 |
 
 **结论**：文档的时段、币种（Credits 倍率）、"仅影响计价不影响质量"三要素，都被 `offpeak.ts` 的本地时钟算术精确实现，且注释里点名的 `22:00 rate flip` 正是文档的错峰边界。
 
@@ -45,7 +45,7 @@
 | 文档出处 | 文档内容 | 插件代码佐证 |
 | --- | --- | --- |
 | `Credits.md` | Credits 是计量单位、Plan / Add-on 分类、扣减优先级、失败不扣费 | `src/host/upstream/fetch-usage.ts` 的 `normalizeQuotaBucket` / `quotaAmountsOf`（`unit` 默认 `'credits'`、优先消耗最早到期）、`src/client/copy-usage.ts` `usage.planCredits` / `usage.credits`（拆分前在 `src/host/upstream.ts`，见 `docs/issues/22`） |
-| `计费说明.md` | Qoder CN 全家桶跨产品共享 Credits | `src/host/credentials.ts:193-194` 把 `Qoder CN / QoderWork CN` 等归到同一 `displayName: 'Qoder CN'` 区域；`README.md:133` 账号状态按区域收敛 |
+| `计费说明.md` | Qoder CN 全家桶跨产品共享 Credits | `src/host/credentials.ts:193-194` 把 `Qoder CN / QoderWork CN` 等归到同一 `displayName: 'Qoder CN'` 区域；`docs/behavior.md`（账号与区域）账号状态按区域收敛 |
 
 **结论**：文档对 Credits 的定义、分类、共享范围，与插件"按 region/catalog 归一化用量"的实现口径一致。
 
@@ -53,14 +53,14 @@
 
 | 文档出处 | 文档内容 | 插件代码佐证 |
 | --- | --- | --- |
-| `README.md:123-130` | 上游把"今日请求次数用完"伪装成排队（约两小时重试），实为日次数耗尽→改为 **429** 独立状态 | `src/host/errors.ts` `classifyUpstreamError`："先认 110、再认队列标记"，由 `test/daily-limit.test.js` 钉住；`src/host/index.ts:1285-1313` 返回 `alreadyClaimed` / 限流状态 |
+| `docs/behavior.md`（额度与每日限额） | 上游把"今日请求次数用完"伪装成排队（约两小时重试），实为日次数耗尽→改为 **429** 独立状态 | `src/host/errors.ts` `classifyUpstreamError`："先认 110、再认队列标记"，由 `test/daily-limit.test.js` 钉住；`src/host/index.ts:1285-1313` 返回 `alreadyClaimed` / 限流状态 |
 
-**结论**：这是 README 自述的已知行为，底层依据正是 Qoder 上游的报文语义——与文档所述"每日次数上限/错峰不计入日次数"相衔接。
+**结论**：这是 `docs/behavior.md` 记录的已知行为，底层依据正是 Qoder 上游的报文语义——与文档所述"每日次数上限/错峰不计入日次数"相衔接。
 
 ## 总评
 
-- 文档覆盖的**模型命名、系数、错峰时段、每日签到额度、资源包形态、Credits 计量**六条主线，在 `src/host/*`（upstream / offpeak / claim / catalog-entry / pi-model / shim）和 `README.md` 里均有**逐字段级别**的实现对应。
-- 插件 README 与代码注释中**直接写明的型号名（`GLM-5.3-Flash`、`Kimi-K3`、`Qwen3.8-Max`）、错误码（`provider_error 1210`）、时间点（10:00 UTC+8、22:00–08:00）**，都能在文档里找到官方出处，说明文档是插件对接的权威信源，而非杜撰。
+- 文档覆盖的**模型命名、系数、错峰时段、每日签到额度、资源包形态、Credits 计量**六条主线，在 `src/host/*`（upstream / offpeak / claim / catalog-entry / pi-model / shim）和 `docs/behavior.md` 里均有**逐字段级别**的实现对应。
+- 插件文档与代码注释中**直接写明的型号名（`GLM-5.3-Flash`、`Kimi-K3`、`Qwen3.8-Max`）、错误码（`provider_error 1210`）、时间点（10:00 UTC+8、22:00–08:00）**，都能在文档里找到官方出处，说明文档是插件对接的权威信源，而非杜撰。
 - 因此这批 `.md` 可作为**上游协议的事实基准**：上游若调整系数/活动（如系数通知里 DeepSeek-V4-Pro 0.8→0.5、Kimi-K3 0.8→1.4），插件的 `offpeak.ts` / `catalog-entry.ts` 只需从 catalog 实时读取，无需硬编码——这正与文档"参考系数周期性校准、不影响实际消耗"的设计意图吻合。
 
 > 注：抓取时间为 2026-09 下旬；若需对外发布，建议以 `docs.qoder.cn/llms.txt` 索引的最新页面复核系数与活动结束时间。

@@ -6,7 +6,7 @@
  * The unwrap hands the app's 32-byte master key to JavaScript through a
  * `%TEMP%` file, and that file is the one place in this plugin where a secret
  * exists outside the process. Its removal is a security property, not
- * housekeeping — the README promises the plugin "stores no credentials", and a
+ * housekeeping — the README promises the desktop credential is read-only, and a
  * leftover `key.b64` breaks that promise for every same-user process on the box
  * until something reclaims it.
  *

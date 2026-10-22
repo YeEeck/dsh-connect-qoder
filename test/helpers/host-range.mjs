@@ -4,7 +4,7 @@
  * WHY THIS IS A SEPARATE MODULE FROM THE TEST
  *
  * `node --test test/*.test.js` must run on a bare checkout with nothing
- * installed (README promises it, CI relies on it before any `npm install`).
+ * installed (docs/testing.md promises it, CI relies on it before any `npm install`).
  * So the comparator lives here, exports plain functions, and both the gate
  * (`test/host-range.test.mjs`) and the generator (`scripts/update-host-range.mjs`)
  * import it. One implementation, so the thing that WRITES the golden file and

@@ -66,6 +66,14 @@ const LIVE_FILES = [
   'AGENTS.md',
   'package.json',
   'docs/KNOWN_GAPS.md',
+  // The heavy reference sections moved out of README: the module catalog, the
+  // verify chain and coverage numbers, and the credential/behaviour notes.
+  // They are still live promises about this checkout, so the same prose gate
+  // follows them to their new homes.
+  'docs/architecture.md',
+  'docs/testing.md',
+  'docs/credentials.md',
+  'docs/behavior.md',
   // `lib/` is a versioned build artifact, not a live source; the live host
   // sources are `src/host/*.ts`, so the doc-fact guard reads those instead.
   // (It is still worth guarding: the `git-ignored` wording the four files below
@@ -166,34 +174,34 @@ test('every topic-qualified gap reference anywhere in a live file names a real s
   assert.ok(checked > 0, 'no topic-qualified gap reference found in any live file')
 })
 
-/** The README 目录 section, up to the next `## ` heading. */
-function readmeCatalog() {
+/** The architecture doc's module catalog, up to the next `## ` heading. */
+function architectureCatalog() {
   // `\r?\n` and `(?=\r?\n## )` keep the gate valid on a CRLF checkout;
   // .gitattributes pins the committed bytes to LF, so the test is correct
   // on both matrix platforms either way.
-  const section = /## 目录\r?\n([\s\S]*?)(?=\r?\n## )/.exec(read('README.md'))
-  assert.ok(section !== null, 'README 目录 section not found — the gate keys on that heading')
+  const section = /## 模块目录\r?\n([\s\S]*?)(?=\r?\n## )/.exec(read('docs/architecture.md'))
+  assert.ok(section !== null, 'docs/architecture.md 模块目录 section not found — the gate keys on that heading')
   return section[1]
 }
 
-test('every host module and every src/client source is named in the README 目录', () => {
-  const table = readmeCatalog()
+test('every host module and every src/client source is named in the architecture module catalog', () => {
+  const table = architectureCatalog()
   for (const f of readdirSync(join(root, 'src', 'host'))) {
-    assert.ok(table.includes(f), `src/host/${f} has no row in the README 目录 table`)
+    assert.ok(table.includes(f), `src/host/${f} has no row in the docs/architecture.md module table`)
   }
   for (const f of readdirSync(join(root, 'src', 'client'))) {
-    assert.ok(table.includes(f), `src/client/${f} has no row in the README 目录 table`)
+    assert.ok(table.includes(f), `src/client/${f} has no row in the docs/architecture.md module table`)
   }
 })
 
-test('the coverage thresholds quoted in the README are the ones the script runs', () => {
+test('the coverage thresholds quoted in the testing doc are the ones the script runs', () => {
   const flags = /--test-coverage-lines=(\d+) .*--test-coverage-branches=(\d+) .*--test-coverage-functions=(\d+)/.exec(
     read('package.json'),
   )
   assert.ok(flags !== null, 'package.json lost its coverage thresholds')
-  const readme = /门槛[（(]行 (\d+) \/ 分支 (\d+) \/ 函数 (\d+)/.exec(read('README.md'))
-  assert.ok(readme !== null, 'the README no longer states the thresholds — restate or delete, do not let it drift')
-  assert.deepEqual(readme.slice(1).map(Number), flags.slice(1).map(Number))
+  const testing = /门槛[（(]行 (\d+) \/ 分支 (\d+) \/ 函数 (\d+)/.exec(read('docs/testing.md'))
+  assert.ok(testing !== null, 'the testing doc no longer states the thresholds — restate or delete, do not let it drift')
+  assert.deepEqual(testing.slice(1).map(Number), flags.slice(1).map(Number))
 })
 
 test('package.json points every self-referential URL at the repository it declares', () => {
@@ -205,11 +213,11 @@ test('package.json points every self-referential URL at the repository it declar
 })
 
 /**
- * The README's verify table and `package.json`'s verify chain must be the
- * same list.
+ * The testing doc's verify table and `package.json`'s verify chain must be
+ * the same list.
  *
  * WHY: the chain grew steps (the two any audits, the market-entry check)
- * while the README kept calling itself "seven things" and listing seven
+ * while the prose kept calling itself "seven things" and listing seven
  * rows. A reader who trusts the table skips a gate; a reader who trusts the
  * chain reads a table that lies. Neither is visible from the outside, so
  * the two lists are compared here instead of being kept in sync by hand.
@@ -218,18 +226,18 @@ test('package.json points every self-referential URL at the repository it declar
  * row's first backticked token is the script name (`npm run audit:any` in
  * package.json is `audit:any` in the table).
  */
-test('the README lists exactly the steps npm run verify runs', () => {
+test('the testing doc lists exactly the steps npm run verify runs', () => {
   const pkg = JSON.parse(read('package.json'))
   const chainText = /** @type {string} */ (pkg.scripts.verify)
   const chain = chainText
     .split('&&')
     .map((step) => step.trim().replace(/^npm (?:run )?/, ''))
-  const readme = read('README.md')
+  const testing = read('docs/testing.md')
   const marker = '<!-- verify-steps -->'
-  const at = readme.indexOf(marker)
-  assert.notEqual(at, -1, 'the README must keep the <!-- verify-steps --> marker in front of the verify table')
+  const at = testing.indexOf(marker)
+  assert.notEqual(at, -1, 'docs/testing.md must keep the <!-- verify-steps --> marker in front of the verify table')
   const rows = []
-  for (const line of readme.slice(at + marker.length).split(/\r?\n/)) {
+  for (const line of testing.slice(at + marker.length).split(/\r?\n/)) {
     const m = /^\|\s*`([^`]+)`/.exec(line)
     if (m === null) {
       if (rows.length > 0) break // the table ended at the first line that is not a row
@@ -241,12 +249,12 @@ test('the README lists exactly the steps npm run verify runs', () => {
   assert.deepEqual(
     [...rows].sort(),
     [...chain].sort(),
-    `the README verify table must list exactly the steps package.json runs (table: ${rows.join(', ')})`,
+    `the testing doc verify table must list exactly the steps package.json runs (table: ${rows.join(', ')})`,
   )
 })
 
 test('the live docs point at the ratchet ledger that holds the thresholds', () => {
-  for (const rel of ['README.md', 'AGENTS.md', 'docs/KNOWN_GAPS.md']) {
+  for (const rel of ['docs/testing.md', 'AGENTS.md', 'docs/KNOWN_GAPS.md']) {
     assert.ok(
       read(rel).includes('scripts/ratchet-ledger.json'),
       `${rel} must point at scripts/ratchet-ledger.json — that is where the thresholds live now`,

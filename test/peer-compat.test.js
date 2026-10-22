@@ -17,7 +17,7 @@
  * THIS FILE HAS NO semver DEPENDENCY, DELIBERATELY
  *
  * `node --test test/*.test.js` must run on a bare checkout with nothing
- * installed (see README). So instead of importing semver, this test carries
+ * installed (see the README development section). So instead of importing semver, this test carries
  * golden values the host itself produced and a comparator that understands
  * ONLY the range dialect this manifest actually uses: one or two comparators
  * of the form `>=X.Y.Z[-pre]` or `<X.Y.Z[-pre]`, ANDed by whitespace.

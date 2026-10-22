@@ -310,7 +310,7 @@ effect；六道宿主路由 fetch（名册 / 账号读 / 账号重读 / 账号�
 闭环——现在容器只 import 浏览器无关的 `card-model.ts`，环解开。拆分后行为零回退由两道**位置门禁**
 守：`test/card-position.test.js` 对 `lib/client.js` 实渲染、断言卡片主体按「账号条 → 用量面板 → 模型
 列表」固定顺序自上而下（区域条是整段 body 的表头，顺序错即语义错）；`test/registration-consistency.test.js`
-断言 README 目录表列出的 `src/client` 文件集合与磁盘**完全一致**（双向，既不漏列也不残留已删文件的行）。
+断言 `docs/architecture.md` 的模块目录列出的 `src/client` 文件集合与磁盘**完全一致**（双向，既不漏列也不残留已删文件的行）。
 两道门禁都读真实产物/真实目录，不依赖手抄副本。
 
 ---
@@ -472,7 +472,7 @@ token_type` 6 个，访问令牌在 `device_token` 而不是 `token`，而且**�
 
 **影响面**：所有 macOS / Linux 上的 Qoder 桌面端用户，「零配置读应用凭据」卖点在那些平台上仍
 不存在——但设备登录那条替代路**已经接进 host**（见上），所以那些平台上现在有了一条零配置的
-出路（浏览器授权一次）；README 的「平台边界」段与「凭据来源」段已同步说明。**第 1 项（OS
+出路（浏览器授权一次）；README 的「凭据与安全」段与 `docs/credentials.md` 已同步说明。**第 1 项（OS
 keystore）因此从"必须补"变成"可选"：不补也不再有平台是彻底没路的。**
 
 ---
@@ -499,8 +499,9 @@ keystore）因此从"必须补"变成"可选"：不补也不再有平台是彻�
   当时写在活文件里的陈述——"卡片没有入库的源码"、"产物独一份"、"入库仍是待办"、硬编码
   的测试通过数、指向错误编号的交叉引用——三门禁全绿照过。化石原文的清单以
   `test/docs-facts.test.js` 里的 `FOSSILS` 为唯一登记处，本文件不逐字复述（复述即命中）。
-  该门禁守的是：活文件里的化石短语、裸编号交叉引用（必须带标题括注）、README 目录表与
-  `lib/`、`src/client/` 的清单一致、引用的覆盖率数字与 `package.json` 一致。它同样只是
+  该门禁守的是：活文件里的化石短语、裸编号交叉引用（必须带标题括注）、`docs/architecture.md`
+  的模块目录与 `src/host/`、`src/client/` 的实际文件一致、`docs/testing.md` 引用的覆盖率数字与
+  `package.json` 一致。它同样只是
   地板：防的是"悄悄说谎"，防不了"写一句没用的真话"。
 - **覆盖率门槛已建立**（本条的前两版登记「没有阈值」，现已不成立）：
   `npm run test:coverage` 带 `--test-coverage-lines=68 --test-coverage-branches=82
