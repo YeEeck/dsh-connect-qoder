@@ -66,7 +66,7 @@ dsh plugin --profile web add .
 
 ### 升级到 0.8.0
 
-0.8.0 起包名迁移到 `@yeeeck/dsh-connect-qoder`，仓库与市场源也统一到 `YeEeck`。旧的 `@eghrhegpe/dsh-connect-qoder` 是 fork 源发布的包，已不再更新；两个包同时安装会互相掩盖。
+0.8.0 起包名迁移到 `@yeeeck/dsh-connect-qoder`，仓库与市场源也统一到 `YeEeck`。旧的 `@eghrhegpe/dsh-connect-qoder` 是 fork 源发布的包，fork 源可能继续维护；两个包不是同一个包，同时安装会互相掩盖。
 
 升级前先卸载旧包（或在 profile 的 `package.json` 里删掉旧依赖），再安装新包：
 
@@ -126,7 +126,7 @@ Qoder 不是 OpenAI 兼容端点，插件负责三件事：为每个网关请求
 
 ## 相对于 fork 源的改动
 
-本仓 **fork 自 [eghrhegpe/dsh-connect-qoder](https://github.com/eghrhegpe/dsh-connect-qoder)**，基线为 **v0.7.4**。下面只列本仓 **0.8.0** 相对该源的改动；0.7.4 及以前已有的双 region、三种凭据、用量、签到、模型目录等能力来自 fork 源，不重复列为“新增”。
+本仓 **fork 自 [eghrhegpe/dsh-connect-qoder](https://github.com/eghrhegpe/dsh-connect-qoder)**，本仓 fork 时的基线为 **v0.7.4**。下面只列本仓 **0.8.0** 相对该源的改动；0.7.4 及以前已有的双 region、三种凭据、用量、签到、模型目录等能力来自 fork 源，不重复列为“新增”。
 
 | 主题 | 本仓的改动 |
 |---|---|

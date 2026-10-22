@@ -14,7 +14,7 @@
 - 现在两者统一：npm 包是 `@yeeeck/dsh-connect-qoder`，仓库是 `github:YeEeck/dsh-connect-qoder`。
   scope 用全小写是 npm 的硬规则（大写 scope 发不出去），不是笔误。
 - **升级方式：先卸旧再装新。** DSH 暂不支持插件自动更新，旧包 `@eghrhegpe/dsh-connect-qoder`
-  仍留在 npm 上但不再更新，两个包同时装会互相掩盖。先在插件页卸掉旧包（或从 profile 的
+  仍留在 npm 上；它属于 fork 源，和本 fork 的包不是同一个包，两个包同时装会互相掩盖。先在插件页卸掉旧包（或从 profile 的
   `package.json` 移除那条依赖），再装新的：
 
   ```
